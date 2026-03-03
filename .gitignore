@@ -2,6 +2,6 @@
 .idea
 Documentation
 .env
-data
+data/*
 !data/inspection_plots/
 !data/inspection_plots/**
