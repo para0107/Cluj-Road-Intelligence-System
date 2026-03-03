@@ -70,8 +70,8 @@ def find_val_dir(dataset_dir):
 def yolo_to_coco_bbox(cx, cy, w, h, img_w, img_h):
     abs_w = w  * img_w
     abs_h = h  * img_h
-    abs_x = cx * img_w - abs_w / 2
-    abs_y = cy * img_h - abs_h / 2
+    abs_x = max(0.0, cx * img_w - abs_w / 2)
+    abs_y = max(0.0,cy * img_h - abs_h / 2)
     return [abs_x, abs_y, abs_w, abs_h]
 
 
