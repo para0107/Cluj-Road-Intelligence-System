@@ -93,7 +93,7 @@ def build_coco(images_dir, labels_dir, split_name):
             img_w, img_h = im.size
 
         coco["images"].append({
-            "id": img_id, "file_name": img_path.name,
+            "id": img_id, "file_name": str(img_path.resolve()),
             "width": img_w, "height": img_h,
         })
 

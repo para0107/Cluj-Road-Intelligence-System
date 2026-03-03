@@ -118,12 +118,11 @@ def build_coco(samples):
                 width, height = im.size
 
         coco["images"].append({
-            "id":        img_id,
-            "file_name": img_path.name,
-            "width":     width,
-            "height":    height,
+            "id": img_id,
+            "file_name": str(img_path.resolve()),
+            "width": width,
+            "height": height,
         })
-
         for box in boxes:
             label = box["label"]
             if label not in CLASS_MAP:
