@@ -679,8 +679,7 @@ def plot_summary_card(records, dataset_name, class_counts=None):
             color="#B0B0B0", transform=ax.transAxes)
 
     # Divider
-    ax.axhline(0.78, color="#3A3D4D", linewidth=1, transform=ax.transAxes)
-
+    ax.axhline(0.78, color="#3A3D4D", linewidth=1)
     # Stats
     stats = [
         ("Total images",      f"{n_images:,}"),
@@ -730,28 +729,168 @@ def plot_summary_card(records, dataset_name, class_counts=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def inspect_rdd2022():
-    dataset_dir = DATASETS_DIR / "rdd2022"
-    if not dataset_dir.exists():
-        print("  RDD2022 not found at data/datasets/rdd2022/ — skipping.")
+    logger.info("── RDD2022 ─────────────────────────────────────────")
+
+    DATASET_DIR = ROOT / "data" / "datasets" / "rdd2022"
+    TRAIN_IMGS  = DATASET_DIR / "train" / "images"
+    TRAIN_LBLS  = DATASET_DIR / "train" / "labels"
+    OUT_DIR     = Path(OUTPUT_DIR)
+
+    CLASS_NAMES = {
+        0: "longitudinal_crack",
+        1: "transverse_crack",
+        2: "alligator_crack",
+        3: "pothole",
+    }
+    CLASS_COLORS = {
+        0: "#E63946",
+        1: "#F4A261",
+        2: "#2A9D8F",
+        3: "#457B9D",
+    }
+
+    # ── Load YOLO labels ──────────────────────────────────────────
+    label_files = sorted(TRAIN_LBLS.glob("*.txt"))
+    logger.info(f"  Found {len(label_files)} label files in train/labels/")
+
+    records     = []
+    class_counts = {i: 0 for i in range(4)}
+
+    for lbl_path in tqdm(label_files, desc="Parsing YOLO labels"):
+        img_path = TRAIN_IMGS / (lbl_path.stem + ".jpg")
+        if not img_path.exists():
+            img_path = TRAIN_IMGS / (lbl_path.stem + ".png")
+        if not img_path.exists():
+            continue
+
+        boxes = []
+        for line in lbl_path.read_text().strip().splitlines():
+            parts = line.strip().split()
+            if len(parts) != 5:
+                continue
+            cls = int(parts[0])
+            cx, cy, w, h = map(float, parts[1:])
+            boxes.append({"class": cls, "cx": cx, "cy": cy, "w": w, "h": h})
+            if cls in class_counts:
+                class_counts[cls] += 1
+
+        records.append({"image_path": img_path, "boxes": boxes})
+
+    logger.info(f"  Loaded {len(records)} image/label pairs")
+    logger.info(f"  Class distribution: { {CLASS_NAMES[k]: v for k, v in class_counts.items()} }")
+
+    if not records:
+        logger.warning("  No records found — check dataset path.")
         return
 
-    print("\n── RDD2022 ─────────────────────────────────────────")
-    records     = load_rdd2022_annotations(dataset_dir)
-    print(f"  Loaded {len(records):,} annotation files")
+    # ── Plot 1: Sample images with bounding boxes ─────────────────
+    sample  = random.sample(records, min(16, len(records)))
+    n_cols  = 4
+    n_rows  = (len(sample) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, n_rows * 5))
+    fig.patch.set_facecolor("#0D0F1A")
+    fig.suptitle("RDD2022 — Sample Images with Bounding Boxes",
+                 color="white", fontsize=16, fontweight="bold", y=1.01)
+    axes = axes.flatten() if n_rows > 1 else axes
 
-    class_counts = plot_class_distribution(records, "RDD2022")
-    plot_image_sizes(records, "RDD2022")
-    plot_bbox_sizes(records, "RDD2022")
-    plot_country_breakdown(records, "RDD2022")
-    plot_sample_images(dataset_dir, records, "RDD2022", n=16)
-    plot_brightness_analysis(dataset_dir, "RDD2022", max_imgs=500)
-    plot_annotation_heatmap(records, "RDD2022")
-    plot_split_summary(records, "RDD2022")
-    plot_class_colour_profiles(dataset_dir, records, "RDD2022", max_crops=150)
-    plot_summary_card(records, "RDD2022", class_counts)
-    print(f"  → All RDD2022 plots saved to {OUTPUT_DIR}")
+    for i, rec in enumerate(sample):
+        ax = axes[i]
+        ax.set_facecolor("#0D0F1A")
+        img = np.array(Image.open(rec["image_path"]).convert("RGB"))
+        h_px, w_px = img.shape[:2]
+        ax.imshow(img)
+        for box in rec["boxes"]:
+            cls  = box["class"]
+            cx_  = box["cx"] * w_px
+            cy_  = box["cy"] * h_px
+            bw   = box["w"]  * w_px
+            bh   = box["h"]  * h_px
+            x0   = cx_ - bw / 2
+            y0   = cy_ - bh / 2
+            color = CLASS_COLORS.get(cls, "white")
+            rect  = plt.Rectangle((x0, y0), bw, bh,
+                                   linewidth=2, edgecolor=color, facecolor="none")
+            ax.add_patch(rect)
+            ax.text(x0, y0 - 4, CLASS_NAMES.get(cls, str(cls)),
+                    color=color, fontsize=7, fontweight="bold")
+        ax.set_title(rec["image_path"].name, color="white", fontsize=7)
+        ax.axis("off")
 
+    for j in range(len(sample), len(axes)):
+        axes[j].set_visible(False)
 
+    plt.tight_layout()
+    out_path = OUT_DIR / "RDD2022_01_sample_images.png"
+    plt.savefig(out_path, dpi=100, bbox_inches="tight", facecolor="#0D0F1A")
+    plt.close()
+    logger.info(f"  Saved -> RDD2022_01_sample_images.png")
+
+    # ── Plot 2: Class distribution bar chart ──────────────────────
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("#0D0F1A")
+    ax.set_facecolor("#0D0F1A")
+
+    labels = [CLASS_NAMES[i] for i in range(4)]
+    counts = [class_counts[i] for i in range(4)]
+    colors = [CLASS_COLORS[i] for i in range(4)]
+    bars   = ax.bar(labels, counts, color=colors, edgecolor="#0D0F1A", linewidth=0.5)
+
+    for bar, count in zip(bars, counts):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(counts) * 0.01,
+                f"{count:,}", ha="center", va="bottom", color="white", fontsize=11)
+
+    ax.set_title("RDD2022 — Class Distribution (train split)",
+                 color="white", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Annotation count", color="white")
+    ax.tick_params(colors="white")
+    ax.spines[:].set_color("#3A3D4D")
+    for spine in ax.spines.values():
+        spine.set_color("#3A3D4D")
+    ax.yaxis.label.set_color("white")
+    ax.set_ylim(0, max(counts) * 1.15)
+
+    plt.tight_layout()
+    out_path = OUT_DIR / "RDD2022_02_class_distribution.png"
+    plt.savefig(out_path, dpi=100, bbox_inches="tight", facecolor="#0D0F1A")
+    plt.close()
+    logger.info(f"  Saved -> RDD2022_02_class_distribution.png")
+
+    # ── Plot 3: Bounding box size distribution ────────────────────
+    all_boxes = [b for r in records for b in r["boxes"]]
+    widths  = [b["w"]  for b in all_boxes]
+    heights = [b["h"]  for b in all_boxes]
+    areas   = [b["w"] * b["h"] for b in all_boxes]
+
+    fig, axes2 = plt.subplots(1, 3, figsize=(18, 5))
+    fig.patch.set_facecolor("#0D0F1A")
+    fig.suptitle("RDD2022 — Bounding Box Size Distribution (normalized)",
+                 color="white", fontsize=14, fontweight="bold")
+
+    for ax2, data, label, color in zip(
+        axes2,
+        [widths, heights, areas],
+        ["Box width (normalized)", "Box height (normalized)", "Box area (normalized)"],
+        ["#E63946", "#457B9D", "#2A9D8F"],
+    ):
+        ax2.set_facecolor("#0D0F1A")
+        ax2.hist(data, bins=50, color=color, alpha=0.85, edgecolor="#0D0F1A")
+        ax2.axvline(float(np.mean(data)), color="white", linestyle="--",
+                    linewidth=1.5, label=f"mean={np.mean(data):.3f}")
+        ax2.set_xlabel(label, color="white")
+        ax2.set_ylabel("Count", color="white")
+        ax2.tick_params(colors="white")
+        ax2.legend(facecolor="#1A1D2E", labelcolor="white", fontsize=9)
+        for spine in ax2.spines.values():
+            spine.set_color("#3A3D4D")
+
+    plt.tight_layout()
+    out_path = OUT_DIR / "RDD2022_03_bbox_distribution.png"
+    plt.savefig(out_path, dpi=100, bbox_inches="tight", facecolor="#0D0F1A")
+    plt.close()
+    logger.info(f"  Saved -> RDD2022_03_bbox_distribution.png")
+
+    logger.info(f"  -> RDD2022 plots saved to {OUT_DIR}")
 def inspect_cfd():
     dataset_dir = DATASETS_DIR / "cfd"
     if not dataset_dir.exists():
