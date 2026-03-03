@@ -3,3 +3,4 @@
 Documentation
 .env
 data
+!data/inspection_plots/
