@@ -1,0 +1,77 @@
+# ─── Core ────────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+numpy==1.26.4
+pandas==2.2.2
+
+# ─── Computer Vision ─────────────────────────────────────────────────────────
+opencv-python==4.9.0.80
+Pillow==10.3.0
+albumentations==1.4.8
+
+# ─── Deep Learning ───────────────────────────────────────────────────────────
+# PyTorch — install separately depending on your CUDA version.
+# With CUDA 11.8 (most common on 4GB laptops):
+#   pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
+# CPU only (fallback, very slow for training):
+#   pip install torch==2.2.2 torchvision==0.17.2
+torch==2.2.2
+torchvision==0.17.2
+timm==0.9.16                   # EfficientNet-B3 pretrained weights
+
+# ─── RT-DETR via Ultralytics ─────────────────────────────────────────────────
+ultralytics==8.2.18            # includes RT-DETR-L support
+
+# ─── Segment Anything Model ──────────────────────────────────────────────────
+# SAM is installed from the GitHub repo, not PyPI.
+# Run: pip install git+https://github.com/facebookresearch/segment-anything.git
+# Listed here for documentation:
+# segment-anything @ git+https://github.com/facebookresearch/segment-anything.git
+
+# ─── Machine Learning ────────────────────────────────────────────────────────
+xgboost==2.0.3
+scikit-learn==1.4.2            # DBSCAN, preprocessing, metrics
+optuna==3.6.1                  # Bayesian hyperparameter optimization
+mealpy==3.0.1                  # PSO, WOA, ACO via unified interface
+
+# ─── Database ────────────────────────────────────────────────────────────────
+psycopg2-binary==2.9.9         # PostgreSQL driver
+SQLAlchemy==2.0.30             # ORM
+GeoAlchemy2==0.15.1            # PostGIS spatial types for SQLAlchemy
+alembic==1.13.1                # DB migrations
+
+# ─── Geospatial ──────────────────────────────────────────────────────────────
+shapely==2.0.4                 # geometry operations
+pyproj==3.6.1                  # coordinate reference system transforms
+osmnx==1.9.3                   # OpenStreetMap road network download
+networkx==3.3                  # graph algorithms (used by osmnx + ACO)
+geopy==2.4.1                   # Nominatim reverse geocoding
+
+# ─── Solar / Sun Angle ───────────────────────────────────────────────────────
+pysolar==0.11                  # sun altitude + azimuth from GPS + timestamp
+
+# ─── GPX Parsing ─────────────────────────────────────────────────────────────
+gpxpy==1.6.2                   # parse .gpx GPS logs
+
+# ─── HTTP / APIs ─────────────────────────────────────────────────────────────
+requests==2.32.2               # Open-Meteo, Nominatim API calls
+httpx==0.27.0                  # async HTTP (used by FastAPI)
+
+# ─── Backend ─────────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn==0.29.0
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# ─── Scheduler ───────────────────────────────────────────────────────────────
+APScheduler==3.10.4
+
+# ─── Utilities ───────────────────────────────────────────────────────────────
+tqdm==4.66.4                   # progress bars during frame extraction / inference
+loguru==0.7.2                  # structured logging across all pipeline stages
+PyYAML==6.0.1                  # config files
+python-multipart==0.0.9        # FastAPI file uploads
+
+# ─── Testing ─────────────────────────────────────────────────────────────────
+pytest==8.2.0
+pytest-asyncio==0.23.6
+httpx==0.27.0                  # also used for testing FastAPI endpoints
