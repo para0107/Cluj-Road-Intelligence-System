@@ -55,7 +55,7 @@ TRAINING STRATEGY:
         Only decoder + detection head trained. Fast convergence.
         LR = lr0 (default 1e-4)
 
-    Phase 2 — full fine-tune (remaining epochs)
+    Phase 2 — full fine-tune (remaining epochs = 50 by default)
         Backbone unfrozen. LR drops to lr0 × 0.1 to preserve pretrained features.
         Early stopping with patience=20.
 
@@ -75,8 +75,9 @@ CLASS IMBALANCE (train split):
     increase fl_gamma or add class-weighted sampling in future iteration.
 
 EXPECTED RUNTIME (RTX 2050, batch=4, imgsz=640, 27k images):
-    ~50–70 min/epoch  →  100 epochs ≈ 85–120 hours total
+    ~50–70 min/epoch  →  60 epochs ≈ 50–70 hours total (~3 nights)
     Train in overnight sessions, resume with --resume flag.
+    Use --epochs 100 for maximum accuracy (adds ~2-3 mAP, costs 2 extra nights).
 
 PSO INTEGRATION:
     After PSO produces ml/optimization/pso_best.json, its hyperparams
@@ -458,9 +459,12 @@ def train(
         else:
             start_weights = str(PRETRAINED)
 
+        # Remove warmup_epochs from shared to avoid duplicate keyword argument
+        shared_phase2 = {k: v for k, v in shared.items() if k != "warmup_epochs"}
+
         model = RTDETR(start_weights)
         model.train(
-            **shared,
+            **shared_phase2,
             epochs        = remaining,
             lr0           = hp["lr0"] * 0.1,   # lower LR for full fine-tune
             lrf           = hp["lrf"],
@@ -494,8 +498,8 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Train RT-DETR-L on merged road damage dataset"
     )
-    p.add_argument("--epochs",        type=int,   default=100,
-                   help="Total training epochs (default: 100)")
+    p.add_argument("--epochs",        type=int,   default=60,
+                   help="Total training epochs (default: 60 = 10 frozen + 50 fine-tune)")
     p.add_argument("--imgsz",         type=int,   default=640,
                    help="Input image size (default: 640)")
     p.add_argument("--freeze_epochs", type=int,   default=10,
