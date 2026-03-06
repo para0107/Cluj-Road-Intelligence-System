@@ -306,7 +306,7 @@ def copy_best_weights(run_dir: Path, use_swa: bool = True):
 # ── Training ───────────────────────────────────────────────────────────────────
 
 def train(
-    epochs:        int   = 100,
+    epochs:        int   = 60,
     imgsz:         int   = 640,
     freeze_epochs: int   = 10,
     patience:      int   = 20,
@@ -430,6 +430,7 @@ def train(
         model.train(
             **shared,
             epochs        = freeze_epochs,
+
             lr0           = hp["lr0"],
             lrf           = hp["lrf"],
             freeze        = 23,         # freeze first 23 layers (ResNet-50 backbone)
@@ -466,6 +467,7 @@ def train(
         model.train(
             **shared_phase2,
             epochs        = remaining,
+            resume = True,
             lr0           = hp["lr0"] * 0.1,   # lower LR for full fine-tune
             lrf           = hp["lrf"],
             freeze        = 0,                  # no freezing
