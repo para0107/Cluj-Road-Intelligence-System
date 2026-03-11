@@ -12,15 +12,17 @@ PURPOSE:
         + SWA (Stochastic Weight Averaging) over last N checkpoints
         + PSO-ready hyperparameter interface (loads pso_best.json if present)
 
-    Optimized for RTX 2050 (4 GB VRAM):
+    Optimized for RTX 2050 (4 GB VRAM) & Kaggle (T4x2 / P100):
         - fp16 mixed precision (mandatory)
-        - Gradient accumulation × 4  →  effective batch = 16
+        - Gradient accumulation
         - Image caching disabled (saves RAM)
-        - Workers = 4 (Windows-safe)
 
 USAGE:
     # Full training (recommended — runs both phases)
     python ml/detection/train.py
+
+    # Kaggle Multi-GPU T4x2 Training
+    python ml/detection/train.py --device 0,1 --workers 4
 
     # Smoke-test: 2 epochs, tiny batch, fast validation
     python ml/detection/train.py --smoke_test
@@ -31,59 +33,6 @@ USAGE:
     # Use hyperparams produced by PSO (automatically loaded when present)
     # Just run PSO first:  python ml/optimization/pso_hyperparams.py
     # Then run normally:   python ml/detection/train.py
-
-INPUT:
-    data/detection/dataset.yaml
-    data/detection/train.json   (27,336 images, 42,883 annotations)
-    data/detection/val.json     (5,857 images,  9,024 annotations)
-    rtdetr-l.pt                 (COCO pretrained weights)
-    ml/optimization/pso_best.json  (optional — PSO output)
-
-OUTPUT:
-    runs/detect/rtdetr_road/
-    ├── weights/
-    │   ├── best.pt             highest val mAP50-95
-    │   ├── last.pt             latest checkpoint
-    │   └── swa.pt              SWA-averaged weights (produced after training)
-    ├── results.csv             per-epoch metrics
-    └── args.yaml               full training config snapshot
-
-    ml/weights/rtdetr_l_rdd2022.pt   (copy of best.pt after training)
-
-TRAINING STRATEGY:
-    Phase 1 — frozen backbone (default: 10 epochs)
-        Only decoder + detection head trained. Fast convergence.
-        LR = lr0 (default 1e-4)
-
-    Phase 2 — full fine-tune (remaining epochs = 50 by default)
-        Backbone unfrozen. LR drops to lr0 × 0.1 to preserve pretrained features.
-        Early stopping with patience=20.
-
-    SWA — applied after phase 2 completes
-        Averages weights from last swa_n checkpoints.
-        Produces swa.pt — typically +0.5–1.5 mAP over best single checkpoint.
-
-CLASS IMBALANCE (train split):
-    longitudinal_crack  18,201  (42.4%) ← dominant
-    pothole              8,770  (20.5%)
-    transverse_crack     8,386  (19.6%)
-    alligator_crack      7,526  (17.5%)
-    patch_deterioration      0  (reserved for Cluj data)
-
-    Handled via focal loss (fl_gamma=2.0, built into RT-DETR).
-    Monitor per-class AP in results.csv — if alligator_crack AP lags,
-    increase fl_gamma or add class-weighted sampling in future iteration.
-
-EXPECTED RUNTIME (RTX 2050, batch=4, imgsz=640, 27k images):
-    ~50–70 min/epoch  →  60 epochs ≈ 50–70 hours total (~3 nights)
-    Train in overnight sessions, resume with --resume flag.
-    Use --epochs 100 for maximum accuracy (adds ~2-3 mAP, costs 2 extra nights).
-
-PSO INTEGRATION:
-    After PSO produces ml/optimization/pso_best.json, its hyperparams
-    (lr0, lrf, momentum, weight_decay, warmup_epochs, mosaic, mixup,
-    fl_gamma, box_pw, cls_pw) are loaded automatically at startup and
-    override the defaults below. No code changes needed.
 """
 
 import argparse
@@ -314,6 +263,7 @@ def train(
     swa_n:         int   = 5,
     resume:        str   = None,
     smoke_test:    bool  = False,
+    device:        str   = "0",  # Added device parameter
 ):
     """
     Main training entry point.
@@ -327,6 +277,7 @@ def train(
         swa_n         : Number of checkpoints to average for SWA.
         resume        : Path to a .pt checkpoint to resume from.
         smoke_test    : If True, run 2 quick epochs for pipeline validation.
+        device        : CUDA device ID(s) e.g., '0' or '0,1'.
     """
 
     # ── Validate dataset.yaml ──────────────────────────────────────────────────
@@ -364,6 +315,7 @@ def train(
     print(f"  Mosaic        : {hp['mosaic']}")
     print(f"  Early stop    : patience={patience} (phase 2 only)")
     print(f"  SWA           : last {swa_n} checkpoints")
+    print(f"  Device(s)     : {device}")
     print(f"  Output        : {run_dir}")
 
     # Shared kwargs passed to both phases
@@ -380,7 +332,7 @@ def train(
         save          = True,
         save_period   = 5,              # save epoch checkpoint every 5 epochs
         val           = True,
-        device        = 0,
+        device        = device,         # <-- FIX: Use parameterized device
         verbose       = True,
         deterministic = False,          # disables slow deterministic ops (+15% speed)
         project       = str(OUTPUT_DIR),
@@ -463,11 +415,14 @@ def train(
         # Remove warmup_epochs from shared to avoid duplicate keyword argument
         shared_phase2 = {k: v for k, v in shared.items() if k != "warmup_epochs"}
 
+        # <-- FIX: Check if we are actually resuming a crashed Phase 2, or just starting it fresh
+        is_resuming_phase2 = (resume is not None)
+
         model = RTDETR(start_weights)
         model.train(
             **shared_phase2,
             epochs        = remaining,
-            resume = True,
+            resume        = is_resuming_phase2,  # <-- FIX: Replaced hardcoded True
             lr0           = hp["lr0"] * 0.1,   # lower LR for full fine-tune
             lrf           = hp["lrf"],
             freeze        = 0,                  # no freezing
@@ -516,6 +471,9 @@ def parse_args():
                    help="Resume from checkpoint path")
     p.add_argument("--smoke_test",    action="store_true",
                    help="Quick 2-epoch pipeline validation")
+    # <-- FIX: Added device argument
+    p.add_argument("--device",        type=str,   default="0",
+                   help="CUDA device(s), e.g., 0 or 0,1 for multi-GPU")
     return p.parse_args()
 
 
@@ -530,4 +488,5 @@ if __name__ == "__main__":
         swa_n         = args.swa_n,
         resume        = args.resume,
         smoke_test    = args.smoke_test,
+        device        = args.device, # <-- FIX: Passed device argument
     )
