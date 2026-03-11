@@ -255,7 +255,7 @@ def copy_best_weights(run_dir: Path, use_swa: bool = True):
 # ── Training ───────────────────────────────────────────────────────────────────
 
 def train(
-    epochs:        int   = 60,
+    epochs:        int   = 100,
     imgsz:         int   = 640,
     freeze_epochs: int   = 10,
     patience:      int   = 20,
