@@ -166,12 +166,16 @@ def run_eval(
     recall   = float(rd.get("metrics/recall(B)",   0.0))
 
     # Per-class AP (Ultralytics stores these in results.ap_class_index + results.ap)
+    # Replace the per-class extraction block with:
     per_class = {}
-    if hasattr(results, "ap_class_index") and hasattr(results, "ap"):
-        for idx, ap_val in zip(results.ap_class_index, results.ap):
+    try:
+        box = results.box
+        for idx, ap_val in zip(box.ap_class_index, box.ap):
             name = CLASS_NAMES[idx] if idx < len(CLASS_NAMES) else f"class_{idx}"
             per_class[name] = float(ap_val)
-    # Fill missing classes with 0
+    except Exception as e:
+        logger.warning(f"Could not extract per-class AP: {e}")
+
     for name in CLASS_NAMES:
         if name not in per_class:
             per_class[name] = 0.0

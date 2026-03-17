@@ -6,6 +6,8 @@ data/*
 !data/inspection_plots/
 !data/inspection_plots/**
 rtdetr-l.pt
-runs
+runs/*
 yolov8n.pt
 runs.zip
+!runs/detect/val
+!runs/detect/val2
