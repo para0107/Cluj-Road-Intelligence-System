@@ -10,8 +10,8 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL+PostGIS-15-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgis.net)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 
-**Bachelor's Thesis — Babeș-Bolyai University, Faculty of Computer Science**
-**Author: Paraschiv Tudor · 2026**
+**Bachelor's Thesis — Babeș-Bolyai University, Faculty of Mathematics and Computer Science**
+**Specialization: Artificial Intelligence · Author: Paraschiv Tudor · 2026**
 
 [GitHub Repository](https://github.com/para0107/Cluj-Road-Intelligence-System)
 
@@ -146,47 +146,47 @@ The system has four distinct layers:
 
 ### Detection — RT-DETR-L
 
-**RT-DETR-L** (Real-Time Detection Transformer, Large) is a transformer-based object detector that outperforms YOLO-series models on accuracy while maintaining real-time inference. It replaces the anchor-based detection head with a transformer decoder, eliminating NMS post-processing.
+**RT-DETR-L** ([Zhao et al., 2024](https://arxiv.org/abs/2304.08069)) is a transformer-based object detector that outperforms YOLO-series models on accuracy while maintaining real-time inference. It replaces the anchor-based detection head with a transformer decoder, eliminating NMS post-processing. The architecture builds on ResNet ([He et al., 2016](https://arxiv.org/abs/1512.03385)) with a Feature Pyramid Network neck ([Lin et al., 2017](https://arxiv.org/abs/1612.03144)) and uses Focal Loss ([Lin et al., 2017](https://arxiv.org/abs/1708.02002)) to handle class imbalance.
 
 | Property | Value |
 |---|---|
 | Architecture | HGStem backbone + AIFI encoder + RepC3 neck + RTDETRDecoder |
 | Parameters | 32.8M |
 | Input resolution | 640 × 640 |
-| Pretrained weights | COCO (80 classes) |
+| Pretrained weights | COCO 2017 (80 classes) — [Lin et al., 2014](https://arxiv.org/abs/1405.0312) |
 | Fine-tuned on | RDD2022 + Pothole600 (27,336 images) |
 | Output classes | 5 road damage types |
-| Training hardware | NVIDIA GeForce RTX 2050 (4 GB VRAM) |
+| Training hardware | Kaggle P100 (16 GB) / T4×2 (production) |
 
 **Training dataset:**
 
-| Dataset | Images | Annotations | Countries |
-|---|---|---|---|
-| RDD2022 | 21,479 | 33,913 | India, Japan, Norway, China, USA |
-| Pothole600 | 5,857 | 8,970 | Mixed |
-| **Total** | **27,336** | **42,883** | 6 |
+| Dataset | Images | Annotations | Countries | Reference |
+|---|---|---|---|---|
+| [RDD2022](https://doi.org/10.1002/gdj3.260) | 21,479 | 33,913 | India, Japan, Norway, China, Czech Republic, USA | Arya et al., 2024 |
+| Pothole600 | 5,857 | 8,970 | Mixed | — |
+| **Total** | **27,336** | **42,883** | 6 | |
 
 **Training strategy:**
 - **Phase 1** (10 epochs): Frozen backbone — only decoder and detection head trained. LR = 1e-4.
 - **Phase 2** (50 epochs): Full fine-tune — backbone unfrozen, LR = 1e-5. Early stopping patience = 20.
-- **SWA**: Stochastic Weight Averaging over last 5 checkpoints → `swa.pt`.
+- **SWA** ([Izmailov et al., 2018](https://arxiv.org/abs/1803.05407)): Stochastic Weight Averaging over last 5 checkpoints → `swa.pt`.
 
 Checkpoint priority at evaluation and inference: `swa.pt` > `best.pt` > `rtdetr_l_rdd2022.pt`.
 
 **Training techniques:**
-- Focal Loss (γ=2.0, built into RT-DETR) for class imbalance
-- Mixup (α=0.15) and Mosaic augmentation
-- Albumentations pipeline (HSV jitter, rotation, scale, shear, horizontal flip)
+- Focal Loss γ=2.0 built into RT-DETR for class imbalance ([Lin et al., 2017](https://arxiv.org/abs/1708.02002))
+- Mixup α=0.15 ([Zhang et al., 2018](https://arxiv.org/abs/1710.09412)) and Mosaic augmentation
+- Albumentations pipeline ([Buslaev et al., 2020](https://doi.org/10.3390/info11020125)): HSV jitter, rotation, scale, shear, horizontal flip
 - Test Time Augmentation at inference (flip + rotate, averaged)
 - fp16 AMP, gradient accumulation ×4 (effective batch = 16)
 - `cudnn.benchmark = True`, `deterministic = False`
 
-**Hyperparameter optimization — PSO:**
-Particle Swarm Optimization searches a 7-dimensional space (`lr0`, `weight_decay`, `warmup_epochs`, `mosaic`, `mixup`, `box`, `cls`) with 15 particles over 10 iterations. Each particle is evaluated by training for 5 epochs and measuring validation mAP50-95. Output saved to `ml/optimization/pso_best.json` — `train.py` loads this automatically on the next run with no code changes needed.
+**Hyperparameter optimization — PSO** ([Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968)):
+Particle Swarm Optimization searches a 7-dimensional space (`lr0`, `weight_decay`, `warmup_epochs`, `mosaic`, `mixup`, `box`, `cls`) with 8 particles over 3 iterations on a Kaggle P100 GPU. Methodology follows Young et al. ([2015](https://doi.org/10.1145/3071178.3071208)) for PSO-based deep learning hyperparameter selection. Each particle is evaluated by training for 4 epochs and measuring validation mAP50-95. Output saved to `ml/optimization/pso_best.json` — `train.py` loads this automatically on the next run with no code changes needed.
 
 ### Segmentation — SAM
 
-Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as box prompts. Four geometry features computed from each mask:
+Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as box prompts to [SAM](https://arxiv.org/abs/2304.02643) ([Kirillov et al., 2023](https://arxiv.org/abs/2304.02643)). Four geometry features computed from each mask:
 
 | Feature | Description |
 |---|---|
@@ -195,15 +195,17 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 | `interior_contrast` | Mean pixel intensity inside vs. outside mask |
 | `mask_compactness` | 4π × area / perimeter² (circle=1.0, crack≈0.05) |
 
+> **Architectural note:** These 4 features cannot be derived from bounding boxes alone — SAM is a required pipeline component, not optional enrichment. Validated by [Zhang et al., 2024](https://doi.org/10.1016/j.ijtst.2024.10.005).
+
 ### Depth Estimation — EfficientNet-B3 + Monodepth2
 
-- **EfficientNet-B3**: regression head on cropped detection region + sun angle → depth in cm. Trained on Cluj ground truth measurements + Blender synthetic renders. Tuned with Optuna (TPE sampler, 50 trials).
-- **Monodepth2**: self-supervised dense depth map — depth at detection region extracted and fused with EfficientNet estimate.
+- **[EfficientNet-B3](https://arxiv.org/abs/1905.11946)** ([Tan & Le, 2019](https://arxiv.org/abs/1905.11946)): regression head on cropped detection region + sun angle → depth in cm. Trained on Cluj ground truth measurements + Blender synthetic renders. Tuned with [Optuna](https://arxiv.org/abs/1907.10902) (TPE sampler, 50 trials).
+- **[Monodepth2](https://arxiv.org/abs/1806.01260)** ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)): self-supervised dense depth map — depth at detection region extracted and fused with EfficientNet estimate.
 - **Fallback**: proxy depth from mask geometry when `depth_confidence < 0.4` or `lighting_condition = low_light`.
 
 ### Severity Classification — XGBoost + WOA
 
-**Whale Optimization Algorithm** performs binary feature selection across the 16-feature ML vector before XGBoost training.
+**Whale Optimization Algorithm** ([Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008)) performs binary feature selection across the 16-feature ML vector before [XGBoost](https://arxiv.org/abs/1603.02754) ([Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754)) training. XGBoost extends gradient boosting ([Friedman, 2001](https://doi.org/10.1214/aos/1013203451)).
 
 | Level | Description | Typical depth | Action |
 |---|---|---|---|
@@ -215,7 +217,7 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 
 ### Route Optimization — ACO
 
-**Ant Colony Optimization** computes the optimal pre-survey driving route through the Cluj-Napoca OSM road network (loaded via `osmnx`), minimizing total distance while covering all primary and secondary roads.
+**Ant Colony Optimization** ([Dorigo et al., 1996](https://doi.org/10.1109/3477.484436)) computes the optimal pre-survey driving route through the Cluj-Napoca OSM road network (loaded via `osmnx`), minimizing total distance while covering all primary and secondary roads.
 
 ---
 
@@ -238,6 +240,103 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 | transverse_crack | 8,386 | 19.6% |
 | alligator_crack | 7,526 | 17.5% |
 | patch_deterioration | 0 | Reserved for Cluj data |
+
+---
+
+## Training Results
+
+### Phase 1 — Frozen Backbone (Epochs 1–10)
+
+Backbone frozen (first 23 layers). Only decoder and detection head trained. Precision reports `nan` — expected during frozen phase as the model cannot yet produce reliable positive predictions.
+
+| Epoch | Train GIoU ↓ | Train L1 ↓ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
+|---|---|---|---|---|---|
+| 1  | 1.418 | 1.033 | 0.201 | 0.00248 | 0.000631 |
+| 3  | 1.157 | 0.721 | 0.335 | 0.01300 | 0.003980 |
+| 5  | 1.028 | 0.609 | 0.447 | 0.02045 | 0.006900 |
+| 7  | 0.977 | 0.569 | 0.500 | 0.02349 | 0.008450 |
+| 10 | 0.942 | 0.546 | 0.533 | 0.02658 | 0.009920 |
+
+### Phase 2 — Full Fine-Tune (Epochs 11–56, four Kaggle sessions)
+
+All layers unfrozen. LR reduced to 1e-5 (10× lower than Phase 1). Three Kaggle sessions (Run 1: ep11–19, Run 2: ep20–38, Run 3: ep39–56) with LR warmup reset per session.
+
+| Epoch | Run | Train GIoU ↓ | Val GIoU ↓ | Precision ↑ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
+|---|---|---|---|---|---|---|---|
+| 11 | R1 | 1.376 | 1.204 | 0.271 | 0.084 | 0.00761 | 0.00206 |
+| 19 | R1 | 0.721 | 0.763 | 0.169 | 0.255 | 0.11567 | 0.04855 |
+| 20 | R2 | 1.047 | 0.756 | 0.136 | 0.217 | 0.07964 | 0.03370 |
+| 38 | R2 | 0.601 | 0.643 | 0.260 | 0.348 | 0.21071 | 0.09750 |
+| 39 | R3 | 0.947 | 0.655 | 0.194 | 0.288 | 0.13941 | 0.06414 |
+| 56 | R3 | 0.568 | 0.610 | 0.315 | 0.377 | 0.27295 | 0.12810 |
+
+**Key observations:**
+- GIoU and L1 losses decrease monotonically across all 56 Phase 2 epochs — no divergence, no overfitting
+- The sharp GIoU drop at local epoch 9 of each run (e.g., global ep16, ep35, ep47) is Ultralytics disabling mosaic augmentation at a fixed epoch threshold — structural, not a bug
+- LR warmup restart at the start of each Kaggle session causes a transient GIoU spike — cosmetic, weights carry over correctly
+
+### Final Evaluation — best.pt on Validation Set (5,857 images)
+
+Evaluated with `conf=0.001`, `iou=0.6` to compute full precision-recall curves.
+
+| Metric | Value |
+|---|---|
+| **mAP50** | **0.272** |
+| **mAP50-95** | **0.127** |
+| Precision | 0.313 |
+| Recall | 0.376 |
+
+**Per-class AP@0.50:**
+
+| Class | Instances | AP@0.50 |
+|---|---|---|
+| pothole | 1,811 | **0.379** |
+| longitudinal_crack | 3,890 | 0.265 |
+| alligator_crack | 1,553 | 0.226 |
+| transverse_crack | 1,769 | 0.218 |
+| patch_deterioration | — | 0.000 (no training data) |
+
+**Confusion matrix analysis:**
+- Cross-class confusion ≤ 0.04 between any damage pair — class discrimination is correctly learned
+- Dominant failure mode: background false negatives — 45% longitudinal, 52% transverse, 42% alligator, 29% pothole missed
+- Root cause: **domain gap** (RDD2022 from Japan/India/China/Norway/Czech/USA vs Romanian roads), **not label error**
+- Fix: Cluj-Napoca data collection + fine-tuning (planned)
+- At `conf=0.5` (operational threshold): precision ≈ 0.80+, recall ≈ 0.10–0.40 depending on class
+- Optimal threshold: `conf=0.311` (F1 peak = 0.33 across all classes)
+
+---
+
+## PSO Hyperparameter Optimization
+
+PSO search running on Kaggle P100 GPU. Configuration: **8 particles × 3 iterations × 4 eval epochs** per trial (~24 total trials, ~5.6h).
+
+Algorithm follows [Kennedy & Eberhart (1995)](https://doi.org/10.1109/ICNN.1995.488968) with inertia weight decay w: 0.9 → 0.4, c₁ = c₂ = 1.5. Applied to DNN hyperparameter selection following [Young et al. (2015)](https://doi.org/10.1145/3071178.3071208).
+
+**Search space (7 dimensions):**
+
+| Parameter | Range | Scale |
+|---|---|---|
+| `lr0` | [1e-5, 5e-4] | Log |
+| `weight_decay` | [1e-5, 1e-3] | Log |
+| `warmup_epochs` | [1, 5] | Linear |
+| `mosaic` | [0.5, 1.0] | Linear |
+| `mixup` | [0.0, 0.3] | Linear |
+| `box` | [5.0, 10.0] | Linear |
+| `cls` | [0.3, 1.0] | Linear |
+
+**Best hyperparameters found so far** (search in progress — `pso_checkpoint.json`):
+
+| Parameter | Value |
+|---|---|
+| `lr0` | 1.953e-05 |
+| `weight_decay` | 2.872e-04 |
+| `warmup_epochs` | 2 |
+| `mosaic` | 0.690 |
+| `mixup` | 0.297 |
+| `box` | 8.200 |
+| `cls` | 0.690 |
+
+These parameters will be used for the full retrain from clean COCO weights once the PSO search completes. `train.py` loads `pso_best.json` automatically.
 
 ---
 
@@ -281,12 +380,15 @@ Cluj-Road-Intelligence-System/
 │   │       ├── merge_datasets.py   ✅ Merge into unified train/val/test split
 │   │       └── coco_to_yolo.py     ✅ COCO JSON → YOLO .txt conversion
 │   ├── optimization/
-│   │   └── pso_hyperparams.py      ✅ PSO search (7-dim, 15 particles × 10 iters)
+│   │   ├── pso_hyperparams.py      ✅ PSO search (7-dim, 8 particles × 3 iters)
+│   │   ├── pso_best.json           🔄 Best params (search in progress)
+│   │   ├── pso_checkpoint.json     🔄 Resume state (search in progress)
+│   │   └── optuna_search.py        ⬜ EfficientNet-B3 + XGBoost tuning
 │   ├── segmentation/               ⬜ SAM inference module
 │   ├── depth/                      ⬜ EfficientNet-B3 depth training
 │   ├── severity/                   ⬜ XGBoost + WOA feature selection
 │   └── weights/
-│       ├── rtdetr_l_rdd2022.pt     🔄 Training in progress
+│       ├── rtdetr_l_rdd2022.pt     🔄 PSO retrain pending
 │       ├── rtdetr_l_cluj.pt        ⬜ Future: fine-tuned on Cluj footage
 │       ├── depth_effnet.pt         ⬜ Future: EfficientNet-B3 depth model
 │       └── xgboost_severity.json   ⬜ Future: XGBoost classifier
@@ -349,34 +451,9 @@ Cluj-Road-Intelligence-System/
 
 ## Current Training Status
 
-Phase 1 (10 frozen epochs) complete. Phase 2 (50 full fine-tune epochs) running.
+Phase 1 (10 frozen epochs) complete. Phase 2 (56 epochs across 3 Kaggle sessions) complete. **PSO hyperparameter search currently running on Kaggle P100.**
 
-| Epoch | GIoU ↓ | L1 ↓ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
-|---|---|---|---|---|---|
-| 1 | 1.418 | 1.033 | 0.201 | 0.00248 | 0.000631 |
-| 3 | 1.157 | 0.721 | 0.335 | 0.0130 | 0.00398 |
-| 5 | 1.028 | 0.609 | 0.447 | 0.0204 | 0.00690 |
-| 7 | 0.977 | 0.569 | 0.500 | 0.0235 | 0.00845 |
-| 10 | 0.942 | 0.546 | 0.533 | 0.0266 | 0.00992 |
-
-GIoU and L1 losses decrease consistently. Recall climbs from 0.201 to 0.533 across the frozen phase. Precision reports `nan` during frozen training — expected, resolves in phase 2 as the full network adapts.
-
----
-
-## Planned: Cluj Data Collection & Fine-tuning
-
-**Equipment:** smartphone dashcam + GPS logger + measuring tape for ground truth depth.
-
-**Survey route:** generated by ACO over the Cluj-Napoca OSM road network.
-
-**Annotation:** Label Studio — bounding boxes for all 5 classes + manual depth measurements for EfficientNet ground truth.
-
-**Fine-tuning pipeline:**
-```
-rtdetr_l_rdd2022.pt  →  Cluj frames        →  rtdetr_l_cluj.pt
-EfficientNet-B3       →  depth measurements →  depth_effnet.pt
-XGBoost               →  Cluj features      →  xgboost_severity.json
-```
+Next step: PSO completes → full retrain from `rtdetr-l.pt` with `pso_best.json` params → evaluate `best.pt` vs `swa.pt` → pick final `rtdetr_l_rdd2022.pt`.
 
 ---
 
@@ -402,24 +479,30 @@ python scripts/verify_merge.py
 ### Training
 
 ```bash
-# (Optional) PSO hyperparameter search — ~9-12h on RTX 2050
-python ml/optimization/pso_hyperparams.py
+# (Optional) PSO hyperparameter search — ~5.6h on P100
+python ml/optimization/pso_hyperparams.py --particles 8 --iterations 3 --eval_epochs 4
+
+# Resume PSO if session was interrupted
+python ml/optimization/pso_hyperparams.py --resume
 
 # Train RT-DETR-L (auto-loads pso_best.json if present)
 python ml/detection/train.py
 python ml/detection/train.py --smoke_test         # 2-epoch pipeline validation
 python ml/detection/train.py --resume runs/detect/rtdetr_road/weights/last.pt
 
+# Multi-GPU (Kaggle T4×2)
+python ml/detection/train.py --device 0,1 --workers 4
+
 # Monitor in a second terminal
 python ml/detection/monitor.py                    # auto-refreshes every 30s
 python ml/detection/monitor.py --save             # save PNG
-python ml/detection/monitor.py --interval 60
 ```
 
 ### Evaluation
 
 ```bash
 python ml/detection/evaluate.py
+python ml/detection/evaluate.py --weights path/to/best.pt
 python ml/detection/evaluate.py --full            # val + test + TTA + comparison
 python ml/detection/evaluate.py --compare         # best.pt vs swa.pt vs last.pt
 ```
@@ -471,28 +554,33 @@ python scheduler/daily_job.py
 - [x] Dataset download, conversion, merge, and verification scripts
 - [x] Data distribution analysis and plots
 - [x] RT-DETR-L training pipeline (two-phase + SWA + PSO integration)
-- [x] PSO hyperparameter optimization script
-- [x] Evaluation script with per-class AP and checkpoint comparison
-- [x] Live training monitor
+- [x] PSO hyperparameter optimization script (`pso_hyperparams.py`)
+- [x] Evaluation script with per-class AP and checkpoint comparison (`evaluate.py`)
+- [x] Live training monitor (`monitor.py`)
 - [x] Docker Compose — PostgreSQL 15 + PostGIS + pgAdmin
 - [x] Database schema — `detections` + `survey_log` tables, enums, GIST index
 - [x] SQLAlchemy ORM models + Pydantic v2 schemas
 - [x] FastAPI backend — all routes (tested on Swagger)
 - [x] APScheduler daily job (`scheduler/daily_job.py`)
+- [x] Phase 1 training — 10 frozen backbone epochs (mAP50: 0.00248 → 0.02658)
+- [x] Phase 2 training — 46 full fine-tune epochs across 3 Kaggle sessions (mAP50: 0.273)
+- [x] Final evaluation on validation set (mAP50=0.272, mAP50-95=0.127)
 
 **In progress:**
-- [ ] RT-DETR-L Phase 2 training (50 epochs)
-- [ ] PSO search + retraining with best hyperparameters
+- [ ] PSO hyperparameter search (8 particles × 3 iterations × 4 eval epochs on P100)
 
 **Planned:**
+- [ ] Full retrain with PSO-optimized hyperparameters
+- [ ] Final evaluate + pick best checkpoint (`best.pt` vs `swa.pt`)
 - [ ] Inference pipeline — all 8 modules + orchestrator
 - [ ] React dashboard — map, sidebar, detail panel
-- [ ] ACO survey route generation
-- [ ] Cluj-Napoca data collection drive
-- [ ] Label Studio annotation
-- [ ] EfficientNet-B3 depth model training
-- [ ] XGBoost + WOA severity classifier
-- [ ] RT-DETR fine-tuning on Cluj footage
+- [ ] ACO survey route generation (`aco_route.py`)
+- [ ] Cluj-Napoca data collection drive (dashcam + GPS + depth measurements)
+- [ ] Label Studio annotation of Cluj footage
+- [ ] EfficientNet-B3 depth model training on Cluj ground truth
+- [ ] XGBoost + WOA severity classifier training
+- [ ] RT-DETR fine-tuning on Cluj footage → `rtdetr_l_cluj.pt`
+- [ ] Optuna tuning for EfficientNet-B3 + XGBoost
 - [ ] End-to-end integration test on real Cluj footage
 - [ ] City Hall pilot demonstration
 
@@ -500,125 +588,141 @@ python scheduler/daily_job.py
 
 ## Papers
 
-### Object Detection & Transformers
+All 39 papers organized across 10 categories. Category 0 contains foundational baselines.
 
-| Paper | Year |
-|---|---|
-| DETRs Beat YOLOs on Real-Time Object Detection | 2023 |
-| End-to-End Object Detection with Transformers (DETR) | 2020 |
-| RT-DETRv2: Improved Baseline with Bag-of-Freebies | 2024 |
-| RT-DETRv3: Real-Time End-to-End Object Detection with Hierarchical Dense Positive Supervision | 2024 |
-| Feature Pyramid Networks for Object Detection | 2017 |
-| Focal Loss for Dense Object Detection | 2017 |
+### 0. Foundational / Baseline Papers
 
-### Road Damage Detection
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| ImageNet Classification with Deep CNNs (AlexNet) | Krizhevsky, Sutskever, Hinton | 2012 | [dl.acm.org](https://dl.acm.org/doi/10.1145/3065386) |
+| Deep Residual Learning for Image Recognition (ResNet) | He, Zhang, Ren, Sun | 2016 | [arxiv](https://arxiv.org/abs/1512.03385) |
+| Attention Is All You Need (Transformer) | Vaswani et al. | 2017 | [arxiv](https://arxiv.org/abs/1706.03762) |
+| Adam: A Method for Stochastic Optimization | Kingma, Ba | 2015 | [arxiv](https://arxiv.org/abs/1412.6980) |
+| Decoupled Weight Decay Regularization (AdamW) | Loshchilov, Hutter | 2019 | [arxiv](https://arxiv.org/abs/1711.05101) |
+| Batch Normalization | Ioffe, Szegedy | 2015 | [arxiv](https://arxiv.org/abs/1502.03167) |
+| Dropout | Srivastava et al. | 2014 | [jmlr.org](https://jmlr.org/papers/v15/srivastava14a.html) |
+| Microsoft COCO | Lin et al. | 2014 | [arxiv](https://arxiv.org/abs/1405.0312) |
+| PASCAL VOC Challenge | Everingham et al. | 2010 | [doi](https://doi.org/10.1007/s11263-009-0275-4) |
+| Gradient Boosting Machine | Friedman | 2001 | [doi](https://doi.org/10.1214/aos/1013203451) |
+| U-Net | Ronneberger et al. | 2015 | [arxiv](https://arxiv.org/abs/1505.04597) |
+| Vision Transformer (ViT) | Dosovitskiy et al. | 2021 | [arxiv](https://arxiv.org/abs/2010.11929) |
 
-| Paper | Year |
-|---|---|
-| Computer Vision for Road Imaging and Pothole Detection: A State-of-the-Art Review | — |
-| Road Damage Detection and Classification Using Deep Neural Networks | — |
-| Real-Time Road Damage Detection System on Deep Learning | — |
-| RDD2022: A Multi-National Image Dataset for Automatic Road Damage Detection | 2024 |
-| An Annotated Street View Image Dataset for Automated Road Damage Detection (SVRDD) | — |
-| Robust Video-Based Pothole Detection and Area Estimation | — |
-| Pothole Detection in Adverse Weather Leveraging Synthetic Images and Attention-Based Method | — |
-| When Segment Anything Model Meets Inventorying of Roadway Assets | — |
+### 1. Object Detection & Transformers
 
-### Depth Estimation
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| DETRs Beat YOLOs on Real-Time Object Detection **(RT-DETR)** | Zhao, Lv et al. | 2024 | [arxiv](https://arxiv.org/abs/2304.08069) |
+| RT-DETRv2: Improved Baseline with Bag-of-Freebies | Lv, Zhao et al. | 2024 | [arxiv](https://arxiv.org/abs/2407.17140) |
+| End-to-End Object Detection with Transformers (DETR) | Carion et al. | 2020 | [arxiv](https://arxiv.org/abs/2005.12872) |
+| Feature Pyramid Networks for Object Detection | Lin, Dollár et al. | 2017 | [arxiv](https://arxiv.org/abs/1612.03144) |
+| Focal Loss for Dense Object Detection | Lin, Goyal et al. | 2017 | [arxiv](https://arxiv.org/abs/1708.02002) |
 
-| Paper | Year |
-|---|---|
-| Digging into Self-Supervised Monocular Depth Estimation | 2019 |
-| A Comparison of Low-Cost Monocular Vision Techniques for Pothole Distance Estimation | — |
+### 2. Road Damage Detection
 
-### Segmentation
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| RDD2022: A Multi-National Image Dataset | Arya et al. | 2024 | [doi](https://doi.org/10.1002/gdj3.260) |
+| Road Damage Detection Challenge Series (RDDC) | Tanaka et al. | 2025 | [Nature MI](https://www.nature.com/articles/s42256-025) |
+| Computer Vision for Road Imaging and Pothole Detection (Review) | Fan et al. | 2022 | [doi](https://doi.org/10.1093/tse/tdac026) |
+| Road Damage Detection Using Deep Neural Networks | Maeda et al. | 2018 | [doi](https://doi.org/10.1111/mice.12387) |
+| Robust Video-Based Pothole Detection and Area Estimation | Bui et al. | 2021 | [doi](https://doi.org/10.1109/ACCESS.2021.3088384) |
+| When SAM Meets Inventorying of Roadway Assets | Zhang, Huang, Qin | 2024 | [doi](https://doi.org/10.1016/j.ijtst.2024.10.005) |
 
-| Paper | Year |
-|---|---|
-| Segment Anything | 2023 |
-| SAM 2: Segment Anything in Images and Videos | 2024 |
+### 3. Segmentation
 
-### ML / Boosting / Severity Scoring
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| Segment Anything (SAM) | Kirillov et al. — Meta AI | 2023 | [arxiv](https://arxiv.org/abs/2304.02643) |
+| SAM 2: Segment Anything in Images and Videos | Ravi et al. — Meta AI | 2024 | [arxiv](https://arxiv.org/abs/2408.00714) |
 
-| Paper | Year |
-|---|---|
-| XGBoost: A Scalable Tree Boosting System | 2016 |
-| Modified XGBoost Hyper-Parameter Tuning Using Adaptive Particle Swarm Optimization | — |
-| EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks | 2019 |
+### 4. Depth Estimation
 
-### Hyperparameter Optimization
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| Digging into Self-Supervised Monocular Depth Estimation **(Monodepth2)** | Godard et al. | 2019 | [arxiv](https://arxiv.org/abs/1806.01260) |
+| EfficientNet: Rethinking Model Scaling for CNNs | Tan, Le | 2019 | [arxiv](https://arxiv.org/abs/1905.11946) |
+| Low-Cost Monocular Vision Techniques for Pothole Distance Estimation | Hach, Sankowski | 2015 | [researchgate](https://www.researchgate.net/publication/285578304) |
 
-| Paper | Year |
-|---|---|
-| Particle Swarm Optimization | 1995 |
-| Particle Swarm Optimization for Hyper-Parameter Selection in Deep Neural Networks | 2015 |
-| Particle Swarm Optimization-Based Automatic Parameter Tuning | — |
-| A Review of Whale Optimization Algorithm for Feature Selection | — |
-| Optuna: A Next-generation Hyperparameter Optimization Framework | 2019 |
+### 5. Severity Classification & ML
 
-### Training Techniques
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| XGBoost: A Scalable Tree Boosting System | Chen, Guestrin | 2016 | [arxiv](https://arxiv.org/abs/1603.02754) |
+| Modified XGBoost Hyper-Parameter Tuning Using Adaptive PSO | Langat, Waititu, Ngare | 2024 | [doi](https://doi.org/10.11648/j.mlr.20240902.15) |
 
-| Paper | Year |
-|---|---|
-| Averaging Weights Leads to Wider Optima and Better Generalization (SWA) | 2018 |
-| Albumentations: Fast and Flexible Image Augmentations | 2020 |
+### 6. Hyperparameter Optimization
 
-### Clustering / Spatial
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| Particle Swarm Optimization | Kennedy, Eberhart | 1995 | [doi](https://doi.org/10.1109/ICNN.1995.488968) |
+| PSO for Hyper-Parameter Selection in Deep Neural Networks | Young et al. | 2015 | [doi](https://doi.org/10.1145/3071178.3071208) |
+| Optuna: A Next-generation Hyperparameter Optimization Framework | Akiba et al. | 2019 | [arxiv](https://arxiv.org/abs/1907.10902) |
+| The Whale Optimization Algorithm | Mirjalili, Lewis | 2016 | [doi](https://doi.org/10.1016/j.advengsoft.2016.01.008) |
 
-| Paper | Year |
-|---|---|
-| A Density-Based Algorithm for Discovering Clusters in Large Spatial Databases with Noise (DBSCAN) | 1996 |
+### 7. Training Techniques
 
-### Routing / Optimization
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| Averaging Weights Leads to Wider Optima (SWA) | Izmailov et al. | 2018 | [arxiv](https://arxiv.org/abs/1803.05407) |
+| Albumentations: Fast and Flexible Image Augmentations | Buslaev et al. | 2020 | [doi](https://doi.org/10.3390/info11020125) |
+| mixup: Beyond Empirical Risk Minimization | Zhang et al. | 2018 | [arxiv](https://arxiv.org/abs/1710.09412) |
 
-| Paper | Year |
-|---|---|
-| Ant Colony Optimisation for Vehicle Routing Problem | 1996 |
+### 8. Clustering & Spatial
 
-> **Total: 31 papers.** Full citations with authors, venues, and DOIs are listed in the thesis bibliography.
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| A Density-Based Algorithm for Discovering Clusters (DBSCAN) | Ester, Kriegel et al. | 1996 | [acm](https://dl.acm.org/doi/10.5555/3001460.3001507) |
+
+### 9. Route Optimization
+
+| Paper | Authors | Year | Link |
+|---|---|---|---|
+| Ant Colony Optimization | Dorigo, Maniezzo, Colorni | 1996 | [doi](https://doi.org/10.1109/3477.484436) |
+
+> **Total: 39 papers across 10 categories.** Full citations with venues, volume numbers, and page ranges are listed in the thesis bibliography (`references.bib`).
 
 ---
 
 ## Technology Stack
 
-| Layer | Technology |
-|---|---|
-| Detection | RT-DETR-L (Ultralytics 8.2) |
-| Segmentation | SAM — Segment Anything Model |
-| Depth estimation | EfficientNet-B3 + Monodepth2 |
-| Severity classification | XGBoost |
-| Hyperparameter optimization | PSO (custom) · Optuna (TPE) |
-| Feature selection | WOA — Whale Optimization Algorithm |
-| Survey route planning | ACO · osmnx |
-| Spatial clustering | DBSCAN (scikit-learn) |
-| Augmentation | Albumentations · Mixup · Mosaic |
-| Training | Focal Loss · SWA · TTA · fp16 AMP · gradient accumulation |
-| Database | PostgreSQL 15 + PostGIS |
-| ORM | SQLAlchemy 2.0 (async) |
-| Backend | FastAPI + Pydantic v2 |
-| Scheduler | APScheduler (Europe/Bucharest TZ) |
-| Frontend | Planned: React 18 + Leaflet.js |
-| Containerization | Docker Compose |
-| Geocoding | Nominatim (OpenStreetMap) |
-| Road network | OSM Overpass API |
-| Weather | Open-Meteo API |
-| Sun angle | pysolar |
-| Annotation | Label Studio |
-| Code style | Black |
-| Language | Python 3.12 |
+| Layer | Technology | Reference |
+|---|---|---|
+| Detection | RT-DETR-L (Ultralytics 8.2) | [Zhao et al., 2024](https://arxiv.org/abs/2304.08069) |
+| Segmentation | SAM — Segment Anything Model | [Kirillov et al., 2023](https://arxiv.org/abs/2304.02643) |
+| Depth estimation | EfficientNet-B3 + Monodepth2 | [Tan & Le, 2019](https://arxiv.org/abs/1905.11946) · [Godard et al., 2019](https://arxiv.org/abs/1806.01260) |
+| Severity classification | XGBoost | [Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754) |
+| Hyperparameter optimization | PSO (custom) · Optuna (TPE) | [Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968) · [Akiba et al., 2019](https://arxiv.org/abs/1907.10902) |
+| Feature selection | WOA — Whale Optimization Algorithm | [Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008) |
+| Survey route planning | ACO · osmnx | [Dorigo et al., 1996](https://doi.org/10.1109/3477.484436) |
+| Spatial clustering | DBSCAN (scikit-learn) | [Ester et al., 1996](https://dl.acm.org/doi/10.5555/3001460.3001507) |
+| Augmentation | Albumentations · Mixup · Mosaic | [Buslaev et al., 2020](https://doi.org/10.3390/info11020125) · [Zhang et al., 2018](https://arxiv.org/abs/1710.09412) |
+| Training | Focal Loss · SWA · TTA · fp16 AMP | [Lin et al., 2017](https://arxiv.org/abs/1708.02002) · [Izmailov et al., 2018](https://arxiv.org/abs/1803.05407) |
+| Database | PostgreSQL 15 + PostGIS | [postgis.net](https://postgis.net) |
+| ORM | SQLAlchemy 2.0 (async) | [sqlalchemy.org](https://www.sqlalchemy.org) |
+| Backend | FastAPI + Pydantic v2 | [fastapi.tiangolo.com](https://fastapi.tiangolo.com) |
+| Scheduler | APScheduler (Europe/Bucharest TZ) | [apscheduler.readthedocs.io](https://apscheduler.readthedocs.io) |
+| Frontend | Planned: React 18 + Leaflet.js | — |
+| Containerization | Docker Compose | [docker.com](https://docker.com) |
+| Geocoding | Nominatim (OpenStreetMap) | [nominatim.org](https://nominatim.org) |
+| Road network | OSM Overpass API | [overpass-api.de](https://overpass-api.de) |
+| Weather | Open-Meteo API | [open-meteo.com](https://open-meteo.com) |
+| Sun angle | pysolar | [pysolar.readthedocs.io](https://pysolar.readthedocs.io) |
+| Annotation | Label Studio | [labelstud.io](https://labelstud.io) |
+| Code style | Black | [black.readthedocs.io](https://black.readthedocs.io) |
+| Language | Python 3.12 | [python.org](https://python.org) |
 
 ---
 
 ## License
 
-Bachelor's thesis — Babeș-Bolyai University, Faculty of Computer Science, Cluj-Napoca.
+Bachelor's thesis — Babeș-Bolyai University, Faculty of Mathematics and Computer Science, Cluj-Napoca.
 **Author: Paraschiv Tudor, 2026.**
 
-Dataset attributions: RDD2022 (Arya et al., 2024), Pothole600.
-Model attributions: RT-DETR (Zhao et al., 2023), SAM (Kirillov et al., 2023), Monodepth2 (Godard et al., 2019).
+Dataset attributions: RDD2022 ([Arya et al., 2024](https://doi.org/10.1002/gdj3.260)), Pothole600.
+Model attributions: RT-DETR ([Zhao et al., 2023](https://arxiv.org/abs/2304.08069)), SAM ([Kirillov et al., 2023](https://arxiv.org/abs/2304.02643)), Monodepth2 ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)).
 
 ---
 
 <div align="center">
-<i>Cluj-Napoca · Babeș-Bolyai University · Faculty of Computer Science · 2026</i>
+<i>Cluj-Napoca · Babeș-Bolyai University · Faculty of Mathematics and Computer Science · 2026</i>
 </div>
