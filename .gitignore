@@ -6,8 +6,20 @@ data/*
 !data/inspection_plots/
 !data/inspection_plots/**
 rtdetr-l.pt
+
+# 1. Ignore everything in runs
 runs/*
+
+# 2. Un-ignore the specific parent folder `detect` so git can look inside
+!runs/detect/
+
+# 3. Ignore everything inside `detect` (this prevents other folders like `train` from being tracked)
+runs/detect/*
+
+# 4. Un-ignore the specific folders you want inside `detect`
+!runs/detect/val/
+!runs/detect/val2/
+
 yolov8n.pt
 runs.zip
-!runs/detect/val
-!runs/detect/val2
+results.xlsx
