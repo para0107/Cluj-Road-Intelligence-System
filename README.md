@@ -10,7 +10,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL+PostGIS-15-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgis.net)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 
-**Bachelor's Thesis — Babeș-Bolyai University, Faculty of Mathematics and Computer Science**
+**Bachelor's Thesis — Babeș-Bolyai University, Faculty of Mathematics and Computer Science**  
 **Specialization: Artificial Intelligence · Author: Paraschiv Tudor · 2026**
 
 [GitHub Repository](https://github.com/para0107/Cluj-Road-Intelligence-System)
@@ -59,7 +59,7 @@ The system has four distinct layers:
 ┌─────────────────────────────────────────────────────────────────┐
 │  LAYER 4 — Frontend             (frontend/)                     │
 │  Interactive map · Severity filters · Priority repair list      │
-│  (currently placeholder — React dashboard planned)              │
+│  React 18 + Leaflet.js (in development)                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -156,7 +156,7 @@ The system has four distinct layers:
 | Pretrained weights | COCO 2017 (80 classes) — [Lin et al., 2014](https://arxiv.org/abs/1405.0312) |
 | Fine-tuned on | RDD2022 + Pothole600 (27,336 images) |
 | Output classes | 5 road damage types |
-| Training hardware | Kaggle P100 (16 GB) / T4×2 (production) |
+| Training hardware | Kaggle P100 (16 GB VRAM) |
 
 **Training dataset:**
 
@@ -166,23 +166,41 @@ The system has four distinct layers:
 | Pothole600 | 5,857 | 8,970 | Mixed | — |
 | **Total** | **27,336** | **42,883** | 6 | |
 
-**Training strategy:**
-- **Phase 1** (10 epochs): Frozen backbone — only decoder and detection head trained. LR = 1e-4.
-- **Phase 2** (50 epochs): Full fine-tune — backbone unfrozen, LR = 1e-5. Early stopping patience = 20.
-- **SWA** ([Izmailov et al., 2018](https://arxiv.org/abs/1803.05407)): Stochastic Weight Averaging over last 5 checkpoints → `swa.pt`.
+**Two training runs were conducted:**
 
-Checkpoint priority at evaluation and inference: `swa.pt` > `best.pt` > `rtdetr_l_rdd2022.pt`.
+1. **Baseline run** (default hyperparameters): 10 frozen + 56 fine-tune epochs across 4 Kaggle sessions. Final mAP50 = 0.272.
+2. **PSO-optimised run** (PSO best hyperparameters): 10 frozen + 50 fine-tune epochs. Final mAP50 = 0.468 (+72% over baseline).
+
+**Training strategy:**
+- **Phase 1** (10 epochs): Frozen backbone — only decoder and detection head trained
+- **Phase 2** (50–56 epochs): Full fine-tune — backbone unfrozen, LR × 0.1. Early stopping patience = 20
+- **SWA** ([Izmailov et al., 2018](https://arxiv.org/abs/1803.05407)): Stochastic Weight Averaging over last 5 checkpoints → `swa.pt`
+
+Checkpoint priority at inference: `swa.pt` > `best.pt` > `rtdetr_l_rdd2022.pt`
 
 **Training techniques:**
 - Focal Loss γ=2.0 built into RT-DETR for class imbalance ([Lin et al., 2017](https://arxiv.org/abs/1708.02002))
-- Mixup α=0.15 ([Zhang et al., 2018](https://arxiv.org/abs/1710.09412)) and Mosaic augmentation
+- Mixup α=0.205 ([Zhang et al., 2018](https://arxiv.org/abs/1710.09412)) and Mosaic augmentation (p=0.860)
 - Albumentations pipeline ([Buslaev et al., 2020](https://doi.org/10.3390/info11020125)): HSV jitter, rotation, scale, shear, horizontal flip
 - Test Time Augmentation at inference (flip + rotate, averaged)
 - fp16 AMP, gradient accumulation ×4 (effective batch = 16)
 - `cudnn.benchmark = True`, `deterministic = False`
 
 **Hyperparameter optimization — PSO** ([Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968)):
-Particle Swarm Optimization searches a 7-dimensional space (`lr0`, `weight_decay`, `warmup_epochs`, `mosaic`, `mixup`, `box`, `cls`) with 8 particles over 3 iterations on a Kaggle P100 GPU. Methodology follows Young et al. ([2015](https://doi.org/10.1145/3071178.3071208)) for PSO-based deep learning hyperparameter selection. Each particle is evaluated by training for 4 epochs and measuring validation mAP50-95. Output saved to `ml/optimization/pso_best.json` — `train.py` loads this automatically on the next run with no code changes needed.
+
+PSO searched a 7-dimensional space with 10 particles × 4 iterations × 2 eval epochs on a Kaggle P100 GPU (~9.3h). Methodology follows [Young et al. (2015)](https://doi.org/10.1145/3071178.3071208).
+
+| Parameter | Default | PSO Best | Δ |
+|---|---|---|---|
+| `lr0` | 1.0e-04 | 4.47e-04 | +347% |
+| `weight_decay` | 5.0e-04 | 5.27e-04 | +5.3% |
+| `warmup_epochs` | 3 | 1 | −67% |
+| `mosaic` | 1.0 | 0.860 | −14% |
+| `mixup` | 0.15 | 0.205 | +37% |
+| `box` | 7.5 | 7.685 | +2.5% |
+| `cls` | 0.5 | 0.487 | −2.6% |
+
+The most significant finding is the 4.5× increase in `lr0`, which allows the decoder to adapt faster during the frozen-backbone phase. Output saved to `ml/optimization/pso_best.json` — `train.py` loads this automatically.
 
 ### Segmentation — SAM
 
@@ -199,13 +217,13 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 
 ### Depth Estimation — EfficientNet-B3 + Monodepth2
 
-- **[EfficientNet-B3](https://arxiv.org/abs/1905.11946)** ([Tan & Le, 2019](https://arxiv.org/abs/1905.11946)): regression head on cropped detection region + sun angle → depth in cm. Trained on Cluj ground truth measurements + Blender synthetic renders. Tuned with [Optuna](https://arxiv.org/abs/1907.10902) (TPE sampler, 50 trials).
+- **[EfficientNet-B3](https://arxiv.org/abs/1905.11946)** ([Tan & Le, 2019](https://arxiv.org/abs/1905.11946)): regression head on cropped detection region + sun angle → depth in cm. To be trained on Cluj ground truth measurements + Blender synthetic renders. Tuned with [Optuna](https://arxiv.org/abs/1907.10902) (TPE sampler).
 - **[Monodepth2](https://arxiv.org/abs/1806.01260)** ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)): self-supervised dense depth map — depth at detection region extracted and fused with EfficientNet estimate.
 - **Fallback**: proxy depth from mask geometry when `depth_confidence < 0.4` or `lighting_condition = low_light`.
 
 ### Severity Classification — XGBoost + WOA
 
-**Whale Optimization Algorithm** ([Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008)) performs binary feature selection across the 16-feature ML vector before [XGBoost](https://arxiv.org/abs/1603.02754) ([Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754)) training. XGBoost extends gradient boosting ([Friedman, 2001](https://doi.org/10.1214/aos/1013203451)).
+**Whale Optimization Algorithm** ([Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008)) performs binary feature selection across the 16-feature ML vector before [XGBoost](https://arxiv.org/abs/1603.02754) ([Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754)) training.
 
 | Level | Description | Typical depth | Action |
 |---|---|---|---|
@@ -245,98 +263,86 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 
 ## Training Results
 
-### Phase 1 — Frozen Backbone (Epochs 1–10)
+### Baseline Run — Default Hyperparameters
 
-Backbone frozen (first 23 layers). Only decoder and detection head trained. Precision reports `nan` — expected during frozen phase as the model cannot yet produce reliable positive predictions.
+#### Phase 1 — Frozen Backbone (Epochs 1–10)
 
 | Epoch | Train GIoU ↓ | Train L1 ↓ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
 |---|---|---|---|---|---|
 | 1  | 1.418 | 1.033 | 0.201 | 0.00248 | 0.000631 |
-| 3  | 1.157 | 0.721 | 0.335 | 0.01300 | 0.003980 |
 | 5  | 1.028 | 0.609 | 0.447 | 0.02045 | 0.006900 |
-| 7  | 0.977 | 0.569 | 0.500 | 0.02349 | 0.008450 |
 | 10 | 0.942 | 0.546 | 0.533 | 0.02658 | 0.009920 |
 
-### Phase 2 — Full Fine-Tune (Epochs 11–56, four Kaggle sessions)
+#### Phase 2 — Full Fine-Tune (Epochs 11–56, 3 Kaggle sessions)
 
-All layers unfrozen. LR reduced to 1e-5 (10× lower than Phase 1). Three Kaggle sessions (Run 1: ep11–19, Run 2: ep20–38, Run 3: ep39–56) with LR warmup reset per session.
+| Epoch | Run | Train GIoU ↓ | Val GIoU ↓ | Precision ↑ | Recall ↑ | mAP50 ↑ |
+|---|---|---|---|---|---|---|
+| 11 | R1 | 1.376 | 1.204 | 0.271 | 0.084 | 0.00761 |
+| 19 | R1 | 0.721 | 0.763 | 0.169 | 0.255 | 0.11567 |
+| 38 | R2 | 0.601 | 0.643 | 0.260 | 0.348 | 0.21071 |
+| 56 | R3 | 0.568 | 0.610 | 0.315 | 0.377 | 0.27295 |
 
-| Epoch | Run | Train GIoU ↓ | Val GIoU ↓ | Precision ↑ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
-|---|---|---|---|---|---|---|---|
-| 11 | R1 | 1.376 | 1.204 | 0.271 | 0.084 | 0.00761 | 0.00206 |
-| 19 | R1 | 0.721 | 0.763 | 0.169 | 0.255 | 0.11567 | 0.04855 |
-| 20 | R2 | 1.047 | 0.756 | 0.136 | 0.217 | 0.07964 | 0.03370 |
-| 38 | R2 | 0.601 | 0.643 | 0.260 | 0.348 | 0.21071 | 0.09750 |
-| 39 | R3 | 0.947 | 0.655 | 0.194 | 0.288 | 0.13941 | 0.06414 |
-| 56 | R3 | 0.568 | 0.610 | 0.315 | 0.377 | 0.27295 | 0.12810 |
-
-**Key observations:**
-- GIoU and L1 losses decrease monotonically across all 56 Phase 2 epochs — no divergence, no overfitting
-- The sharp GIoU drop at local epoch 9 of each run (e.g., global ep16, ep35, ep47) is Ultralytics disabling mosaic augmentation at a fixed epoch threshold — structural, not a bug
-- LR warmup restart at the start of each Kaggle session causes a transient GIoU spike — cosmetic, weights carry over correctly
-
-### Final Evaluation — best.pt on Validation Set (5,857 images)
-
-Evaluated with `conf=0.001`, `iou=0.6` to compute full precision-recall curves.
+**Final validation results (best.pt, 5,857 images, conf=0.001, iou=0.6):**
 
 | Metric | Value |
 |---|---|
-| **mAP50** | **0.272** |
-| **mAP50-95** | **0.127** |
+| mAP50 | 0.272 |
+| mAP50-95 | 0.127 |
 | Precision | 0.313 |
 | Recall | 0.376 |
+| F1 peak | 0.33 at conf=0.311 |
 
 **Per-class AP@0.50:**
 
 | Class | Instances | AP@0.50 |
 |---|---|---|
-| pothole | 1,811 | **0.379** |
+| pothole | 1,811 | 0.379 |
 | longitudinal_crack | 3,890 | 0.265 |
 | alligator_crack | 1,553 | 0.226 |
 | transverse_crack | 1,769 | 0.218 |
-| patch_deterioration | — | 0.000 (no training data) |
-
-**Confusion matrix analysis:**
-- Cross-class confusion ≤ 0.04 between any damage pair — class discrimination is correctly learned
-- Dominant failure mode: background false negatives — 45% longitudinal, 52% transverse, 42% alligator, 29% pothole missed
-- Root cause: **domain gap** (RDD2022 from Japan/India/China/Norway/Czech/USA vs Romanian roads), **not label error**
-- Fix: Cluj-Napoca data collection + fine-tuning (planned)
-- At `conf=0.5` (operational threshold): precision ≈ 0.80+, recall ≈ 0.10–0.40 depending on class
-- Optimal threshold: `conf=0.311` (F1 peak = 0.33 across all classes)
+| patch_deterioration | — | 0.000 |
 
 ---
 
-## PSO Hyperparameter Optimization
+### PSO-Optimised Run — Best Hyperparameters
 
-PSO search running on Kaggle P100 GPU. Configuration: **8 particles × 3 iterations × 4 eval epochs** per trial (~24 total trials, ~5.6h).
+#### Phase 1 — Frozen Backbone (Epochs 1–10)
 
-Algorithm follows [Kennedy & Eberhart (1995)](https://doi.org/10.1109/ICNN.1995.488968) with inertia weight decay w: 0.9 → 0.4, c₁ = c₂ = 1.5. Applied to DNN hyperparameter selection following [Young et al. (2015)](https://doi.org/10.1145/3071178.3071208).
+| Epoch | Train GIoU ↓ | Train L1 ↓ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
+|---|---|---|---|---|---|
+| 1  | 0.942 | 0.491 | 0.217 | 0.0497 | 0.0189 |
+| 5  | 0.731 | 0.361 | 0.220 | 0.0660 | 0.0277 |
+| 10 | 0.695 | 0.335 | 0.238 | 0.0917 | 0.0408 |
 
-**Search space (7 dimensions):**
+Phase 1 comparison vs baseline: PSO achieves **26% lower GIoU** and **3.4× higher mAP50** in the same 10 frozen epochs, due to the 4.5× higher learning rate found by PSO.
 
-| Parameter | Range | Scale |
-|---|---|---|
-| `lr0` | [1e-5, 5e-4] | Log |
-| `weight_decay` | [1e-5, 1e-3] | Log |
-| `warmup_epochs` | [1, 5] | Linear |
-| `mosaic` | [0.5, 1.0] | Linear |
-| `mixup` | [0.0, 0.3] | Linear |
-| `box` | [5.0, 10.0] | Linear |
-| `cls` | [0.3, 1.0] | Linear |
+#### Phase 2 — Full Fine-Tune (Epochs 11–50, 3 Kaggle sessions)
 
-**Best hyperparameters found so far** (search in progress — `pso_checkpoint.json`):
+| Epoch | Session | Train GIoU ↓ | Val GIoU ↓ | Precision ↑ | Recall ↑ | mAP50 ↑ | mAP50-95 ↑ |
+|---|---|---|---|---|---|---|---|
+| 12 | S1 | 0.858 | 0.686 | 0.146 | 0.267 | 0.100 | 0.047 |
+| 22 | S1 | 0.712 | 0.589 | 0.269 | 0.346 | 0.230 | 0.114 |
+| 31 | S2 | 0.692 | 0.601 | 0.530 | 0.447 | 0.443 | 0.207 |
+| 40 | S3 | 0.678 | 0.614 | 0.547 | 0.459 | 0.463 | 0.214 |
+| 50 | S3 | 0.537 | 0.615 | 0.541 | 0.466 | 0.468 | 0.217 |
 
-| Parameter | Value |
-|---|---|
-| `lr0` | 1.953e-05 |
-| `weight_decay` | 2.872e-04 |
-| `warmup_epochs` | 2 |
-| `mosaic` | 0.690 |
-| `mixup` | 0.297 |
-| `box` | 8.200 |
-| `cls` | 0.690 |
+The GIoU drop at epoch 41 is the Ultralytics mosaic cutoff — structural, not a bug.
 
-These parameters will be used for the full retrain from clean COCO weights once the PSO search completes. `train.py` loads `pso_best.json` automatically.
+**Final validation results at epoch 50:**
+
+| Metric | Baseline | PSO Retrain | Δ |
+|---|---|---|---|
+| mAP50 | 0.272 | **0.468** | **+72%** |
+| mAP50-95 | 0.127 | **0.217** | **+71%** |
+| Precision | 0.313 | **0.541** | **+73%** |
+| Recall | 0.376 | **0.466** | **+24%** |
+
+**Key findings:**
+- mAP50 improvement is primarily precision-driven — the higher PSO learning rate produces more selective, better-localised predictions
+- Recall improvement (+24%) confirms overall detection quality improved, not just precision
+- Domain gap (international training data vs Romanian roads) remains the dominant limitation — background false-negative rates: longitudinal 59%, transverse 52%, alligator 52%, pothole 40%
+- Fix: Cluj-Napoca data collection + fine-tuning (planned)
+- Recommended operational confidence threshold: `conf=0.35` (balances precision and recall for municipal survey use)
 
 ---
 
@@ -353,7 +359,7 @@ PostgreSQL 15 + PostGIS runs in Docker. Two tables:
 
 **`survey_log`** — one row per pipeline run, tracking input footage, timestamps, detection counts, and processing status.
 
-**Priority score formula** (implemented in `Detection.compute_priority_score()`):
+**Priority score formula:**
 ```
 priority_score = severity_weight × road_weight × infra_weight × log(detection_count + 1)
 ```
@@ -371,24 +377,23 @@ Cluj-Road-Intelligence-System/
 │
 ├── ml/
 │   ├── detection/
-│   │   ├── train.py                ✅ RT-DETR-L two-phase training + SWA
+│   │   ├── train.py                ✅ RT-DETR-L two-phase training + SWA + PSO
 │   │   ├── evaluate.py             ✅ Per-class AP, mAP50-95, checkpoint comparison
 │   │   ├── monitor.py              ✅ Live training dashboard (reads results.csv)
 │   │   └── data_prep/
-│   │       ├── prep_rdd2022.py     ✅ RDD2022 format conversion
-│   │       ├── prep_pothole600.py  ✅ Pothole600 format conversion
+│   │       ├── prep_rdd2022.py     ✅ RDD2022 XML → COCO JSON conversion
+│   │       ├── prep_pothole600.py  ✅ Pothole600 → COCO JSON conversion
 │   │       ├── merge_datasets.py   ✅ Merge into unified train/val/test split
-│   │       └── coco_to_yolo.py     ✅ COCO JSON → YOLO .txt conversion
+│   │       └── coco_to_yolo.py     ✅ COCO JSON → YOLO .txt + dataset.yaml
 │   ├── optimization/
-│   │   ├── pso_hyperparams.py      ✅ PSO search (7-dim, 8 particles × 3 iters)
-│   │   ├── pso_best.json           🔄 Best params (search in progress)
-│   │   ├── pso_checkpoint.json     🔄 Resume state (search in progress)
-│   │   └── optuna_search.py        ⬜ EfficientNet-B3 + XGBoost tuning
+│   │   ├── pso_hyperparams.py      ✅ PSO search (7-dim, 10 particles × 4 iters)
+│   │   ├── pso_best.json           ✅ Best params found (completed)
+│   │   └── pso_checkpoint.json     ✅ Full swarm state (resume support)
 │   ├── segmentation/               ⬜ SAM inference module
 │   ├── depth/                      ⬜ EfficientNet-B3 depth training
 │   ├── severity/                   ⬜ XGBoost + WOA feature selection
 │   └── weights/
-│       ├── rtdetr_l_rdd2022.pt     🔄 PSO retrain pending
+│       ├── rtdetr_l_rdd2022.pt     ✅ PSO-optimised, mAP50=0.468 (ep50)
 │       ├── rtdetr_l_cluj.pt        ⬜ Future: fine-tuned on Cluj footage
 │       ├── depth_effnet.pt         ⬜ Future: EfficientNet-B3 depth model
 │       └── xgboost_severity.json   ⬜ Future: XGBoost classifier
@@ -405,7 +410,7 @@ Cluj-Road-Intelligence-System/
 │
 ├── backend/
 │   ├── main.py                     ✅ FastAPI app + CORS
-│   ├── database.py                 ✅ SQLAlchemy engine, get_db(), get_db_session()
+│   ├── database.py                 ✅ SQLAlchemy async engine, get_db()
 │   ├── models.py                   ✅ Detection + SurveyLog ORM models
 │   ├── schemas.py                  ✅ Pydantic v2 schemas
 │   └── routes/
@@ -415,17 +420,18 @@ Cluj-Road-Intelligence-System/
 │       └── priority.py             ✅ GET /priority-list
 │
 ├── scheduler/
-│   └── daily_job.py                ✅ APScheduler cron — fires pipeline nightly
-│                                      (Europe/Bucharest TZ)
+│   └── daily_job.py                ✅ APScheduler cron — 02:00 Europe/Bucharest
 │
 ├── scripts/
 │   ├── download_datasets.py        ✅ Download RDD2022 + Pothole600
 │   ├── inspect_datasets.py         ✅ Distribution analysis and plots
 │   ├── verify_merge.py             ✅ Verify merged dataset integrity
+│   ├── setup_db.py                 ✅ Create tables, enums, GIST index
+│   ├── generate_pso_comparison_plot.py  ✅ PSO vs baseline training curves
 │   └── run_survey.py               ✅ Manual one-shot pipeline trigger
 │
 ├── frontend/
-│   └── (placeholder)               ⬜ React dashboard planned
+│   └── (in development)            🔄 React 18 + Leaflet.js dashboard
 │
 ├── data/
 │   ├── raw/
@@ -442,18 +448,10 @@ Cluj-Road-Intelligence-System/
 │       └── test.json               ✅ 5,857 images
 │
 ├── docker-compose.yml              ✅ PostgreSQL 15 + PostGIS + pgAdmin
-└── requirements.txt                ✅
+└── requirements.txt                ✅ Pillow==9.5.0 (Ultralytics 8.2.18 compat)
 ```
 
 **Legend:** ✅ Done · 🔄 In progress · ⬜ Planned
-
----
-
-## Current Training Status
-
-Phase 1 (10 frozen epochs) complete. Phase 2 (56 epochs across 3 Kaggle sessions) complete. **PSO hyperparameter search currently running on Kaggle P100.**
-
-Next step: PSO completes → full retrain from `rtdetr-l.pt` with `pso_best.json` params → evaluate `best.pt` vs `swa.pt` → pick final `rtdetr_l_rdd2022.pt`.
 
 ---
 
@@ -479,11 +477,8 @@ python scripts/verify_merge.py
 ### Training
 
 ```bash
-# (Optional) PSO hyperparameter search — ~5.6h on P100
-python ml/optimization/pso_hyperparams.py --particles 8 --iterations 3 --eval_epochs 4
-
-# Resume PSO if session was interrupted
-python ml/optimization/pso_hyperparams.py --resume
+# (Optional) PSO hyperparameter search — ~9.3h on P100
+python ml/optimization/pso_hyperparams.py --particles 10 --iterations 4 --eval_epochs 2
 
 # Train RT-DETR-L (auto-loads pso_best.json if present)
 python ml/detection/train.py
@@ -494,15 +489,14 @@ python ml/detection/train.py --resume runs/detect/rtdetr_road/weights/last.pt
 python ml/detection/train.py --device 0,1 --workers 4
 
 # Monitor in a second terminal
-python ml/detection/monitor.py                    # auto-refreshes every 30s
-python ml/detection/monitor.py --save             # save PNG
+python ml/detection/monitor.py
+python ml/detection/monitor.py --save --interval 60
 ```
 
 ### Evaluation
 
 ```bash
 python ml/detection/evaluate.py
-python ml/detection/evaluate.py --weights path/to/best.pt
 python ml/detection/evaluate.py --full            # val + test + TTA + comparison
 python ml/detection/evaluate.py --compare         # best.pt vs swa.pt vs last.pt
 ```
@@ -526,7 +520,6 @@ uvicorn backend.main:app --reload
 ```bash
 # Manual one-shot survey run
 python scripts/run_survey.py
-python scripts/run_survey.py --date 2024-06-15
 
 # Nightly scheduler (blocks — fires at 02:00 Europe/Bucharest)
 python scheduler/daily_job.py
@@ -554,53 +547,58 @@ python scheduler/daily_job.py
 - [x] Dataset download, conversion, merge, and verification scripts
 - [x] Data distribution analysis and plots
 - [x] RT-DETR-L training pipeline (two-phase + SWA + PSO integration)
-- [x] PSO hyperparameter optimization script (`pso_hyperparams.py`)
-- [x] Evaluation script with per-class AP and checkpoint comparison (`evaluate.py`)
-- [x] Live training monitor (`monitor.py`)
+- [x] PSO hyperparameter search (10 particles × 4 iterations, P100)
+- [x] Evaluation script with per-class AP and checkpoint comparison
+- [x] Live training monitor
 - [x] Docker Compose — PostgreSQL 15 + PostGIS + pgAdmin
 - [x] Database schema — `detections` + `survey_log` tables, enums, GIST index
 - [x] SQLAlchemy ORM models + Pydantic v2 schemas
 - [x] FastAPI backend — all routes (tested on Swagger)
-- [x] APScheduler daily job (`scheduler/daily_job.py`)
-- [x] Phase 1 training — 10 frozen backbone epochs (mAP50: 0.00248 → 0.02658)
-- [x] Phase 2 training — 46 full fine-tune epochs across 3 Kaggle sessions (mAP50: 0.273)
-- [x] Final evaluation on validation set (mAP50=0.272, mAP50-95=0.127)
+- [x] APScheduler daily job
+- [x] Baseline training — 56 epochs (mAP50=0.272, mAP50-95=0.127)
+- [x] PSO-optimised training — 50 epochs (mAP50=0.468, mAP50-95=0.217, **+72% over baseline**)
+- [x] Confusion matrix analysis and domain gap diagnosis
 
 **In progress:**
-- [ ] PSO hyperparameter search (8 particles × 3 iterations × 4 eval epochs on P100)
+- [ ] React frontend — map, sidebar, detail panel (React 18 + Leaflet.js)
 
 **Planned:**
-- [ ] Full retrain with PSO-optimized hyperparameters
-- [ ] Final evaluate + pick best checkpoint (`best.pt` vs `swa.pt`)
 - [ ] Inference pipeline — all 8 modules + orchestrator
-- [ ] React dashboard — map, sidebar, detail panel
-- [ ] ACO survey route generation (`aco_route.py`)
 - [ ] Cluj-Napoca data collection drive (dashcam + GPS + depth measurements)
 - [ ] Label Studio annotation of Cluj footage
 - [ ] EfficientNet-B3 depth model training on Cluj ground truth
 - [ ] XGBoost + WOA severity classifier training
 - [ ] RT-DETR fine-tuning on Cluj footage → `rtdetr_l_cluj.pt`
 - [ ] Optuna tuning for EfficientNet-B3 + XGBoost
+- [ ] ACO survey route generation (`aco_route.py`)
 - [ ] End-to-end integration test on real Cluj footage
 - [ ] City Hall pilot demonstration
 
 ---
 
+## Known Issues & Compatibility Notes
+
+- **Pillow version:** `requirements.txt` pins `Pillow==9.5.0`. Ultralytics 8.2.18 uses `PIL._util.is_directory` which was removed in Pillow 10.0. Do not upgrade Pillow without upgrading Ultralytics first.
+- **Kaggle resume:** When resuming training after a session that reached its `--epochs` target, patch the checkpoint with `ckpt['epochs'] = current_epoch + extra_epochs` before calling `train.py --resume`. See `scripts/patch_checkpoint.py` (planned).
+- **numpy/pandas incompatibility:** If `pandas` fails to import after training in the same kernel, reinstall with `pip install --force-reinstall numpy==1.26.4 pandas==2.2.2`.
+
+---
+
 ## Papers
 
-All 39 papers organized across 10 categories. Category 0 contains foundational baselines.
+All 39 papers organized across 10 categories.
 
 ### 0. Foundational / Baseline Papers
 
 | Paper | Authors | Year | Link |
 |---|---|---|---|
-| ImageNet Classification with Deep CNNs (AlexNet) | Krizhevsky, Sutskever, Hinton | 2012 | [dl.acm.org](https://dl.acm.org/doi/10.1145/3065386) |
+| ImageNet Classification with Deep CNNs (AlexNet) | Krizhevsky, Sutskever, Hinton | 2012 | [acm](https://dl.acm.org/doi/10.1145/3065386) |
 | Deep Residual Learning for Image Recognition (ResNet) | He, Zhang, Ren, Sun | 2016 | [arxiv](https://arxiv.org/abs/1512.03385) |
 | Attention Is All You Need (Transformer) | Vaswani et al. | 2017 | [arxiv](https://arxiv.org/abs/1706.03762) |
 | Adam: A Method for Stochastic Optimization | Kingma, Ba | 2015 | [arxiv](https://arxiv.org/abs/1412.6980) |
 | Decoupled Weight Decay Regularization (AdamW) | Loshchilov, Hutter | 2019 | [arxiv](https://arxiv.org/abs/1711.05101) |
 | Batch Normalization | Ioffe, Szegedy | 2015 | [arxiv](https://arxiv.org/abs/1502.03167) |
-| Dropout | Srivastava et al. | 2014 | [jmlr.org](https://jmlr.org/papers/v15/srivastava14a.html) |
+| Dropout | Srivastava et al. | 2014 | [jmlr](https://jmlr.org/papers/v15/srivastava14a.html) |
 | Microsoft COCO | Lin et al. | 2014 | [arxiv](https://arxiv.org/abs/1405.0312) |
 | PASCAL VOC Challenge | Everingham et al. | 2010 | [doi](https://doi.org/10.1007/s11263-009-0275-4) |
 | Gradient Boosting Machine | Friedman | 2001 | [doi](https://doi.org/10.1214/aos/1013203451) |
@@ -623,7 +621,7 @@ All 39 papers organized across 10 categories. Category 0 contains foundational b
 |---|---|---|---|
 | RDD2022: A Multi-National Image Dataset | Arya et al. | 2024 | [doi](https://doi.org/10.1002/gdj3.260) |
 | Road Damage Detection Challenge Series (RDDC) | Tanaka et al. | 2025 | [Nature MI](https://www.nature.com/articles/s42256-025) |
-| Computer Vision for Road Imaging and Pothole Detection (Review) | Fan et al. | 2022 | [doi](https://doi.org/10.1093/tse/tdac026) |
+| Computer Vision for Road Imaging and Pothole Detection | Fan et al. | 2022 | [doi](https://doi.org/10.1093/tse/tdac026) |
 | Road Damage Detection Using Deep Neural Networks | Maeda et al. | 2018 | [doi](https://doi.org/10.1111/mice.12387) |
 | Robust Video-Based Pothole Detection and Area Estimation | Bui et al. | 2021 | [doi](https://doi.org/10.1109/ACCESS.2021.3088384) |
 | When SAM Meets Inventorying of Roadway Assets | Zhang, Huang, Qin | 2024 | [doi](https://doi.org/10.1016/j.ijtst.2024.10.005) |
@@ -679,7 +677,7 @@ All 39 papers organized across 10 categories. Category 0 contains foundational b
 |---|---|---|---|
 | Ant Colony Optimization | Dorigo, Maniezzo, Colorni | 1996 | [doi](https://doi.org/10.1109/3477.484436) |
 
-> **Total: 39 papers across 10 categories.** Full citations with venues, volume numbers, and page ranges are listed in the thesis bibliography (`references.bib`).
+> **Total: 39 papers across 10 categories.** Full citations in `references.bib`.
 
 ---
 
@@ -687,28 +685,27 @@ All 39 papers organized across 10 categories. Category 0 contains foundational b
 
 | Layer | Technology | Reference |
 |---|---|---|
-| Detection | RT-DETR-L (Ultralytics 8.2) | [Zhao et al., 2024](https://arxiv.org/abs/2304.08069) |
+| Detection | RT-DETR-L (Ultralytics 8.2.18) | [Zhao et al., 2024](https://arxiv.org/abs/2304.08069) |
 | Segmentation | SAM — Segment Anything Model | [Kirillov et al., 2023](https://arxiv.org/abs/2304.02643) |
 | Depth estimation | EfficientNet-B3 + Monodepth2 | [Tan & Le, 2019](https://arxiv.org/abs/1905.11946) · [Godard et al., 2019](https://arxiv.org/abs/1806.01260) |
 | Severity classification | XGBoost | [Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754) |
-| Hyperparameter optimization | PSO (custom) · Optuna (TPE) | [Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968) · [Akiba et al., 2019](https://arxiv.org/abs/1907.10902) |
+| Hyperparameter optimization | PSO (custom) · Optuna (TPE) | [Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968) |
 | Feature selection | WOA — Whale Optimization Algorithm | [Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008) |
 | Survey route planning | ACO · osmnx | [Dorigo et al., 1996](https://doi.org/10.1109/3477.484436) |
 | Spatial clustering | DBSCAN (scikit-learn) | [Ester et al., 1996](https://dl.acm.org/doi/10.5555/3001460.3001507) |
-| Augmentation | Albumentations · Mixup · Mosaic | [Buslaev et al., 2020](https://doi.org/10.3390/info11020125) · [Zhang et al., 2018](https://arxiv.org/abs/1710.09412) |
+| Augmentation | Albumentations · Mixup · Mosaic | [Buslaev et al., 2020](https://doi.org/10.3390/info11020125) |
 | Training | Focal Loss · SWA · TTA · fp16 AMP | [Lin et al., 2017](https://arxiv.org/abs/1708.02002) · [Izmailov et al., 2018](https://arxiv.org/abs/1803.05407) |
 | Database | PostgreSQL 15 + PostGIS | [postgis.net](https://postgis.net) |
 | ORM | SQLAlchemy 2.0 (async) | [sqlalchemy.org](https://www.sqlalchemy.org) |
 | Backend | FastAPI + Pydantic v2 | [fastapi.tiangolo.com](https://fastapi.tiangolo.com) |
 | Scheduler | APScheduler (Europe/Bucharest TZ) | [apscheduler.readthedocs.io](https://apscheduler.readthedocs.io) |
-| Frontend | Planned: React 18 + Leaflet.js | — |
+| Frontend | React 18 + Leaflet.js (in development) | — |
 | Containerization | Docker Compose | [docker.com](https://docker.com) |
 | Geocoding | Nominatim (OpenStreetMap) | [nominatim.org](https://nominatim.org) |
 | Road network | OSM Overpass API | [overpass-api.de](https://overpass-api.de) |
 | Weather | Open-Meteo API | [open-meteo.com](https://open-meteo.com) |
 | Sun angle | pysolar | [pysolar.readthedocs.io](https://pysolar.readthedocs.io) |
 | Annotation | Label Studio | [labelstud.io](https://labelstud.io) |
-| Code style | Black | [black.readthedocs.io](https://black.readthedocs.io) |
 | Language | Python 3.12 | [python.org](https://python.org) |
 
 ---
@@ -719,7 +716,7 @@ Bachelor's thesis — Babeș-Bolyai University, Faculty of Mathematics and Compu
 **Author: Paraschiv Tudor, 2026.**
 
 Dataset attributions: RDD2022 ([Arya et al., 2024](https://doi.org/10.1002/gdj3.260)), Pothole600.
-Model attributions: RT-DETR ([Zhao et al., 2023](https://arxiv.org/abs/2304.08069)), SAM ([Kirillov et al., 2023](https://arxiv.org/abs/2304.02643)), Monodepth2 ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)).
+Model attributions: RT-DETR ([Zhao et al., 2024](https://arxiv.org/abs/2304.08069)), SAM ([Kirillov et al., 2023](https://arxiv.org/abs/2304.02643)), Monodepth2 ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)).
 
 ---
 
