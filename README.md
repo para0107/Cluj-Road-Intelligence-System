@@ -156,7 +156,7 @@ The system has four distinct layers:
 | Pretrained weights | COCO 2017 (80 classes) — [Lin et al., 2014](https://arxiv.org/abs/1405.0312) |
 | Fine-tuned on | RDD2022 + Pothole600 (27,336 images) |
 | Output classes | 5 road damage types |
-| Training hardware | Kaggle P100 (16 GB VRAM) |
+| Training hardware | Kaggle P100 (16 GB VRAM) · Evaluation on T4 |
 
 **Training dataset:**
 
@@ -174,15 +174,17 @@ The system has four distinct layers:
 **Training strategy:**
 - **Phase 1** (10 epochs): Frozen backbone — only decoder and detection head trained
 - **Phase 2** (50–56 epochs): Full fine-tune — backbone unfrozen, LR × 0.1. Early stopping patience = 20
-- **SWA** ([Izmailov et al., 2018](https://arxiv.org/abs/1803.05407)): Stochastic Weight Averaging over last 5 checkpoints → `swa.pt`
+- **SWA** ([Izmailov et al., 2018](https://arxiv.org/abs/1803.05407)): planned but not applied in the final training run — `swa.pt` was not produced
 
-Checkpoint priority at inference: `swa.pt` > `best.pt` > `rtdetr_l_rdd2022.pt`
+Checkpoint priority at inference: `best.pt` > `last.pt` > `rtdetr_l_rdd2022.pt`
+
+> **Selected checkpoint:** `best.pt` — confirmed winner by formal evaluation (see [Final Evaluation Results](#final-evaluation-results)).
 
 **Training techniques:**
 - Focal Loss γ=2.0 built into RT-DETR for class imbalance ([Lin et al., 2017](https://arxiv.org/abs/1708.02002))
 - Mixup α=0.205 ([Zhang et al., 2018](https://arxiv.org/abs/1710.09412)) and Mosaic augmentation (p=0.860)
 - Albumentations pipeline ([Buslaev et al., 2020](https://doi.org/10.3390/info11020125)): HSV jitter, rotation, scale, shear, horizontal flip
-- Test Time Augmentation at inference (flip + rotate, averaged)
+- Test Time Augmentation evaluated but provided **zero mAP gain** on this dataset (val TTA = val standard, both mAP50=0.465) — TTA is **disabled** in the inference pipeline
 - fp16 AMP, gradient accumulation ×4 (effective batch = 16)
 - `cudnn.benchmark = True`, `deterministic = False`
 
@@ -340,9 +342,117 @@ The GIoU drop at epoch 41 is the Ultralytics mosaic cutoff — structural, not a
 **Key findings:**
 - mAP50 improvement is primarily precision-driven — the higher PSO learning rate produces more selective, better-localised predictions
 - Recall improvement (+24%) confirms overall detection quality improved, not just precision
-- Domain gap (international training data vs Romanian roads) remains the dominant limitation — background false-negative rates: longitudinal 59%, transverse 52%, alligator 52%, pothole 40%
+- Domain gap (international training data vs Romanian roads) remains the dominant limitation — background false-negative rates from confusion matrix: longitudinal 45.5%, transverse 52.4%, alligator 43.5%, pothole 29.3%
+- Cross-class confusion is very low (≤4%) — the model distinguishes crack types reliably; the primary failure is damage vs clean road surface, not class-to-class mistakes
 - Fix: Cluj-Napoca data collection + fine-tuning (planned)
 - Recommended operational confidence threshold: `conf=0.35` (balances precision and recall for municipal survey use)
+
+---
+
+## Final Evaluation Results
+
+Formal evaluation of the PSO-optimised RT-DETR-L checkpoint (`best.pt`) conducted on 21 April 2026 using `ml/detection/evaluate.py` on a Kaggle Tesla T4 GPU. All results use `conf=0.001` (standard for mAP computation per the COCO protocol, Lin et al., 2014) and `iou=0.6`. Per-class AP values follow the PASCAL VOC AP protocol (Everingham et al., 2010).
+
+Evaluation outputs are stored in `ml/evaluation/` — JSON files for each run, log files for the full execution trace.
+
+### Checkpoint Selection — best.pt vs last.pt
+
+Both checkpoints were evaluated on the val set (5,758 images) to select the operational checkpoint for the inference pipeline.
+
+| Checkpoint | mAP50 | mAP50-95 | Precision | Recall | F1 |
+|---|---|---|---|---|---|
+| `best.pt` | **0.4650** | **0.2151** | **0.5450** | 0.4639 | **0.5012** |
+| `last.pt` | 0.4651 | 0.2148 | 0.5413 | **0.4655** | 0.5005 |
+
+**Decision: `best.pt` selected.** The margin is negligible (0.0003 mAP50-95) but `best.pt` has marginally higher mAP50-95 and precision, making it the tiebreaker. `best.pt` is the checkpoint Ultralytics saves at the epoch with the highest validation mAP50 during training — in this run, epoch 40 of Phase 2.
+
+### Val Set — Final Numbers (best.pt)
+
+| Metric | Value |
+|---|---|
+| mAP50 | **0.4650** |
+| mAP50-95 | **0.2151** |
+| Precision | **0.5450** |
+| Recall | **0.4639** |
+| F1 | **0.5012** |
+
+### Test Set — Held-Out Generalisation (best.pt)
+
+The test set (5,758 images, completely held out during training and hyperparameter search) gives the honest generalisation estimate reported in the thesis.
+
+| Metric | Val | Test | Val→Test drop |
+|---|---|---|---|
+| mAP50 | 0.4650 | **0.4583** | −0.007 |
+| mAP50-95 | 0.2151 | **0.2110** | −0.004 |
+| Precision | 0.5450 | **0.5367** | −0.008 |
+| Recall | 0.4639 | **0.4633** | −0.001 |
+| F1 | 0.5012 | **0.4973** | −0.004 |
+
+The val→test drop is consistently small across all metrics, confirming the model generalises well within the RDD2022 distribution. There is no evidence of overfitting to the validation set.
+
+### Per-Class AP@50 (best.pt, test set)
+
+Per-class AP is AP at IoU=0.50 as stored in `results.box.ap` by Ultralytics 8.2.x, following the PASCAL VOC AP protocol (Everingham et al., 2010).
+
+| Class | Val AP@50 | Test AP@50 | Instances (val) | Notes |
+|---|---|---|---|---|
+| `pothole` | 0.3231 | **0.3130** | 1,533 | Best performing — visually distinctive shape and depth |
+| `alligator_crack` | 0.2363 | **0.2312** | 781 | Second best — unique interconnected texture pattern |
+| `longitudinal_crack` | 0.1739 | **0.1742** | 1,956 | Thin linear features, high domain gap sensitivity |
+| `transverse_crack` | 0.1270 | **0.1257** | 868 | Lowest trained class — short perpendicular cracks hardest to localise |
+| `patch_deterioration` | 0.0000 | **0.0000** | 0 | Expected — no training samples in RDD2022+Pothole600 |
+
+The AP ranking is consistent between val and test sets and aligns with the visual distinctiveness of each damage type. Potholes are the easiest to detect due to their bowl-shaped 3D structure; transverse cracks are the hardest due to their short length and similarity to road joints at low resolution.
+
+### Baseline vs PSO — Full Comparison (val set)
+
+| Metric | Baseline | PSO best.pt | Δ (absolute) | Δ (relative) |
+|---|---|---|---|---|
+| mAP50 | 0.272 | **0.465** | +0.193 | **+71%** |
+| mAP50-95 | 0.127 | **0.215** | +0.088 | **+69%** |
+| Precision | 0.313 | **0.545** | +0.232 | **+74%** |
+| Recall | 0.376 | **0.464** | +0.088 | **+23%** |
+| F1 | — | **0.501** | — | — |
+
+### TTA Evaluation
+
+Test Time Augmentation (flip + rotate, predictions averaged) was evaluated on the val set.
+
+| | mAP50 | mAP50-95 | Precision | Recall |
+|---|---|---|---|---|
+| Standard | 0.4650 | 0.2151 | 0.5450 | 0.4639 |
+| TTA | 0.4650 | 0.2151 | 0.5450 | 0.4639 |
+| Δ | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+
+TTA produced **zero improvement** on this dataset. The `augment=True` flag in Ultralytics 8.2.x for RT-DETR appears to have no effect in this configuration. TTA is **disabled** in the CRIS inference pipeline — it adds ~3× inference time with no accuracy benefit.
+
+### Confusion Matrix Analysis
+
+The confusion matrix from the PSO-optimised run reveals the dominant failure pattern. Cross-class confusion between damage types is very low (≤4% in all cases). The primary failure is **background false negatives** — damage instances the model fails to detect and classifies as clean road surface:
+
+| Class | Correctly detected | Missed as background | Background FN rate |
+|---|---|---|---|
+| `longitudinal_crack` | 2,093 | 1,747 | **45.5%** |
+| `transverse_crack` | 828 | 913 | **52.4%** |
+| `alligator_crack` | 830 | 640 | **43.5%** |
+| `pothole` | 1,276 | 528 | **29.3%** |
+
+This pattern is consistent with a **domain gap** rather than a model capacity or label quality issue. RDD2022 contains images from Japan, India, China, Norway, Czech Republic, and the USA — road surface textures, crack morphology, and lighting conditions differ substantially from Romanian urban roads. The model has learned to distinguish damage types from each other reliably, but its damage-vs-background boundary is calibrated to non-Romanian road surfaces.
+
+**Implication for CRIS:** Cluj-Napoca fine-tuning data collection is the highest-priority next step for improving recall. Lowering the operational confidence threshold to `conf=0.35` partially compensates by recovering some missed detections at the cost of more false positives, which is the correct trade-off for a municipal survey system where missing damage is more costly than flagging clean road.
+
+### Evaluation Artefacts
+
+All evaluation outputs are committed to `ml/evaluation/`:
+
+| File | Contents |
+|---|---|
+| `checkpoint_comparison_{ts}.json` | best.pt vs last.pt scores and full metrics |
+| `eval_val_{ts}.json` | Val set metrics — mAP50, mAP50-95, P, R, F1, per-class AP50 |
+| `eval_val_tta_{ts}.json` | Val set + TTA metrics |
+| `eval_test_{ts}.json` | Test set metrics — primary thesis result |
+| `eval_full_{ts}.log` | Full execution log with all intermediate output |
+| `eval_compare_{ts}.log` | Checkpoint comparison execution log |
 
 ---
 
@@ -389,14 +499,30 @@ Cluj-Road-Intelligence-System/
 │   │   ├── pso_hyperparams.py      ✅ PSO search (7-dim, 10 particles × 4 iters)
 │   │   ├── pso_best.json           ✅ Best params found (completed)
 │   │   └── pso_checkpoint.json     ✅ Full swarm state (resume support)
+│   ├── evaluation/
+│   │   ├── checkpoint_comparison_*.json  ✅ best.pt vs last.pt — best.pt selected
+│   │   ├── eval_val_*.json         ✅ Val set: mAP50=0.465, mAP50-95=0.215
+│   │   ├── eval_val_tta_*.json     ✅ Val+TTA: identical to standard (TTA disabled)
+│   │   ├── eval_test_*.json        ✅ Test set: mAP50=0.458, mAP50-95=0.211
+│   │   └── eval_*.log              ✅ Full evaluation execution logs
 │   ├── segmentation/               ⬜ SAM inference module
 │   ├── depth/                      ⬜ EfficientNet-B3 depth training
 │   ├── severity/                   ⬜ XGBoost + WOA feature selection
 │   └── weights/
-│       ├── rtdetr_l_rdd2022.pt     ✅ PSO-optimised, mAP50=0.468 (ep50)
+│       ├── rtdetr_l_rdd2022.pt     ✅ PSO-optimised, mAP50=0.465/test=0.458 (best.pt)
 │       ├── rtdetr_l_cluj.pt        ⬜ Future: fine-tuned on Cluj footage
 │       ├── depth_effnet.pt         ⬜ Future: EfficientNet-B3 depth model
 │       └── xgboost_severity.json   ⬜ Future: XGBoost classifier
+│
+├── runs/
+│   └── detect/
+│       └── rtdetr_road/
+│           └── final_fine_tune/    ✅ Consolidated best run outputs
+│               ├── best.pt         ✅ Selected checkpoint (mAP50-95=0.2151 val)
+│               ├── last.pt         ✅ Final epoch checkpoint
+│               ├── confusion_matrix.png  ✅ Confusion matrix (PSO run)
+│               ├── results.xlsx    ✅ Merged training history (all 60 epochs)
+│               └── *.png           ✅ F1/P/R/PR curves
 │
 ├── pipeline/
 │   ├── preprocessor.py             ⬜ Frame extraction + GPS sync + lighting
@@ -496,10 +622,23 @@ python ml/detection/monitor.py --save --interval 60
 ### Evaluation
 
 ```bash
+# Evaluate best.pt on val set (auto-detected from final_fine_tune/)
 python ml/detection/evaluate.py
-python ml/detection/evaluate.py --full            # val + test + TTA + comparison
-python ml/detection/evaluate.py --compare         # best.pt vs swa.pt vs last.pt
+
+# Evaluate on test set (held-out — use for thesis numbers)
+python ml/detection/evaluate.py --split test
+
+# Compare best.pt vs last.pt
+python ml/detection/evaluate.py --compare
+
+# Full report: val + val-TTA + test + checkpoint comparison (~60 min on T4)
+python ml/detection/evaluate.py --full
+
+# Merge all results.csv files into one xlsx (run locally after downloading Kaggle outputs)
+python ml/detection/evaluate.py --merge-results
 ```
+
+> **Kaggle note:** `evaluate.py` requires `ultralytics==8.2.18` and `Pillow==9.5.0`. On newer Kaggle environments (PyTorch 2.6+), patch `PIL._util.is_directory` before importing ultralytics — see `evaluate-best-model.ipynb` in the repo root.
 
 ### Database
 
@@ -546,9 +685,9 @@ python scheduler/daily_job.py
 **Done:**
 - [x] Dataset download, conversion, merge, and verification scripts
 - [x] Data distribution analysis and plots
-- [x] RT-DETR-L training pipeline (two-phase + SWA + PSO integration)
+- [x] RT-DETR-L training pipeline (two-phase + PSO integration)
 - [x] PSO hyperparameter search (10 particles × 4 iterations, P100)
-- [x] Evaluation script with per-class AP and checkpoint comparison
+- [x] Evaluation script with per-class AP, checkpoint comparison, results merging
 - [x] Live training monitor
 - [x] Docker Compose — PostgreSQL 15 + PostGIS + pgAdmin
 - [x] Database schema — `detections` + `survey_log` tables, enums, GIST index
@@ -556,8 +695,11 @@ python scheduler/daily_job.py
 - [x] FastAPI backend — all routes (tested on Swagger)
 - [x] APScheduler daily job
 - [x] Baseline training — 56 epochs (mAP50=0.272, mAP50-95=0.127)
-- [x] PSO-optimised training — 50 epochs (mAP50=0.468, mAP50-95=0.217, **+72% over baseline**)
+- [x] PSO-optimised training — 50 epochs (mAP50=0.468 training, **+72% over baseline**)
 - [x] Confusion matrix analysis and domain gap diagnosis
+- [x] **Formal evaluation completed** — val mAP50=0.465, test mAP50=0.458, test mAP50-95=0.211
+- [x] **Checkpoint selected** — `best.pt` confirmed winner over `last.pt` (mAP50-95=0.2151 vs 0.2148)
+- [x] **TTA evaluated** — zero gain on this dataset, disabled in inference pipeline
 
 **In progress:**
 - [ ] React frontend — map, sidebar, detail panel (React 18 + Leaflet.js)
@@ -579,8 +721,10 @@ python scheduler/daily_job.py
 ## Known Issues & Compatibility Notes
 
 - **Pillow version:** `requirements.txt` pins `Pillow==9.5.0`. Ultralytics 8.2.18 uses `PIL._util.is_directory` which was removed in Pillow 10.0. Do not upgrade Pillow without upgrading Ultralytics first.
+- **Kaggle PIL patch (newer environments):** Kaggle environments with PyTorch 2.6+ have a system-level Pillow 12.x that cannot be overridden by pip. Inject the missing symbol at runtime before any ultralytics import: `import PIL._util, os; PIL._util.is_directory = os.path.isdir`. See `evaluate-best-model.ipynb`.
 - **Kaggle resume:** When resuming training after a session that reached its `--epochs` target, patch the checkpoint with `ckpt['epochs'] = current_epoch + extra_epochs` before calling `train.py --resume`. See `scripts/patch_checkpoint.py` (planned).
 - **numpy/pandas incompatibility:** If `pandas` fails to import after training in the same kernel, reinstall with `pip install --force-reinstall numpy==1.26.4 pandas==2.2.2`.
+- **TTA no-op:** `augment=True` in Ultralytics 8.2.x `model.val()` for RT-DETR produces identical results to standard inference. TTA is disabled in the pipeline.
 
 ---
 
