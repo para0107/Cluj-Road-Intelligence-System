@@ -424,7 +424,7 @@ Test Time Augmentation (flip + rotate, predictions averaged) was evaluated on th
 | TTA | 0.4650 | 0.2151 | 0.5450 | 0.4639 |
 | Δ | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
 
-TTA produced **zero improvement** on this dataset. The `augment=True` flag in Ultralytics 8.2.x for RT-DETR appears to have no effect in this configuration. TTA is **disabled** in the CRIS inference pipeline — it adds ~3× inference time with no accuracy benefit.
+TTA produced **zero improvement** on this dataset. The `augment=True` flag in Ultralytics 8.2.x for RT-DETR appears to have no effect in this configuration. TTA is **disabled** in the project inference pipeline — it adds ~3× inference time with no accuracy benefit.
 
 ### Confusion Matrix Analysis
 
@@ -439,7 +439,7 @@ The confusion matrix from the PSO-optimised run reveals the dominant failure pat
 
 This pattern is consistent with a **domain gap** rather than a model capacity or label quality issue. RDD2022 contains images from Japan, India, China, Norway, Czech Republic, and the USA — road surface textures, crack morphology, and lighting conditions differ substantially from Romanian urban roads. The model has learned to distinguish damage types from each other reliably, but its damage-vs-background boundary is calibrated to non-Romanian road surfaces.
 
-**Implication for CRIS:** Cluj-Napoca fine-tuning data collection is the highest-priority next step for improving recall. Lowering the operational confidence threshold to `conf=0.35` partially compensates by recovering some missed detections at the cost of more false positives, which is the correct trade-off for a municipal survey system where missing damage is more costly than flagging clean road.
+**Implication for project:** Cluj-Napoca fine-tuning data collection is the highest-priority next step for improving recall. Lowering the operational confidence threshold to `conf=0.35` partially compensates by recovering some missed detections at the cost of more false positives, which is the correct trade-off for a municipal survey system where missing damage is more costly than flagging clean road.
 
 ### Evaluation Artefacts
 
