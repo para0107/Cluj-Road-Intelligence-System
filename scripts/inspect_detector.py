@@ -525,6 +525,147 @@ def plot_spatial_heatmap(
 # Main
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Export: individual annotated frames for manual validation
+# ---------------------------------------------------------------------------
+
+def export_annotated_frames(
+    frames: List[Dict],
+    out_dir: str,
+    scale: float = 1.5,
+    frames_dir_override: Optional[str] = None,
+) -> None:
+    """
+    Write one annotated JPEG per detection frame to out_dir.
+
+    Each file is named:
+        frame_{frame_index:06d}_t{timestamp_s:.1f}s_{n_det}det.jpg
+
+    Bounding boxes are drawn with class label, confidence, and a thick
+    border (scaled up for readability). A text legend at the top of each
+    image lists every detection with its class and confidence.
+
+    Args:
+        frames:               Full detection manifest.
+        out_dir:              Directory to write annotated JPEGs into.
+        scale:                Resize factor applied before drawing labels.
+                              1.5 makes the 640x360 source ~960x540,
+                              which is large enough to read bbox labels.
+        frames_dir_override:  Override base directory for frame images.
+    """
+    import cv2 as _cv2
+
+    detected = [fr for fr in frames if fr.get("n_detections", 0) > 0]
+    if not detected:
+        logger.warning("No detection frames — nothing to export")
+        return
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    box_thickness   = max(2, int(2 * scale))
+    font_scale      = 0.55 * scale
+    font_thickness  = max(1, int(scale))
+    label_pad       = int(6 * scale)
+
+    n_written = 0
+    for fr in detected:
+        frame_path = fr["frame_path"]
+        if frames_dir_override and not Path(frame_path).exists():
+            frame_path = str(Path(frames_dir_override) / Path(frame_path).name)
+
+        if not Path(frame_path).exists():
+            logger.warning("Frame file not found: %s", frame_path)
+            continue
+
+        img = _cv2.imread(frame_path)
+        if img is None:
+            continue
+
+        # Upscale for readability
+        if scale != 1.0:
+            h, w = img.shape[:2]
+            img = _cv2.resize(img, (int(w * scale), int(h * scale)),
+                              interpolation=_cv2.INTER_LINEAR)
+
+        h_img, w_img = img.shape[:2]
+        sx, sy = scale, scale  # coordinate scale factors
+
+        # Draw each bounding box
+        for b in fr.get("boxes", []):
+            x1 = int(b["x1"] * sx)
+            y1 = int(b["y1"] * sy)
+            x2 = int(b["x2"] * sx)
+            y2 = int(b["y2"] * sy)
+
+            cls  = b["class_name"]
+            conf = b["confidence"]
+            hex_c = CLASS_COLORS.get(cls, DEFAULT_COLOR).lstrip("#")
+            r, g, bv = int(hex_c[0:2],16), int(hex_c[2:4],16), int(hex_c[4:6],16)
+            color_bgr = (bv, g, r)
+
+            # Bounding box
+            _cv2.rectangle(img, (x1, y1), (x2, y2), color_bgr, box_thickness)
+
+            # Label background + text
+            label = f"{cls.replace('_',' ')} {conf:.2f}"
+            (tw, th), baseline = _cv2.getTextSize(
+                label, _cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+            ty = max(y1 - label_pad, th + label_pad)
+            _cv2.rectangle(img,
+                           (x1, ty - th - label_pad),
+                           (x1 + tw + label_pad, ty + baseline),
+                           color_bgr, -1)
+            _cv2.putText(img, label,
+                         (x1 + label_pad // 2, ty - baseline),
+                         _cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                         (255, 255, 255), font_thickness, _cv2.LINE_AA)
+
+        # Top-left info banner
+        n_det    = fr["n_detections"]
+        t_str    = f"t={fr['timestamp_s']:.1f}s"
+        idx_str  = f"#{fr['frame_index']}"
+        light    = fr.get("lighting", "?")
+        banner   = f"  {idx_str}  {t_str}  {light}  | {n_det} detection(s)"
+        bh       = int(30 * scale)
+        _cv2.rectangle(img, (0, 0), (w_img, bh), (20, 20, 20), -1)
+        _cv2.putText(img, banner, (int(8*scale), int(20*scale)),
+                     _cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale,
+                     (220, 220, 220), font_thickness, _cv2.LINE_AA)
+
+        # Detection list on right side
+        for i, b in enumerate(fr.get("boxes", [])):
+            cls  = b["class_name"]
+            conf = b["confidence"]
+            hex_c = CLASS_COLORS.get(cls, DEFAULT_COLOR).lstrip("#")
+            r, g, bv = int(hex_c[0:2],16), int(hex_c[2:4],16), int(hex_c[4:6],16)
+            line = f"[{i+1}] {cls.replace('_',' ')} {conf:.2f}"
+            ly = int((bh + 5) * scale) + i * int(22 * scale)
+            _cv2.putText(img, line, (int(8*scale), ly + int(20*scale)),
+                         _cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale,
+                         (bv, g, r), font_thickness, _cv2.LINE_AA)
+
+        # Build filename
+        det_names = "_".join(sorted(set(
+            b["class_name"].replace("longitudinal_crack","lng")
+                           .replace("transverse_crack","trs")
+                           .replace("alligator_crack","alg")
+                           .replace("patch_deterioration","pat")
+            for b in fr["boxes"]
+        )))
+        fname = (f"frame_{fr['frame_index']:06d}"
+                 f"_t{fr['timestamp_s']:.0f}s"
+                 f"_{n_det}det"
+                 f"_{det_names}.jpg")
+        out_path = out / fname
+        _cv2.imwrite(str(out_path), img, [_cv2.IMWRITE_JPEG_QUALITY, 92])
+        n_written += 1
+
+    logger.info("Exported %d annotated frames → %s", n_written, out)
+    print(f"  Annotated frames: {n_written} files in {out.resolve()}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Inspect Stage 2 (detector) output — print summary and save plots."
@@ -537,6 +678,12 @@ def main() -> None:
                         help="Override frame image directory if paths have changed")
     parser.add_argument("--grid-n", type=int, default=20,
                         help="Max frames to show in detection grid (default 20)")
+    parser.add_argument("--export-all", action="store_true",
+                        help="Export every detection frame as annotated JPEG to "
+                             "output-dir/annotated_frames/ for manual validation.")
+    parser.add_argument("--export-scale", type=float, default=1.5,
+                        help="Upscale factor for annotated frames (default 1.5). "
+                             "Higher = larger image, easier to read labels.")
     parser.add_argument("--no-display", action="store_true",
                         help="Save only, do not call plt.show()")
     args = parser.parse_args()
@@ -569,6 +716,14 @@ def main() -> None:
         n=args.grid_n, frames_dir_override=args.frames_dir,
     )
     plot_spatial_heatmap(frames,         str(out_dir / "spatial_heatmap.png"))
+
+    if args.export_all:
+        export_annotated_frames(
+            frames,
+            str(out_dir / "annotated_frames"),
+            scale=args.export_scale,
+            frames_dir_override=args.frames_dir,
+        )
 
     if not args.no_display:
         plt.show()
