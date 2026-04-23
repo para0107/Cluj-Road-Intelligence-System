@@ -102,7 +102,7 @@ def compute_summary(records: List[Dict]) -> Dict:
     summary = {
         "total_frames":      n,
         "duration_s":        max(t_vals) if t_vals else 0,
-        "fps_effective":     n / max(t_vals, 1e-9) if t_vals else 0,
+        "fps_effective":     n / max(max(t_vals), 1e-9) if t_vals else 0,
         "lighting_counts":   lighting_counts,
         "gps_coverage_pct":  100 * len(lats) / n if n else 0,
         "sun_elev_min":      min(sun_elevs) if sun_elevs else None,
