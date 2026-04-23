@@ -3,8 +3,8 @@
 Documentation
 .env
 data
-data/inspection_plots
 rtdetr-l.pt
+ml/weights
 
 # 1. Ignore everything in runs
 runs/*

@@ -98,12 +98,21 @@ class PreprocessorConfig:
     shadow_gradient_threshold:
         Sobel gradient magnitude threshold for shadow detection score.
         Passed through to the FrameResult; not used by the preprocessor itself.
+
+    min_mean_brightness:
+        Minimum mean pixel brightness (0–255) a frame must have to be kept.
+        Frames below this threshold are dropped before saving — they are title
+        cards, black intros/outros, or tunnel blackouts that would produce zero
+        detections and pollute the manifest with useless entries.
+        Default 15.0 catches near-black frames while keeping legitimately dark
+        (but usable) low-light frames. Set to 0 to disable filtering entirely.
     """
     fps: float = 2.0
     focal_length_px: float = 1400.0          # CONFIGURE when camera is known
     min_frame_interval_s: float = 0.1
     lighting_thresholds: Tuple[float, float] = (100.0, 50.0)  # (daylight, overcast)
     shadow_gradient_threshold: float = 30.0
+    min_mean_brightness: float = 15.0        # drop near-black frames (title cards etc.)
     output_format: str = "jpg"               # "jpg" or "png"
     output_quality: int = 92                 # JPEG quality (0-100), ignored for PNG
 
@@ -565,7 +574,17 @@ class Preprocessor:
                 logger.warning("Frame %d (t=%.2f s): read failed — skipping", idx, t_s)
                 continue
 
-            # 5a. GPS sync
+            # 5a. Brightness filter — drop near-black frames (intros, tunnels, title cards)
+            if self.cfg.min_mean_brightness > 0:
+                mean_brightness = float(np.mean(
+                    cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                ))
+                if mean_brightness < self.cfg.min_mean_brightness:
+                    logger.debug(
+                        "Frame %d (t=%.2f s): dropped — mean brightness %.1f < %.1f",
+                        idx, t_s, mean_brightness, self.cfg.min_mean_brightness,
+                    )
+                    continue
             wall_time = video_start_time.replace(
                 tzinfo=video_start_time.tzinfo
             )
@@ -633,9 +652,12 @@ class Preprocessor:
         n_overcast  = sum(1 for r in results if r.lighting == "overcast")
         n_low       = sum(1 for r in results if r.lighting == "low_light")
         n_no_gps    = sum(1 for r in results if r.latitude is None)
+        n_dropped   = len(target_timestamps) - len(results)
 
         logger.info("=== Preprocessing complete ===")
         logger.info("  Total frames extracted : %d", len(results))
+        logger.info("  Frames dropped (dark)  : %d  (min_brightness=%.0f)",
+                    n_dropped, self.cfg.min_mean_brightness)
         logger.info("  Lighting breakdown     : daylight=%d overcast=%d low_light=%d",
                     n_daylight, n_overcast, n_low)
         logger.info("  Frames without GPS     : %d", n_no_gps)
@@ -737,6 +759,11 @@ def main() -> None:
         "--focal-length", type=float, default=1400.0,
         help="Camera focal length in pixels (default 1400; update when camera is known)"
     )
+    parser.add_argument(
+        "--min-brightness", type=float, default=15.0,
+        help="Drop frames with mean brightness below this value (default 15). "
+             "Set 0 to disable. Removes black title cards and tunnel blackouts."
+    )
     parser.add_argument("--verbose", action="store_true", help="DEBUG-level logging")
     args = parser.parse_args()
 
@@ -745,6 +772,7 @@ def main() -> None:
     cfg = PreprocessorConfig(
         fps=args.fps,
         focal_length_px=args.focal_length,
+        min_mean_brightness=args.min_brightness,
     )
     pp = Preprocessor(cfg)
 
