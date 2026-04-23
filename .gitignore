@@ -2,9 +2,8 @@
 .idea
 Documentation
 .env
-data/*
-!data/inspection_plots/
-!data/inspection_plots/**
+data
+data/inspection_plots
 rtdetr-l.pt
 
 # 1. Ignore everything in runs
