@@ -1,0 +1,67 @@
+2026-04-23 23:56:49 | INFO     | ==========================================================
+2026-04-23 23:56:49 | INFO     | CRIS — Tokyo Dashcam Validation Pipeline
+2026-04-23 23:56:49 | INFO     |   RT-DETR-L | Zhao et al. (2024) arxiv:2304.08069
+2026-04-23 23:56:49 | INFO     |   No GPS — coordinates will be null
+2026-04-23 23:56:49 | INFO     | ==========================================================
+2026-04-23 23:56:49 | INFO     | Video found: Tokyo Drive 4K ｜ Takanawa - Azabudai Hills - Shinjuku [v7JZ9DSSRsY].mp4 (130.3 MB)
+2026-04-23 23:56:49 | INFO     | Using model weights: ml\weights\rtdetr_l_rdd2022.pt
+2026-04-23 23:56:49 | INFO     | Loading RT-DETR-L model...
+2026-04-23 23:56:51 | INFO     | Model loaded.
+2026-04-23 23:56:51 | INFO     | ----------------------------------------
+2026-04-23 23:56:51 | INFO     | STAGE 1 — Frame extraction (0.5s interval)
+2026-04-23 23:56:51 | INFO     | Video: Tokyo Drive 4K ｜ Takanawa - Azabudai Hills - Shinjuku [v7JZ9DSSRsY].mp4
+2026-04-23 23:56:51 | INFO     |   FPS: 29.97 | Total frames: 49025 | Duration: 1635.8s
+2026-04-23 23:56:51 | INFO     |   Extracting 1 frame every 0.5s (step=15 frames)
+2026-04-23 23:56:53 | INFO     |   Extracted 200 frames (t=99.6s) | 1.9s elapsed
+2026-04-23 23:56:54 | INFO     |   Extracted 400 frames (t=199.7s) | 3.8s elapsed
+2026-04-23 23:56:56 | INFO     |   Extracted 600 frames (t=299.8s) | 5.5s elapsed
+2026-04-23 23:56:58 | INFO     |   Extracted 800 frames (t=399.9s) | 7.3s elapsed
+2026-04-23 23:57:00 | INFO     |   Extracted 1000 frames (t=500.0s) | 9.1s elapsed
+2026-04-23 23:57:02 | INFO     |   Extracted 1200 frames (t=600.1s) | 10.9s elapsed
+2026-04-23 23:57:03 | INFO     |   Extracted 1400 frames (t=700.2s) | 12.7s elapsed
+2026-04-23 23:57:07 | INFO     |   Extracted 1600 frames (t=800.3s) | 15.9s elapsed
+2026-04-23 23:57:08 | INFO     |   Extracted 1800 frames (t=900.4s) | 17.7s elapsed
+2026-04-23 23:57:11 | INFO     |   Extracted 2000 frames (t=1000.5s) | 20.3s elapsed
+2026-04-23 23:57:12 | INFO     |   Extracted 2200 frames (t=1100.6s) | 21.8s elapsed
+2026-04-23 23:57:14 | INFO     |   Extracted 2400 frames (t=1200.7s) | 23.2s elapsed
+2026-04-23 23:57:15 | INFO     |   Extracted 2600 frames (t=1300.8s) | 24.7s elapsed
+2026-04-23 23:57:17 | INFO     |   Extracted 2800 frames (t=1400.9s) | 26.1s elapsed
+2026-04-23 23:57:18 | INFO     |   Extracted 3000 frames (t=1501.0s) | 27.6s elapsed
+2026-04-23 23:57:20 | INFO     |   Extracted 3200 frames (t=1601.1s) | 29.1s elapsed
+2026-04-23 23:57:20 | INFO     | Stage 1 complete: 3269 frames extracted from 49025 video frames in 29.5s
+2026-04-23 23:57:20 | INFO     | ----------------------------------------
+2026-04-23 23:57:20 | INFO     | STAGE 2 — RT-DETR inference
+2026-04-23 23:57:20 | INFO     | Stage 2 — RT-DETR inference on 3269 frames
+2026-04-23 23:57:20 | INFO     |   Confidence threshold: 0.35 | IOU: 0.45 | Image size: 640
+2026-04-23 23:59:23 | INFO     |   [200/3269] boxes_so_far=76 | 1.6 frames/s | 122.6s elapsed
+2026-04-24 00:01:19 | INFO     |   [400/3269] boxes_so_far=86 | 1.7 frames/s | 238.9s elapsed
+2026-04-24 00:02:17 | INFO     |   Checkpoint saved → data\processed\detections\tokyo\detections.json (500 frames)
+2026-04-24 00:03:14 | INFO     |   [600/3269] boxes_so_far=104 | 1.7 frames/s | 353.4s elapsed
+2026-04-24 00:05:11 | INFO     |   [800/3269] boxes_so_far=111 | 1.7 frames/s | 470.4s elapsed
+2026-04-24 00:07:08 | INFO     |   [1000/3269] boxes_so_far=119 | 1.7 frames/s | 587.7s elapsed
+2026-04-24 00:07:08 | INFO     |   Checkpoint saved → data\processed\detections\tokyo\detections.json (1000 frames)
+2026-04-24 00:09:05 | INFO     |   [1200/3269] boxes_so_far=141 | 1.7 frames/s | 704.3s elapsed
+2026-04-24 00:11:00 | INFO     |   [1400/3269] boxes_so_far=159 | 1.7 frames/s | 819.6s elapsed
+2026-04-24 00:11:59 | INFO     |   Checkpoint saved → data\processed\detections\tokyo\detections.json (1500 frames)
+2026-04-24 00:12:59 | INFO     |   [1600/3269] boxes_so_far=167 | 1.7 frames/s | 938.8s elapsed
+2026-04-24 00:14:58 | INFO     |   [1800/3269] boxes_so_far=174 | 1.7 frames/s | 1057.3s elapsed
+2026-04-24 00:16:56 | INFO     |   [2000/3269] boxes_so_far=192 | 1.7 frames/s | 1175.9s elapsed
+2026-04-24 00:16:56 | INFO     |   Checkpoint saved → data\processed\detections\tokyo\detections.json (2000 frames)
+2026-04-24 00:18:57 | INFO     |   [2200/3269] boxes_so_far=208 | 1.7 frames/s | 1296.7s elapsed
+2026-04-24 00:20:56 | INFO     |   [2400/3269] boxes_so_far=214 | 1.7 frames/s | 1415.8s elapsed
+2026-04-24 00:21:56 | INFO     |   Checkpoint saved → data\processed\detections\tokyo\detections.json (2500 frames)
+2026-04-24 00:22:57 | INFO     |   [2600/3269] boxes_so_far=222 | 1.7 frames/s | 1536.8s elapsed
+2026-04-24 00:24:56 | INFO     |   [2800/3269] boxes_so_far=230 | 1.7 frames/s | 1655.9s elapsed
+2026-04-24 00:26:55 | INFO     |   [3000/3269] boxes_so_far=232 | 1.7 frames/s | 1774.7s elapsed
+2026-04-24 00:26:55 | INFO     |   Checkpoint saved → data\processed\detections\tokyo\detections.json (3000 frames)
+2026-04-24 00:28:56 | INFO     |   [3200/3269] boxes_so_far=235 | 1.7 frames/s | 1896.2s elapsed
+2026-04-24 00:29:37 | INFO     | Stage 2 complete in 1937.1s
+2026-04-24 00:29:37 | INFO     |   Frames processed      : 3269
+2026-04-24 00:29:37 | INFO     |   Frames with detections: 196 (6.0%)
+2026-04-24 00:29:37 | INFO     |   Total bounding boxes  : 237
+2026-04-24 00:29:37 | INFO     |   Class breakdown:
+2026-04-24 00:29:37 | INFO     |     pothole                       : 226
+2026-04-24 00:29:37 | INFO     |     longitudinal_crack            : 10
+2026-04-24 00:29:37 | INFO     |     transverse_crack              : 1
+2026-04-24 00:29:37 | INFO     | Summary printed. Detections saved to data\processed\detections\tokyo\detections.json
+2026-04-24 00:29:37 | INFO     | Pipeline complete. Run inspect_detector_tokyo.py to generate annotated frames.

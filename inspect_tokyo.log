@@ -1,0 +1,11 @@
+2026-04-24 00:32:38 | INFO     | Loaded: data\processed\detections\tokyo\detections.json  (3269 frames, 237 total boxes)
+2026-04-24 00:32:38 | INFO     | Saved: data\processed\inspection\tokyo\summary.txt
+2026-04-24 00:32:38 | INFO     | Saved: data\processed\inspection\tokyo\class_distribution.png
+2026-04-24 00:32:38 | INFO     | Saved: data\processed\inspection\tokyo\confidence_distribution.png
+2026-04-24 00:32:38 | INFO     | Saved: data\processed\inspection\tokyo\detection_rate_timeline.png
+2026-04-24 00:32:39 | INFO     | Saved: data\processed\inspection\tokyo\spatial_heatmap.png
+2026-04-24 00:32:40 | INFO     | Saved: data\processed\inspection\tokyo\detection_grid.png
+2026-04-24 00:32:40 | INFO     | Saved: data\processed\inspection\tokyo\all_frames_grid.png  (3269 frames, 41×80 cells)
+2026-04-24 00:32:40 | INFO     | Exporting annotated frames (scale=1.5)...
+2026-04-24 00:32:42 | INFO     | Exported 196 annotated frames → data\processed\inspection\tokyo\annotated_frames
+2026-04-24 00:32:42 | INFO     | Inspection complete.

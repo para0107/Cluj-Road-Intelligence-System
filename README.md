@@ -5,7 +5,7 @@
 <div align="center">
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.2-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.6-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL+PostGIS-15-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgis.net)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
@@ -42,8 +42,8 @@ The system has four distinct layers:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  LAYER 1 — ML Training          (ml/)                           │
-│  RT-DETR-L · SAM · EfficientNet-B3 · Monodepth2 · XGBoost      │
-│  PSO hyperparameter search · dataset preparation                │
+│  RT-DETR-L · SAM · Monodepth2 · PSO hyperparameter search       │
+│  dataset preparation · N-RDD2024 fine-tune (in progress)        │
 └─────────────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────────────┐
 │  LAYER 2 — Inference Pipeline   (pipeline/ · scripts/)          │
@@ -84,8 +84,8 @@ The system has four distinct layers:
 ┌──────────────────────────▼──────────────────────────────────────┐
 │  STAGE 2 — Detector                  [detector.py]              │
 │  • RT-DETR-L inference on each frame (640×640)                  │
-│  • Test Time Augmentation: flip + rotate, averaged predictions  │
-│  • Confidence threshold: discard detections < 0.5              │
+│  • Confidence threshold: discard detections < 0.35             │
+│  • TTA evaluated — zero gain on this dataset, disabled          │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
@@ -98,16 +98,15 @@ The system has four distinct layers:
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
 │  STAGE 4 — Depth Estimator           [depth_estimator.py]       │
-│  • EfficientNet-B3 regression → depth in cm                     │
-│  • Monodepth2 dense depth map → depth at detection region       │
-│  • Both estimates fused for final depth_estimate                │
+│  • Monodepth2 dense depth map → relative depth per frame        │
+│  • Depth used as ordinal severity proxy (normalised per-frame)  │
 │  • Fallback: mask geometry proxy when depth_confidence < 0.4   │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
 │  STAGE 5 — Severity Classifier       [severity_classifier.py]   │
-│  • XGBoost on WOA-selected feature subset → S1–S5               │
-│  • Rule-based fallback (depth + area) until Cluj data ready     │
+│  • Rule-based classifier: normalised depth + SAM surface area   │
+│  • Outputs S1–S5 severity levels deterministically              │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
@@ -217,27 +216,31 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 
 > **Architectural note:** These 4 features cannot be derived from bounding boxes alone — SAM is a required pipeline component, not optional enrichment. Validated by [Zhang et al., 2024](https://doi.org/10.1016/j.ijtst.2024.10.005).
 
-### Depth Estimation — EfficientNet-B3 + Monodepth2
+### Depth Estimation — Monodepth2
 
-- **[EfficientNet-B3](https://arxiv.org/abs/1905.11946)** ([Tan & Le, 2019](https://arxiv.org/abs/1905.11946)): regression head on cropped detection region + sun angle → depth in cm. To be trained on Cluj ground truth measurements + Blender synthetic renders. Tuned with [Optuna](https://arxiv.org/abs/1907.10902) (TPE sampler).
-- **[Monodepth2](https://arxiv.org/abs/1806.01260)** ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)): self-supervised dense depth map — depth at detection region extracted and fused with EfficientNet estimate.
-- **Fallback**: proxy depth from mask geometry when `depth_confidence < 0.4` or `lighting_condition = low_light`.
+**[Monodepth2](https://arxiv.org/abs/1806.01260)** ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)) is a self-supervised monocular depth estimation model pretrained on KITTI outdoor driving data. It produces a dense relative depth map per frame. The depth value at each detection region centre is extracted and normalised per-frame, serving as an ordinal severity proxy: higher relative depth corresponds to more structurally significant damage.
 
-### Severity Classification — XGBoost + WOA
+When depth confidence falls below 0.4 or the frame is classified as `low_light`, a proxy depth derived from SAM mask geometry is used instead.
 
-**Whale Optimization Algorithm** ([Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008)) performs binary feature selection across the 16-feature ML vector before [XGBoost](https://arxiv.org/abs/1603.02754) ([Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754)) training.
+> **Design note:** EfficientNet-B3 absolute depth regression was evaluated as a design candidate but determined to be outside the feasible scope of the project. It requires purpose-collected, instrumentally measured per-pothole depth ground truth — a dedicated field data collection programme constituting an independent research effort. Monodepth2 relative depth is sufficient for comparative severity assessment ([Hach & Sankowski, 2015](https://www.researchgate.net/publication/285578304)).
 
-| Level | Description | Typical depth | Action |
+### Severity Classification — Rule-based
+
+Severity is assigned using a rule-based classifier operating on two objectively derived signals: the normalised Monodepth2 relative depth at the detection region, and the SAM-derived surface area. This approach is transparent and deterministic, producing consistent outputs without dependence on labelled training data.
+
+| Level | Depth proxy (normalised) | Surface area | Action |
 |---|---|---|---|
-| S1 | Superficial | < 1 cm | Monitor |
-| S2 | Minor | 1–3 cm | Schedule maintenance |
-| S3 | Moderate | 3–6 cm | Priority repair |
-| S4 | Severe | 6–10 cm | Urgent repair |
-| S5 | Critical | > 10 cm | Emergency closure |
+| S1 | < 0.1 | Any | Monitor |
+| S2 | 0.1–0.3 | < 500 cm² | Schedule maintenance |
+| S3 | 0.3–0.6 | 500–2000 cm² | Priority repair |
+| S4 | 0.6–0.8 | > 2000 cm² | Urgent repair |
+| S5 | > 0.8 | Any | Emergency closure |
 
-### Route Optimization — ACO
+> **Design note:** XGBoost + WOA severity classification was evaluated as a design candidate but determined to be outside the feasible scope of the project. Training XGBoost requires labelled instances with verified per-detection severity measurements, which require a sustained, supervised field programme. Both components are cited in the related work but are not part of the operational pipeline.
 
-**Ant Colony Optimization** ([Dorigo et al., 1996](https://doi.org/10.1109/3477.484436)) computes the optimal pre-survey driving route through the Cluj-Napoca OSM road network (loaded via `osmnx`), minimizing total distance while covering all primary and secondary roads.
+### Route Optimization — ACO (deferred)
+
+**Ant Colony Optimization** ([Dorigo et al., 1996](https://doi.org/10.1109/3477.484436)) was evaluated for pre-survey route optimisation over the Cluj-Napoca OSM road network (via `osmnx`). Its implementation is deferred as part of planned future pipeline work, as it depends on a complete operational deployment context beyond the current project scope.
 
 ---
 
@@ -249,7 +252,8 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 | 1 | `transverse_crack` | Cracks perpendicular to road direction |
 | 2 | `alligator_crack` | Interconnected crack networks (fatigue damage) |
 | 3 | `pothole` | Bowl-shaped depressions with measurable depth |
-| 4 | `patch_deterioration` | Degraded previously-repaired sections |
+
+> **Note:** `patch_deterioration` was originally planned as a fifth class but has zero training instances in both RDD2022 and Pothole600, and achieves AP = 0.000 across all evaluations. It has been removed from the active class set.
 
 **Class distribution in training set:**
 
@@ -259,7 +263,6 @@ Used **zero-shot** — no fine-tuning required. RT-DETR bounding boxes serve as 
 | pothole | 8,770 | 20.5% |
 | transverse_crack | 8,386 | 19.6% |
 | alligator_crack | 7,526 | 17.5% |
-| patch_deterioration | 0 | Reserved for Cluj data |
 
 ---
 
@@ -344,7 +347,7 @@ The GIoU drop at epoch 41 is the Ultralytics mosaic cutoff — structural, not a
 - Recall improvement (+24%) confirms overall detection quality improved, not just precision
 - Domain gap (international training data vs Romanian roads) remains the dominant limitation — background false-negative rates from confusion matrix: longitudinal 45.5%, transverse 52.4%, alligator 43.5%, pothole 29.3%
 - Cross-class confusion is very low (≤4%) — the model distinguishes crack types reliably; the primary failure is damage vs clean road surface, not class-to-class mistakes
-- Fix: Cluj-Napoca data collection + fine-tuning (planned)
+- The domain gap is addressed through the N-RDD2024 fine-tuning experiment (see below)
 - Recommended operational confidence threshold: `conf=0.35` (balances precision and recall for municipal survey use)
 
 ---
@@ -439,7 +442,7 @@ The confusion matrix from the PSO-optimised run reveals the dominant failure pat
 
 This pattern is consistent with a **domain gap** rather than a model capacity or label quality issue. RDD2022 contains images from Japan, India, China, Norway, Czech Republic, and the USA — road surface textures, crack morphology, and lighting conditions differ substantially from Romanian urban roads. The model has learned to distinguish damage types from each other reliably, but its damage-vs-background boundary is calibrated to non-Romanian road surfaces.
 
-**Implication for project:** Cluj-Napoca fine-tuning data collection is the highest-priority next step for improving recall. Lowering the operational confidence threshold to `conf=0.35` partially compensates by recovering some missed detections at the cost of more false positives, which is the correct trade-off for a municipal survey system where missing damage is more costly than flagging clean road.
+**Implication for project:** Domain gap is the primary performance ceiling. The N-RDD2024 fine-tuning experiment (see below) addresses this using a publicly available ten-class re-annotation of RDD2022. Lowering the operational confidence threshold to `conf=0.35` partially compensates for per-frame misses; DBSCAN deduplication across multiple survey passes further accumulates detection evidence.
 
 ### Evaluation Artefacts
 
@@ -453,6 +456,108 @@ All evaluation outputs are committed to `ml/evaluation/`:
 | `eval_test_{ts}.json` | Test set metrics — primary thesis result |
 | `eval_full_{ts}.log` | Full execution log with all intermediate output |
 | `eval_compare_{ts}.log` | Checkpoint comparison execution log |
+
+---
+
+## Manual Validation on Real-World Dashcam Footage
+
+The PSO-optimised checkpoint (`best.pt`, mAP50 = 0.458 test) was applied to two publicly available dashcam videos to assess operational behaviour outside the RDD2022 distribution. Frames were extracted at 2 fps; inference used `conf=0.35`, `iou=0.6`.
+
+| | Cluj-Napoca video | Tokyo video |
+|---|---|---|
+| Source | "Another one simple dashcam test (in Romania, Cluj-Napoca)" [`uBQtQbdbv4E`](https://www.youtube.com/watch?v=uBQtQbdbv4E) | "Tokyo Drive 4K \| Takanawa – Azabudai Hills – Shinjuku" [`v7JZ9DSSRsY`](https://www.youtube.com/watch?v=v7JZ9DSSRsY) |
+| Duration | ~34 min | ~27 min |
+| Frames processed | 4,107 | 3,269 |
+| Frames with detections | 165 (4.0%) | 196 (6.0%) |
+| Total bounding boxes | 191 | 237 |
+| Confidence range | 0.351–0.637 (mean 0.421) | 0.350–0.779 (mean 0.450) |
+
+**Class distribution in detections:**
+
+| Class | Cluj | Tokyo |
+|---|---|---|
+| `pothole` | 137 (71.7%) | 226 (95.4%) |
+| `longitudinal_crack` | 51 (26.7%) | 10 (4.2%) |
+| `transverse_crack` | 3 (1.6%) | 1 (0.4%) |
+| `alligator_crack` | 0 | 0 |
+
+**Manual review results:**
+
+| Verdict | Cluj (≈59 frames reviewed) | Tokyo (≈41 frames reviewed) |
+|---|---|---|
+| Clear false positive | ~51% | ~95% |
+| Uncertain | ~42% | ~5% |
+| Possible true positive | ~7% | 0% |
+
+**Five failure modes identified:**
+
+1. **Aerial/map content (Tokyo-specific):** Frames 6–89 are an intro flyover — the model fires on map edges and aerial road outlines (~30% of Tokyo detections).
+2. **Road marking confusion:** Pedestrian crossings → `pothole` FP; lane markings → `longitudinal_crack` FP.
+3. **Clean road false positives:** Frame #2641 (Tokyo) produced the highest confidence score in the dataset (0.62) on pristine asphalt.
+4. **Frame-edge instability:** Low-confidence detections at frame periphery on guardrails and kerbs.
+5. **Temporal duplication:** Same location detected in consecutive frames — addressed by DBSCAN deduplication (Stage 7).
+
+**Key conclusion:** The model does not generalise reliably to unseen dashcam footage at conf=0.35. The high false positive rate — most visibly in Tokyo — is a direct consequence of training exclusively on non-Romanian road surfaces. This motivates the N-RDD2024 fine-tuning experiment below.
+
+---
+
+## N-RDD2024 Fine-Tune (In Progress)
+
+A second fine-tuning experiment is underway using the N-RDD2024 dataset (Kaya & Çodur, Mendeley Data V3, `doi:10.17632/27c8pwsd6v.3`), a re-annotation of the RDD2022 corpus with an expanded ten-class taxonomy.
+
+### N-RDD2024 vs RDD2022
+
+| Property | RDD2022 | N-RDD2024 |
+|---|---|---|
+| Image source | Original multi-national dashcam collection | Re-annotation of RDD2022 images |
+| Total images | 47,420 | ~18,995 (Kaggle split) |
+| Annotation classes | 4 (D00, D10, D20, D40) | 10 (D00–D90) |
+| Road marking classes | None | D50 (ped. crossing blur), D60 (lane line blur) |
+| Infrastructure classes | None | D70 (manhole cover) |
+| Road condition classes | None | D80 (patchy road), D90 (rutting) |
+| Repaired damage | None | D30 (repaired crack) |
+| Annotation format | Pascal VOC XML | YOLO `.txt` (Roboflow export) |
+
+The inclusion of D50/D60 (road markings) directly addresses Failure Mode 2 from the manual validation — the model previously fired on markings because it had no explicit training examples for them.
+
+### Class ID Remapping
+
+Each country was exported from Roboflow as an independent project. Countries without certain damage types have shifted class IDs (e.g., Norway nc=9, India nc=8, missing D30/D90). All six country subsets are remapped to a single canonical 10-class schema before training to prevent silent label corruption.
+
+| ID | D-code | English name | Train count | Share |
+|---|---|---|---|---|
+| 0 | D00 | longitudinal_crack | 18,163 | 40.8% |
+| 1 | D10 | transverse_crack | 8,116 | 18.2% |
+| 2 | D20 | alligator_crack | 6,354 | 14.3% |
+| 3 | D30 | repaired_crack | 311 | 0.7% |
+| 4 | D40 | pothole | 3,155 | 7.1% |
+| 5 | D50 | pedestrian_crossing_blur | 711 | 1.6% |
+| 6 | D60 | lane_line_blur | 3,966 | 8.9% |
+| 7 | D70 | manhole_cover | 3,013 | 6.8% |
+| 8 | D80 | patchy_road | 704 | 1.6% |
+| 9 | D90 | rutting | 41 | 0.1% |
+| **Total** | | | **44,534** | |
+
+### Class Imbalance Mitigation
+
+The 442:1 ratio between D00 and D90 requires explicit mitigation. Three strategies are applied:
+
+| Strategy | Detail |
+|---|---|
+| Image-level oversampling | D90 ×10, D30 ×4, D80 ×2, D50 ×2 (symlink duplication, validation not oversampled) |
+| Increased `cls` loss weight | 0.487 (PSO default) → 0.8 |
+| Label smoothing | 0.0 → 0.1 ([Szegedy et al., 2016](https://doi.org/10.1109/CVPR.2016.308)) |
+
+RT-DETR already incorporates Focal Loss (γ=2.0) in its classification head — not user-configurable in Ultralytics 8.x; the three strategies above are supplementary.
+
+### Training Configuration
+
+- **Model:** RT-DETR-L from COCO pretrained weights (`rtdetr-l.pt`) — fresh start, not from RDD2022 checkpoint
+- **Hardware:** Kaggle GPU T4 x2 (2 × 16 GB VRAM), Ultralytics DDP
+- **Strategy:** 10 epochs frozen backbone + 50 epochs full fine-tune (same as RDD2022 experiment)
+- **PSO hyperparameters:** carried over from RDD2022 experiment (`lr0=4.47e-4`, `mosaic=0.860`, `mixup=0.205`, `box=7.685`)
+- **Results:** Training in progress — to be updated when complete
+
 
 ---
 
@@ -506,13 +611,11 @@ Cluj-Road-Intelligence-System/
 │   │   ├── eval_test_*.json        ✅ Test set: mAP50=0.458, mAP50-95=0.211
 │   │   └── eval_*.log              ✅ Full evaluation execution logs
 │   ├── segmentation/               ⬜ SAM inference module
-│   ├── depth/                      ⬜ EfficientNet-B3 depth training
-│   ├── severity/                   ⬜ XGBoost + WOA feature selection
+│   ├── depth/                      ⬜ Monodepth2 inference wrapper
+│   ├── severity/                   ⬜ Rule-based severity classifier
 │   └── weights/
 │       ├── rtdetr_l_rdd2022.pt     ✅ PSO-optimised, mAP50=0.465/test=0.458 (best.pt)
-│       ├── rtdetr_l_cluj.pt        ⬜ Future: fine-tuned on Cluj footage
-│       ├── depth_effnet.pt         ⬜ Future: EfficientNet-B3 depth model
-│       └── xgboost_severity.json   ⬜ Future: XGBoost classifier
+│       └── rtdetr_l_nrdd2024.pt    🔄 N-RDD2024 fine-tune (in progress, 10 classes)
 │
 ├── runs/
 │   └── detect/
@@ -528,8 +631,8 @@ Cluj-Road-Intelligence-System/
 │   ├── preprocessor.py             ⬜ Frame extraction + GPS sync + lighting
 │   ├── detector.py                 ⬜ RT-DETR inference + TTA
 │   ├── segmentor.py                ⬜ SAM masks + geometry features
-│   ├── depth_estimator.py          ⬜ EfficientNet-B3 + Monodepth2
-│   ├── severity_classifier.py      ⬜ XGBoost (rule-based fallback)
+│   ├── depth_estimator.py          ⬜ Monodepth2 relative depth
+│   ├── severity_classifier.py      ⬜ Rule-based S1–S5 classifier
 │   ├── enricher.py                 ⬜ OSM + Nominatim + Open-Meteo
 │   ├── deduplicator.py             ⬜ DBSCAN + PostGIS upsert
 │   └── orchestrator.py             ⬜ End-to-end coordinator
@@ -704,24 +807,23 @@ python scheduler/daily_job.py
 **In progress:**
 - [ ] React frontend — map, sidebar, detail panel (React 18 + Leaflet.js)
 
+**In progress:**
+- [ ] N-RDD2024 fine-tune — RT-DETR-L on 10-class dataset, T4 x2 (Kaggle)
+- [ ] React frontend — map, sidebar, detail panel (React 18 + Leaflet.js)
+
 **Planned:**
 - [ ] Inference pipeline — all 8 modules + orchestrator
-- [ ] Cluj-Napoca data collection drive (dashcam + GPS + depth measurements)
-- [ ] Label Studio annotation of Cluj footage
-- [ ] EfficientNet-B3 depth model training on Cluj ground truth
-- [ ] XGBoost + WOA severity classifier training
-- [ ] RT-DETR fine-tuning on Cluj footage → `rtdetr_l_cluj.pt`
-- [ ] Optuna tuning for EfficientNet-B3 + XGBoost
-- [ ] ACO survey route generation (`aco_route.py`)
-- [ ] End-to-end integration test on real Cluj footage
+- [ ] TRIB dataset bounding box annotation → RT-DETR Romanian domain fine-tuning
+- [ ] ACO survey route generation (`aco_route.py`) — deferred, future work
+- [ ] End-to-end integration test on survey footage
 - [ ] City Hall pilot demonstration
 
 ---
 
 ## Known Issues & Compatibility Notes
 
-- **Pillow version:** `requirements.txt` pins `Pillow==9.5.0`. Ultralytics 8.2.18 uses `PIL._util.is_directory` which was removed in Pillow 10.0. Do not upgrade Pillow without upgrading Ultralytics first.
-- **Kaggle PIL patch (newer environments):** Kaggle environments with PyTorch 2.6+ have a system-level Pillow 12.x that cannot be overridden by pip. Inject the missing symbol at runtime before any ultralytics import: `import PIL._util, os; PIL._util.is_directory = os.path.isdir`. See `evaluate-best-model.ipynb`.
+- **Kaggle environment (training):** Training uses Kaggle T4 x2 with PyTorch 2.6.0+cu124. Ultralytics 8.3.143 is required for PyTorch 2.6 compatibility. Pillow must be force-reinstalled (`pip uninstall -y Pillow && pip install --no-cache-dir Pillow==11.3.0`) to fix the split C-extension/Python-files state in Kaggle's environment before importing Ultralytics.
+- **Pillow version (local/evaluation):** `requirements.txt` pins `Pillow==9.5.0` for local use with Ultralytics 8.2.18. `PIL._util.is_directory` was removed in Pillow 10.0 — do not upgrade Pillow without upgrading Ultralytics first.
 - **Kaggle resume:** When resuming training after a session that reached its `--epochs` target, patch the checkpoint with `ckpt['epochs'] = current_epoch + extra_epochs` before calling `train.py --resume`. See `scripts/patch_checkpoint.py` (planned).
 - **numpy/pandas incompatibility:** If `pandas` fails to import after training in the same kernel, reinstall with `pip install --force-reinstall numpy==1.26.4 pandas==2.2.2`.
 - **TTA no-op:** `augment=True` in Ultralytics 8.2.x `model.val()` for RT-DETR produces identical results to standard inference. TTA is disabled in the pipeline.
@@ -769,6 +871,8 @@ All 39 papers organized across 10 categories.
 | Road Damage Detection Using Deep Neural Networks | Maeda et al. | 2018 | [doi](https://doi.org/10.1111/mice.12387) |
 | Robust Video-Based Pothole Detection and Area Estimation | Bui et al. | 2021 | [doi](https://doi.org/10.1109/ACCESS.2021.3088384) |
 | When SAM Meets Inventorying of Roadway Assets | Zhang, Huang, Qin | 2024 | [doi](https://doi.org/10.1016/j.ijtst.2024.10.005) |
+| N-RDD2024: Road Damage and Defects | Kaya, Çodur | 2024 | [doi](https://doi.org/10.17632/27c8pwsd6v.3) |
+| TRIB crack dataset: automatic recognition for road cracks detection | Abrudan | 2025 | [doi](https://doi.org/10.1007/s12145-025-01763-7) |
 
 ### 3. Segmentation
 
@@ -808,6 +912,7 @@ All 39 papers organized across 10 categories.
 | Averaging Weights Leads to Wider Optima (SWA) | Izmailov et al. | 2018 | [arxiv](https://arxiv.org/abs/1803.05407) |
 | Albumentations: Fast and Flexible Image Augmentations | Buslaev et al. | 2020 | [doi](https://doi.org/10.3390/info11020125) |
 | mixup: Beyond Empirical Risk Minimization | Zhang et al. | 2018 | [arxiv](https://arxiv.org/abs/1710.09412) |
+| Rethinking the Inception Architecture (label smoothing) | Szegedy et al. | 2016 | [doi](https://doi.org/10.1109/CVPR.2016.308) |
 
 ### 8. Clustering & Spatial
 
@@ -821,7 +926,7 @@ All 39 papers organized across 10 categories.
 |---|---|---|---|
 | Ant Colony Optimization | Dorigo, Maniezzo, Colorni | 1996 | [doi](https://doi.org/10.1109/3477.484436) |
 
-> **Total: 39 papers across 10 categories.** Full citations in `references.bib`.
+> **Total: 42 papers across 10 categories.** Full citations in `references.bib`.
 
 ---
 
@@ -831,14 +936,13 @@ All 39 papers organized across 10 categories.
 |---|---|---|
 | Detection | RT-DETR-L (Ultralytics 8.2.18) | [Zhao et al., 2024](https://arxiv.org/abs/2304.08069) |
 | Segmentation | SAM — Segment Anything Model | [Kirillov et al., 2023](https://arxiv.org/abs/2304.02643) |
-| Depth estimation | EfficientNet-B3 + Monodepth2 | [Tan & Le, 2019](https://arxiv.org/abs/1905.11946) · [Godard et al., 2019](https://arxiv.org/abs/1806.01260) |
-| Severity classification | XGBoost | [Chen & Guestrin, 2016](https://arxiv.org/abs/1603.02754) |
-| Hyperparameter optimization | PSO (custom) · Optuna (TPE) | [Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968) |
-| Feature selection | WOA — Whale Optimization Algorithm | [Mirjalili & Lewis, 2016](https://doi.org/10.1016/j.advengsoft.2016.01.008) |
-| Survey route planning | ACO · osmnx | [Dorigo et al., 1996](https://doi.org/10.1109/3477.484436) |
+| Depth estimation | Monodepth2 (relative depth, KITTI pretrained) | [Godard et al., 2019](https://arxiv.org/abs/1806.01260) |
+| Severity classification | Rule-based (normalised depth + SAM area) | — |
+| Hyperparameter optimization | PSO (custom implementation) | [Kennedy & Eberhart, 1995](https://doi.org/10.1109/ICNN.1995.488968) |
+| Survey route planning | ACO · osmnx (deferred) | [Dorigo et al., 1996](https://doi.org/10.1109/3477.484436) |
 | Spatial clustering | DBSCAN (scikit-learn) | [Ester et al., 1996](https://dl.acm.org/doi/10.5555/3001460.3001507) |
 | Augmentation | Albumentations · Mixup · Mosaic | [Buslaev et al., 2020](https://doi.org/10.3390/info11020125) |
-| Training | Focal Loss · SWA · TTA · fp16 AMP | [Lin et al., 2017](https://arxiv.org/abs/1708.02002) · [Izmailov et al., 2018](https://arxiv.org/abs/1803.05407) |
+| Training | Focal Loss · SWA · fp16 AMP | [Lin et al., 2017](https://arxiv.org/abs/1708.02002) · [Izmailov et al., 2018](https://arxiv.org/abs/1803.05407) |
 | Database | PostgreSQL 15 + PostGIS | [postgis.net](https://postgis.net) |
 | ORM | SQLAlchemy 2.0 (async) | [sqlalchemy.org](https://www.sqlalchemy.org) |
 | Backend | FastAPI + Pydantic v2 | [fastapi.tiangolo.com](https://fastapi.tiangolo.com) |
@@ -849,7 +953,7 @@ All 39 papers organized across 10 categories.
 | Road network | OSM Overpass API | [overpass-api.de](https://overpass-api.de) |
 | Weather | Open-Meteo API | [open-meteo.com](https://open-meteo.com) |
 | Sun angle | pysolar | [pysolar.readthedocs.io](https://pysolar.readthedocs.io) |
-| Annotation | Label Studio | [labelstud.io](https://labelstud.io) |
+
 | Language | Python 3.12 | [python.org](https://python.org) |
 
 ---
@@ -859,7 +963,7 @@ All 39 papers organized across 10 categories.
 Bachelor's thesis — Babeș-Bolyai University, Faculty of Mathematics and Computer Science, Cluj-Napoca.
 **Author: Paraschiv Tudor, 2026.**
 
-Dataset attributions: RDD2022 ([Arya et al., 2024](https://doi.org/10.1002/gdj3.260)), Pothole600.
+Dataset attributions: RDD2022 ([Arya et al., 2024](https://doi.org/10.1002/gdj3.260)), Pothole600, N-RDD2024 ([Kaya & Çodur, 2024](https://doi.org/10.17632/27c8pwsd6v.3)).
 Model attributions: RT-DETR ([Zhao et al., 2024](https://arxiv.org/abs/2304.08069)), SAM ([Kirillov et al., 2023](https://arxiv.org/abs/2304.02643)), Monodepth2 ([Godard et al., 2019](https://arxiv.org/abs/1806.01260)).
 
 ---
