@@ -79,6 +79,18 @@ VIDEOS = {
     "cluj": Path("data/raw/footage/validation_cluj.mp4"),
 }
 
+# Pre-extracted frame directories (used instead of video if they exist)
+FRAME_DIRS = {
+    "tokyo": Path("data/processed/frames/tokyo"),
+    "cluj":  Path("data/processed/frames/cluj"),
+}
+
+# Cluj manifest — provides timestamp, lighting, GPS, sun elevation per frame
+CLUJ_MANIFEST = Path("data/processed/frames/cluj/manifest.json")
+
+# Assumed extraction rate for Tokyo (no manifest) — used to derive timestamps
+TOKYO_EXTRACT_FPS = 2.0   # 1 frame per 0.5 s, matches preprocessor.py Stage 1
+
 OUTPUT_BASE  = Path("data/validation_nrdd_2024")
 BBOX_BASE    = OUTPUT_BASE / "bounding_boxes"
 
@@ -131,106 +143,140 @@ def classify_lighting(frame: np.ndarray) -> str:
 # Frame extraction + detection
 # ---------------------------------------------------------------------------
 
-def run_detection(video_name: str, video_path: Path, model) -> list:
+def load_frame_list(video_name: str) -> list:
     """
-    Extract frames at FRAME_RATE fps and run RT-DETR-L inference on each.
-    Returns list of per-frame dicts matching the detections.json schema used
-    by the existing inspector scripts.
+    Build a list of frame metadata dicts from pre-extracted frames.
+
+    Tokyo: glob data/processed/frames/tokyo/frame_*.jpg (sorted).
+           No manifest exists — timestamp derived from frame index
+           at TOKYO_EXTRACT_FPS (2 fps = 1 frame / 0.5 s).
+           Lighting classified live from pixel data.
+
+    Cluj:  load data/processed/frames/cluj/manifest.json
+           which contains frame_path, frame_index, timestamp_s,
+           lighting, latitude, longitude, sun_elevation, etc.
+           (produced by preprocessor.py Stage 1).
+    """
+    frame_dir = FRAME_DIRS[video_name]
+    if not frame_dir.exists():
+        logger.error("Frame directory not found: %s", frame_dir)
+        sys.exit(1)
+
+    if video_name == "cluj" and CLUJ_MANIFEST.exists():
+        logger.info("Cluj: loading manifest from %s", CLUJ_MANIFEST)
+        with open(CLUJ_MANIFEST, encoding="utf-8") as f:
+            manifest = json.load(f)
+        # Normalise backslashes in paths (manifest written on Windows)
+        for entry in manifest:
+            entry["frame_path"] = str(Path(entry["frame_path"]))
+        logger.info("Cluj manifest: %d entries", len(manifest))
+        return manifest
+
+    # Tokyo (or Cluj fallback if no manifest)
+    jpgs = sorted(frame_dir.glob("frame_*.jpg"))
+    if not jpgs:
+        logger.error("No frame_*.jpg files found in %s", frame_dir)
+        sys.exit(1)
+
+    logger.info("%s: found %d frames in %s (no manifest)", video_name, len(jpgs), frame_dir)
+    frames = []
+    for idx, jpg in enumerate(jpgs):
+        frames.append({
+            "frame_path":  str(jpg),
+            "frame_index": idx,
+            "timestamp_s": round(idx / TOKYO_EXTRACT_FPS, 3),
+            "lighting":    None,   # classified live during detection
+            "latitude":    None,
+            "longitude":   None,
+        })
+    return frames
+
+
+def run_detection(video_name: str, model) -> list:
+    """
+    Run RT-DETR-L on pre-extracted frames.
+    Reads frame metadata from manifest (Cluj) or derives it from filenames (Tokyo).
+    Returns list of per-frame dicts matching the detections.json schema.
     """
     out_dir = OUTPUT_BASE / video_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not video_path.exists():
-        logger.error("Video not found: %s", video_path)
-        sys.exit(1)
-
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        logger.error("Cannot open video: %s", video_path)
-        sys.exit(1)
-
-    fps_native   = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_s   = total_frames / fps_native
-    frame_step   = max(1, int(round(fps_native / FRAME_RATE)))
-    n_expected   = total_frames // frame_step
+    frame_list = load_frame_list(video_name)
+    n_total    = len(frame_list)
 
     logger.info("=" * 62)
-    logger.info("Video     : %s", video_path.name)
-    logger.info("Native FPS: %.2f  |  Duration: %.1f s  |  Total frames: %d",
-                fps_native, duration_s, total_frames)
-    logger.info("Sampling  : 1 frame / %d native frames  (~%.1f fps)",
-                frame_step, FRAME_RATE)
-    logger.info("Expected  : ~%d frames to process", n_expected)
-    logger.info("Checkpoint: %s", CHECKPOINT)
+    logger.info("Video      : %s", video_name.upper())
+    logger.info("Frames     : %d pre-extracted JPEGs", n_total)
+    logger.info("Checkpoint : %s", CHECKPOINT)
+    logger.info("conf=%.2f  iou=%.2f  imgsz=%d", CONF_THRESH, IOU_THRESH, IMGSZ)
     logger.info("=" * 62)
 
-    frames_data  = []
-    frame_idx_raw = 0
-    sampled_idx   = 0
-    t_start       = time.time()
+    frames_data = []
+    t_start     = time.time()
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    for i, meta in enumerate(frame_list):
+        frame_path = Path(meta["frame_path"])
 
-        if frame_idx_raw % frame_step == 0:
-            timestamp_s = round(frame_idx_raw / fps_native, 3)
-            lighting    = classify_lighting(frame)
+        if not frame_path.exists():
+            logger.warning("Frame not found, skipping: %s", frame_path)
+            continue
 
-            # RT-DETR inference (Zhao et al., 2024)
-            results = model.predict(
-                source  = frame,
-                conf    = CONF_THRESH,
-                iou     = IOU_THRESH,
-                imgsz   = IMGSZ,
-                verbose = False,
+        # Lighting — use manifest value if available, else classify live
+        lighting = meta.get("lighting") or None
+        if lighting is None:
+            img_bgr  = cv2.imread(str(frame_path))
+            if img_bgr is not None:
+                lighting = classify_lighting(img_bgr)
+            else:
+                lighting = "unknown"
+
+        # RT-DETR inference (Zhao et al., 2024)
+        results = model.predict(
+            source  = str(frame_path),
+            conf    = CONF_THRESH,
+            iou     = IOU_THRESH,
+            imgsz   = IMGSZ,
+            verbose = False,
+        )
+
+        boxes_data = []
+        if results and results[0].boxes is not None:
+            for box in results[0].boxes:
+                cls_id   = int(box.cls.item())
+                cls_name = (CLASS_NAMES[cls_id]
+                            if cls_id < len(CLASS_NAMES) else f"class_{cls_id}")
+                conf     = round(float(box.conf.item()), 4)
+                xyxy     = [round(float(v), 2) for v in box.xyxy[0].tolist()]
+                xywhn    = [round(float(v), 4) for v in box.xywhn[0].tolist()]
+                boxes_data.append({
+                    "class_id":   cls_id,
+                    "class_name": cls_name,
+                    "confidence": conf,
+                    "bbox_xyxy":  xyxy,
+                    "bbox_xywhn": xywhn,
+                })
+
+        frames_data.append({
+            "frame_index":   meta.get("frame_index", i),
+            "frame_path":    str(frame_path),
+            "timestamp_s":   meta.get("timestamp_s", round(i / TOKYO_EXTRACT_FPS, 3)),
+            "lighting":      lighting,
+            "latitude":      meta.get("latitude"),
+            "longitude":     meta.get("longitude"),
+            "sun_elevation": meta.get("sun_elevation"),
+            "n_detections":  len(boxes_data),
+            "boxes":         boxes_data,
+        })
+
+        if (i + 1) % 200 == 0:
+            elapsed = time.time() - t_start
+            rate    = (i + 1) / elapsed
+            eta     = (n_total - i - 1) / max(rate, 1e-6)
+            n_det   = sum(1 for r in frames_data if r["n_detections"] > 0)
+            logger.info(
+                "  [%s] %d / %d frames  |  %.1f fps  |  ETA %.0f s  |  %d detections so far",
+                video_name, i + 1, n_total, rate, eta, n_det,
             )
-
-            boxes_data = []
-            if results and results[0].boxes is not None:
-                res = results[0]
-                for box in res.boxes:
-                    cls_id   = int(box.cls.item())
-                    cls_name = (CLASS_NAMES[cls_id]
-                                if cls_id < len(CLASS_NAMES) else f"class_{cls_id}")
-                    conf     = round(float(box.conf.item()), 4)
-                    xyxy     = [round(float(v), 2) for v in box.xyxy[0].tolist()]
-                    xywhn    = [round(float(v), 4) for v in box.xywhn[0].tolist()]
-                    boxes_data.append({
-                        "class_id":    cls_id,
-                        "class_name":  cls_name,
-                        "confidence":  conf,
-                        "bbox_xyxy":   xyxy,
-                        "bbox_xywhn":  xywhn,
-                    })
-
-            frames_data.append({
-                "frame_index":  sampled_idx,
-                "frame_raw":    frame_idx_raw,
-                "timestamp_s":  timestamp_s,
-                "lighting":     lighting,
-                "n_detections": len(boxes_data),
-                "boxes":        boxes_data,
-                # frame_path filled later during bbox export
-                "frame_path":   "",
-            })
-
-            sampled_idx += 1
-
-            if sampled_idx % 200 == 0:
-                elapsed = time.time() - t_start
-                rate    = sampled_idx / elapsed
-                eta     = (n_expected - sampled_idx) / max(rate, 1e-6)
-                logger.info(
-                    "  [%s] %d / ~%d frames  |  %.1f fps  |  ETA %.0f s",
-                    video_name, sampled_idx, n_expected, rate, eta,
-                )
-
-        frame_idx_raw += 1
-
-    cap.release()
 
     elapsed = time.time() - t_start
     n_det   = sum(1 for r in frames_data if r["n_detections"] > 0)
@@ -240,14 +286,13 @@ def run_detection(video_name: str, video_path: Path, model) -> list:
         n_det, 100 * n_det / max(1, len(frames_data)),
     )
 
-    # Save detections.json
     json_path = out_dir / "detections.json"
     json_path.write_text(
         json.dumps(frames_data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    logger.info("Saved detections.json → %s", json_path)
-
+    logger.info("Saved detections.json -> %s", json_path)
     return frames_data
+
 
 
 # ---------------------------------------------------------------------------
@@ -583,8 +628,8 @@ def export_bounding_boxes(
 ) -> list:
     """
     Export one JPEG per detection frame with bboxes drawn.
+    Reads directly from pre-extracted frame JPEGs — no video re-read needed.
     Saved to data/validation_nrdd_2024/bounding_boxes/<video_name>/
-    Updates frame_path in frames list in-place.
     """
     out_dir = BBOX_BASE / video_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -593,107 +638,87 @@ def export_bounding_boxes(
     det_frames     = [r for r in frames if r["n_detections"] > 0]
     n_written      = 0
 
-    # We need to re-read from video since we didn't save raw frames
-    video_path = VIDEOS[video_name]
-    cap        = cv2.VideoCapture(str(video_path))
-    fps_native = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_step = max(1, int(round(fps_native / FRAME_RATE)))
-
-    # Build lookup: sampled_idx → frame data
-    det_lookup = {r["frame_index"]: r for r in det_frames}
-    sampled_idx   = 0
-    frame_idx_raw = 0
-
-    logger.info("[%s] Exporting %d annotated frames → %s",
+    logger.info("[%s] Exporting %d annotated frames -> %s",
                 video_name, len(det_frames), out_dir)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    for fr in det_frames:
+        img = cv2.imread(fr["frame_path"])
+        if img is None:
+            logger.warning("Cannot read frame: %s", fr["frame_path"])
+            continue
 
-        if frame_idx_raw % frame_step == 0:
-            if sampled_idx in det_lookup:
-                fr  = det_lookup[sampled_idx]
-                img = frame.copy()
+        if scale != 1.0:
+            h, w = img.shape[:2]
+            img  = cv2.resize(img, (int(w * scale), int(h * scale)),
+                              interpolation=cv2.INTER_LINEAR)
+        h_img, w_img = img.shape[:2]
 
-                if scale != 1.0:
-                    h, w = img.shape[:2]
-                    img  = cv2.resize(img, (int(w * scale), int(h * scale)),
-                                      interpolation=cv2.INTER_LINEAR)
-                h_img, w_img = img.shape[:2]
+        # Draw bounding boxes
+        for b in fr["boxes"]:
+            x1, y1, x2, y2 = [int(v * scale) for v in b["bbox_xyxy"]]
+            hex_c     = CLASS_COLORS.get(b["class_name"], DEFAULT_COLOR).lstrip("#")
+            color_bgr = (int(hex_c[4:6], 16), int(hex_c[2:4], 16), int(hex_c[0:2], 16))
+            cv2.rectangle(img, (x1, y1), (x2, y2),
+                          color_bgr, max(1, int(2 * scale)))
+            label = f"{b['class_name'].replace('_', ' ')} {b['confidence']:.2f}"
+            lw, lh = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, font_thickness
+            )[0]
+            cv2.rectangle(img, (x1, y1 - lh - 6), (x1 + lw + 4, y1),
+                          color_bgr, -1)
+            cv2.putText(img, label, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale,
+                        (255, 255, 255), font_thickness, cv2.LINE_AA)
 
-                # Draw boxes
-                for b in fr["boxes"]:
-                    x1, y1, x2, y2 = [int(v * scale) for v in b["bbox_xyxy"]]
-                    hex_c     = CLASS_COLORS.get(b["class_name"], DEFAULT_COLOR).lstrip("#")
-                    color_bgr = (int(hex_c[4:6], 16), int(hex_c[2:4], 16), int(hex_c[0:2], 16))
-                    cv2.rectangle(img, (x1, y1), (x2, y2),
-                                  color_bgr, max(1, int(2 * scale)))
-                    label = f"{b['class_name'].replace('_', ' ')} {b['confidence']:.2f}"
-                    lw, lh = cv2.getTextSize(
-                        label, cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, font_thickness
-                    )[0]
-                    cv2.rectangle(img, (x1, y1 - lh - 6), (x1 + lw + 4, y1),
-                                  color_bgr, -1)
-                    cv2.putText(img, label, (x1 + 2, y1 - 4),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale,
-                                (255, 255, 255), font_thickness, cv2.LINE_AA)
+        # Top info banner
+        n_det  = fr["n_detections"]
+        lat    = fr.get("latitude")
+        lon    = fr.get("longitude")
+        gps_s  = f" | GPS {lat:.4f},{lon:.4f}" if lat and lon else ""
+        banner = (f"#{fr['frame_index']}  t={fr['timestamp_s']}s  "
+                  f"{fr['lighting']}  |  {n_det} det"
+                  f"  [{video_name.upper()}]  [N-RDD2024]{gps_s}")
+        bh = int(30 * scale)
+        cv2.rectangle(img, (0, 0), (w_img, bh), (20, 20, 20), -1)
+        cv2.putText(img, banner, (int(8 * scale), int(20 * scale)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale,
+                    (220, 220, 220), font_thickness, cv2.LINE_AA)
 
-                # Top info banner
-                n_det  = fr["n_detections"]
-                banner = (f"#{fr['frame_index']}  t={fr['timestamp_s']}s  "
-                          f"{fr['lighting']}  |  {n_det} detection(s)"
-                          f"  [{video_name.upper()}]  [N-RDD2024 model]")
-                bh = int(30 * scale)
-                cv2.rectangle(img, (0, 0), (w_img, bh), (20, 20, 20), -1)
-                cv2.putText(img, banner, (int(8 * scale), int(20 * scale)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale,
-                            (220, 220, 220), font_thickness, cv2.LINE_AA)
+        # Detection list overlay
+        for i, b in enumerate(fr["boxes"]):
+            hex_c     = CLASS_COLORS.get(b["class_name"], DEFAULT_COLOR).lstrip("#")
+            color_bgr = (int(hex_c[4:6], 16), int(hex_c[2:4], 16), int(hex_c[0:2], 16))
+            line      = f"[{i+1}] {b['class_name'].replace('_', ' ')} {b['confidence']:.2f}"
+            ly = bh + 8 + i * int(22 * scale)
+            cv2.putText(img, line, (int(8 * scale), ly),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale,
+                        color_bgr, font_thickness, cv2.LINE_AA)
 
-                # Detection list overlay
-                for i, b in enumerate(fr["boxes"]):
-                    hex_c     = CLASS_COLORS.get(b["class_name"], DEFAULT_COLOR).lstrip("#")
-                    color_bgr = (int(hex_c[4:6], 16), int(hex_c[2:4], 16), int(hex_c[0:2], 16))
-                    line = (f"[{i+1}] {b['class_name'].replace('_', ' ')} "
-                            f"{b['confidence']:.2f}")
-                    ly = bh + 8 + i * int(22 * scale)
-                    cv2.putText(img, line, (int(8 * scale), ly),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45 * scale,
-                                color_bgr, font_thickness, cv2.LINE_AA)
+        # Filename
+        det_names = "_".join(sorted(set(
+            b["class_name"]
+            .replace("longitudinal_crack",       "lng")
+            .replace("transverse_crack",         "trs")
+            .replace("alligator_crack",          "alg")
+            .replace("repaired_crack",           "rep")
+            .replace("pothole",                  "pot")
+            .replace("pedestrian_crossing_blur", "ped")
+            .replace("lane_line_blur",           "lan")
+            .replace("manhole_cover",            "man")
+            .replace("patchy_road",              "pat")
+            .replace("rutting",                  "rut")
+            for b in fr["boxes"]
+        )))
+        fname  = (f"frame_{fr['frame_index']:06d}"
+                  f"_t{fr['timestamp_s']:.0f}s"
+                  f"_{n_det}det"
+                  f"_{det_names}.jpg")
+        cv2.imwrite(str(out_dir / fname), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        n_written += 1
 
-                # Filename
-                det_names = "_".join(sorted(set(
-                    b["class_name"]
-                    .replace("longitudinal_crack",       "lng")
-                    .replace("transverse_crack",         "trs")
-                    .replace("alligator_crack",          "alg")
-                    .replace("repaired_crack",           "rep")
-                    .replace("pothole",                  "pot")
-                    .replace("pedestrian_crossing_blur", "ped")
-                    .replace("lane_line_blur",           "lan")
-                    .replace("manhole_cover",            "man")
-                    .replace("patchy_road",              "pat")
-                    .replace("rutting",                  "rut")
-                    for b in fr["boxes"]
-                )))
-                fname = (f"frame_{fr['frame_index']:06d}"
-                         f"_t{fr['timestamp_s']:.0f}s"
-                         f"_{n_det}det"
-                         f"_{det_names}.jpg")
-                fpath = out_dir / fname
-                cv2.imwrite(str(fpath), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
-
-                # Update frame_path in-place for detection_grid
-                fr["frame_path"] = str(fpath)
-                n_written += 1
-
-            sampled_idx += 1
-        frame_idx_raw += 1
-
-    cap.release()
-    logger.info("[%s] Exported %d annotated frames → %s", video_name, n_written, out_dir)
+    logger.info("[%s] Exported %d annotated frames -> %s", video_name, n_written, out_dir)
     return frames
+
 
 
 # ---------------------------------------------------------------------------
@@ -738,14 +763,13 @@ def main():
     # ── Process each video ───────────────────────────────────────────────────
     summaries = {}
     for video_name in args.videos:
-        video_path = VIDEOS[video_name]
-        out_dir    = OUTPUT_BASE / video_name
+        out_dir = OUTPUT_BASE / video_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("\n%s\nProcessing: %s\n%s", "=" * 62, video_name.upper(), "=" * 62)
 
-        # Detection pass
-        frames = run_detection(video_name, video_path, model)
+        # Detection pass — reads from pre-extracted frames, no video decode needed
+        frames = run_detection(video_name, model)
 
         # Bounding box export (fills frame_path in-place)
         if not args.skip_bbox_export:
