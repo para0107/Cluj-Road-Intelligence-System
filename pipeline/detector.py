@@ -1,42 +1,67 @@
 """
 pipeline/detector.py
 ---------------------
-Stage 2 of the CRIS inference pipeline.
+Stage 2 of the road damage detection inference pipeline.
 
 Responsibilities:
-  - Load RT-DETR-L weights (PSO-optimised checkpoint)
+  - Load RT-DETR-L weights (N-RDD2024 fine-tuned checkpoint, Run 2)
   - Run inference on every frame in the preprocessor manifest
-  - Apply confidence threshold (default 0.35 — recommended operational value
-    per Chapter 4 evaluation: precision > 0.70 for all classes at this threshold)
+  - Apply per-class confidence thresholds as post-processing
+    (global Ultralytics threshold is set to 0.001; per-class filtering
+    is applied here so no box is silently discarded before we see it)
   - Return one DetectionResult per frame, containing all accepted bounding boxes
 
-TTA note:
-  Test Time Augmentation (flip + rotate averaging) was evaluated during training
-  and produced zero accuracy improvement for RT-DETR on this dataset.
-  It is intentionally disabled here. (Ref: Section 4.5 of thesis)
+Per-class thresholds (Section 4.10 of thesis):
+  - All damage classes:         0.35  (near F1 peak for Run 2)
+  - lane_line_blur:             0.50  (interim — replace with F1-curve peak
+                                       from model.val() on N-RDD2024 val split)
+  - pedestrian_crossing_blur:   0.35  (global; severity S1 cap handles priority)
 
-Class mapping (matches RDD2022 training schema):
-  0 → longitudinal_crack
-  1 → transverse_crack
-  2 → alligator_crack
-  3 → pothole
-  4 → patch_deterioration  (no training data — will never fire)
+Severity overrides:
+  - lane_line_blur and pedestrian_crossing_blur are always assigned S1
+    regardless of confidence — they are marking maintenance issues, not
+    structural road damage (Section 4.10).
+
+TTA note:
+  Test Time Augmentation was evaluated during training and produced zero
+  accuracy improvement for RT-DETR on this dataset. Disabled here.
+  (Ref: Section 4.5 of thesis)
+
+N-RDD2024 class mapping (10-class schema, Kaya & Codur 2024):
+  0 -> longitudinal_crack        (D00)
+  1 -> transverse_crack          (D10)
+  2 -> alligator_crack           (D20)
+  3 -> repaired_crack            (D30)
+  4 -> pothole                   (D40)
+  5 -> pedestrian_crossing_blur  (D50)
+  6 -> lane_line_blur            (D60)
+  7 -> manhole_cover             (D70)
+  8 -> patchy_road               (D80)
+  9 -> rutting                   (D90)
 
 Usage (module):
     from pipeline.preprocessor import Preprocessor
     from pipeline.detector import Detector, DetectorConfig
 
     frames  = Preprocessor.load_manifest("data/processed/frames/run/manifest.json")
-    cfg     = DetectorConfig(weights="ml/weights/rtdetr_l_rdd2022.pt", conf=0.35)
+    cfg     = DetectorConfig(
+                  weights="ml/weights/rtdetr_l_nrdd2024.pt",
+                  conf=0.35,
+              )
     det     = Detector(cfg)
     results = det.run(frames)
 
 Usage (CLI):
-    python pipeline/detector.py \
-        --manifest  data/processed/frames/validation/manifest.json \
-        --weights   ml/weights/rtdetr_l_rdd2022.pt \
-        --output    data/processed/detections/validation/ \
+    python pipeline/detector.py
+        --manifest  data/processed/frames/run/manifest.json
+        --weights   ml/weights/rtdetr_l_nrdd2024.pt
+        --output    data/processed/detections/run/
         [--conf 0.35] [--device cpu] [--verbose]
+
+References:
+    RT-DETR:    Zhao et al., 2024. arXiv:2304.08069
+    N-RDD2024:  Kaya & Codur, 2024. doi:10.17632/27c8pwsd6v.3
+    Focal Loss: Lin et al., 2017. arXiv:1708.02002
 """
 
 from __future__ import annotations
@@ -44,32 +69,96 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Class definitions — must match the order used during RT-DETR training
+# N-RDD2024 10-class schema
+# Order must match the class IDs used during training.
 # ---------------------------------------------------------------------------
-CLASS_NAMES = [
-    "longitudinal_crack",   # 0
-    "transverse_crack",     # 1
-    "alligator_crack",      # 2
-    "pothole",              # 3
-    "patch_deterioration",  # 4  — no training data, included for schema completeness
+CLASS_NAMES: list[str] = [
+    "longitudinal_crack",        # 0  D00 -- structural damage
+    "transverse_crack",          # 1  D10 -- structural damage
+    "alligator_crack",           # 2  D20 -- structural damage
+    "repaired_crack",            # 3  D30 -- structural damage (repaired)
+    "pothole",                   # 4  D40 -- structural damage
+    "pedestrian_crossing_blur",  # 5  D50 -- marking (S1 override)
+    "lane_line_blur",            # 6  D60 -- marking (S1 override, conf >= 0.50)
+    "manhole_cover",             # 7  D70 -- infrastructure annotation
+    "patchy_road",               # 8  D80 -- structural damage
+    "rutting",                   # 9  D90 -- structural damage
 ]
 
-# Severity hints per class — used downstream by the rule-based severity classifier
-# These are not ground truth; they inform the prior before depth/area are available.
-CLASS_SEVERITY_PRIOR = {
-    "longitudinal_crack":  "S2",
-    "transverse_crack":    "S2",
-    "alligator_crack":     "S3",
-    "pothole":             "S3",
-    "patch_deterioration": "S2",
+# ---------------------------------------------------------------------------
+# Per-class confidence thresholds.
+#
+# Ultralytics model.predict() is called with conf=0.001 so that no box is
+# discarded before reaching this filter. The thresholds below are applied
+# as post-processing in the detection loop.
+#
+# 0.35 -- operational threshold for all damage classes. Sits near the
+#         macro-averaged F1 peak for Run 2 (Section 4.5).
+# 0.50 -- interim threshold for lane_line_blur only. Replace this value
+#         with the F1-peak confidence from model.val() on the N-RDD2024
+#         validation split once that calibration run is complete.
+# ---------------------------------------------------------------------------
+CLASS_CONF_THRESHOLDS: dict[str, float] = {
+    "longitudinal_crack":        0.35,
+    "transverse_crack":          0.35,
+    "alligator_crack":           0.35,
+    "repaired_crack":            0.35,
+    "pothole":                   0.35,
+    "pedestrian_crossing_blur":  0.35,
+    "lane_line_blur":            0.50,   # interim -- calibrate from F1 curve
+    "manhole_cover":             0.35,
+    "patchy_road":               0.35,
+    "rutting":                   0.35,
+}
+
+# ---------------------------------------------------------------------------
+# Severity priors -- used by the rule-based severity classifier (Stage 5)
+# as a starting point before depth and area signals are applied.
+# Marking classes are always S1 regardless of confidence or surface condition.
+# ---------------------------------------------------------------------------
+CLASS_SEVERITY_PRIOR: dict[str, str] = {
+    "longitudinal_crack":        "S2",
+    "transverse_crack":          "S2",
+    "alligator_crack":           "S3",
+    "repaired_crack":            "S1",
+    "pothole":                   "S3",
+    "pedestrian_crossing_blur":  "S1",   # marking -- always S1
+    "lane_line_blur":            "S1",   # marking -- always S1
+    "manhole_cover":             "S2",
+    "patchy_road":               "S2",
+    "rutting":                   "S3",
+}
+
+# ---------------------------------------------------------------------------
+# Semantic class sets.
+# Used by downstream stages (segmentor, severity classifier, deduplicator,
+# priority scorer) to route each detection without re-checking class names.
+# ---------------------------------------------------------------------------
+DAMAGE_CLASSES: set[str] = {
+    "longitudinal_crack",
+    "transverse_crack",
+    "alligator_crack",
+    "repaired_crack",
+    "pothole",
+    "patchy_road",
+    "rutting",
+}
+
+INFRASTRUCTURE_CLASSES: set[str] = {
+    "manhole_cover",
+}
+
+MARKING_CLASSES: set[str] = {
+    "lane_line_blur",
+    "pedestrian_crossing_blur",
 }
 
 
@@ -79,22 +168,21 @@ CLASS_SEVERITY_PRIOR = {
 @dataclass
 class DetectorConfig:
     """
-    Configuration for Stage 2 — RT-DETR inference.
+    Configuration for Stage 2 -- RT-DETR inference.
 
     weights:
         Path to the trained RT-DETR-L checkpoint (.pt file).
-        Use ml/weights/rtdetr_l_rdd2022.pt (PSO-optimised, mAP50=0.465 val).
+        Default: N-RDD2024 fine-tuned checkpoint (Run 2, mAP50=0.577 val).
 
     conf:
-        Confidence threshold. Detections below this are discarded.
-        0.35 is the recommended operational value — it sits near the
-        macro-averaged F1 peak (0.369) and gives precision > 0.70 for
-        all four trained classes. (Ref: Section 4.5, Table 4.9)
+        Reference confidence threshold documented in the thesis (0.35).
+        Note: Ultralytics model.predict() is actually called with conf=0.001
+        and per-class filtering is applied as post-processing using
+        CLASS_CONF_THRESHOLDS. This field is retained for documentation,
+        logging, and CLI help text.
 
     iou:
-        IoU threshold for internal duplicate suppression. RT-DETR uses
-        bipartite matching so NMS is not applied, but Ultralytics still
-        accepts this parameter for the decoder's score filtering.
+        IoU threshold for internal duplicate suppression.
         0.6 is the standard value used during mAP evaluation.
 
     imgsz:
@@ -102,19 +190,16 @@ class DetectorConfig:
 
     device:
         "cpu", "cuda", "cuda:0", "0", etc.
-        Defaults to "cpu" for portability — switch to "cuda" on Kaggle/GPU.
 
     batch_size:
-        Number of frames to infer in a single forward pass.
-        On CPU, 1 is fastest due to memory transfer overhead.
-        On GPU, increase to 4–8 for throughput.
+        Frames per forward pass. Keep at 1 for CPU; increase to 4-8 on GPU.
     """
-    weights: str = "ml/weights/rtdetr_l_rdd2022.pt"
-    conf: float = 0.35
-    iou: float = 0.6
-    imgsz: int = 640
-    device: str = "cpu"
-    batch_size: int = 1
+    weights:    str   = "ml/weights/rtdetr_l_nrdd2024.pt"
+    conf:       float = 0.35
+    iou:        float = 0.6
+    imgsz:      int   = 640
+    device:     str   = "cpu"
+    batch_size: int   = 1
 
 
 # ---------------------------------------------------------------------------
@@ -123,14 +208,18 @@ class DetectorConfig:
 @dataclass
 class BoundingBox:
     """A single detection bounding box in pixel coordinates."""
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    class_id: int
-    class_name: str
-    confidence: float
-    severity_prior: str   # from CLASS_SEVERITY_PRIOR
+    x1:               float
+    y1:               float
+    x2:               float
+    y2:               float
+    class_id:         int
+    class_name:       str
+    confidence:       float
+    threshold_applied: float       # per-class threshold that was applied
+    severity_prior:   str          # from CLASS_SEVERITY_PRIOR
+    is_damage:        bool         # structural road damage
+    is_infrastructure: bool        # infrastructure annotation (manhole etc.)
+    is_marking:       bool         # road marking annotation (D50, D60)
 
     @property
     def width(self) -> float:
@@ -145,36 +234,40 @@ class BoundingBox:
         return self.width * self.height
 
     @property
-    def centre(self):
+    def centre(self) -> tuple[float, float]:
         return ((self.x1 + self.x2) / 2, (self.y1 + self.y2) / 2)
 
     def to_dict(self) -> dict:
         return {
-            "x1": round(self.x1, 2),
-            "y1": round(self.y1, 2),
-            "x2": round(self.x2, 2),
-            "y2": round(self.y2, 2),
-            "class_id":      self.class_id,
-            "class_name":    self.class_name,
-            "confidence":    round(self.confidence, 4),
-            "severity_prior": self.severity_prior,
+            "x1":               round(self.x1, 2),
+            "y1":               round(self.y1, 2),
+            "x2":               round(self.x2, 2),
+            "y2":               round(self.y2, 2),
+            "class_id":         self.class_id,
+            "class_name":       self.class_name,
+            "confidence":       round(self.confidence, 4),
+            "threshold_applied": self.threshold_applied,
+            "severity_prior":   self.severity_prior,
+            "is_damage":        self.is_damage,
+            "is_infrastructure": self.is_infrastructure,
+            "is_marking":       self.is_marking,
         }
 
 
 @dataclass
 class DetectionResult:
-    """All detections for one frame."""
-    frame_path: str
-    frame_index: int
-    timestamp_s: float
-    latitude: Optional[float]
-    longitude: Optional[float]
-    wall_time: Optional[str]
-    lighting: str
+    """All detections for one frame, including GPS and lighting context."""
+    frame_path:    str
+    frame_index:   int
+    timestamp_s:   float
+    latitude:      Optional[float]
+    longitude:     Optional[float]
+    wall_time:     Optional[str]
+    lighting:      str
     sun_elevation: Optional[float]
-    image_width: int
-    image_height: int
-    boxes: List[BoundingBox] = field(default_factory=list)
+    image_width:   int
+    image_height:  int
+    boxes:         List[BoundingBox] = field(default_factory=list)
 
     @property
     def n_detections(self) -> int:
@@ -183,6 +276,18 @@ class DetectionResult:
     @property
     def has_detections(self) -> bool:
         return len(self.boxes) > 0
+
+    @property
+    def damage_boxes(self) -> List[BoundingBox]:
+        return [b for b in self.boxes if b.is_damage]
+
+    @property
+    def marking_boxes(self) -> List[BoundingBox]:
+        return [b for b in self.boxes if b.is_marking]
+
+    @property
+    def infrastructure_boxes(self) -> List[BoundingBox]:
+        return [b for b in self.boxes if b.is_infrastructure]
 
     def to_dict(self) -> dict:
         return {
@@ -206,24 +311,32 @@ class DetectionResult:
 # ---------------------------------------------------------------------------
 class Detector:
     """
-    Stage 2 — RT-DETR-L inference wrapper.
+    Stage 2 -- RT-DETR-L inference wrapper.
 
-    The model is loaded once at construction time and reused across all frames.
-    Ultralytics handles image resizing and normalisation internally.
+    The model is loaded once at construction time (lazy, on first call to
+    run()) and reused across all frames in the batch.
     """
 
     def __init__(self, config: Optional[DetectorConfig] = None):
-        self.cfg = config or DetectorConfig()
+        self.cfg    = config or DetectorConfig()
         self._model = None
         logger.info(
-            "Detector config | weights=%s | conf=%.2f | iou=%.2f | "
+            "Detector config | weights=%s | ref_conf=%.2f | iou=%.2f | "
             "imgsz=%d | device=%s | batch=%d",
             self.cfg.weights, self.cfg.conf, self.cfg.iou,
             self.cfg.imgsz, self.cfg.device, self.cfg.batch_size,
         )
+        logger.info(
+            "Per-class thresholds: %s",
+            {k: v for k, v in CLASS_CONF_THRESHOLDS.items()},
+        )
 
-    def _load_model(self):
-        """Lazy-load the RT-DETR model on first call."""
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _load_model(self) -> None:
+        """Lazy-load the RT-DETR model on first call to run()."""
         if self._model is not None:
             return
 
@@ -231,135 +344,229 @@ class Detector:
         if not weights_path.exists():
             raise FileNotFoundError(
                 f"Weights not found: {self.cfg.weights}\n"
-                f"Download from Kaggle dataset 'cluj-road-weights' and place at "
-                f"ml/weights/rtdetr_l_rdd2022.pt"
+                f"Place the checkpoint at the path above or update "
+                f"DetectorConfig.weights."
             )
 
         try:
             from ultralytics import RTDETR
         except ImportError:
             raise ImportError(
-                "ultralytics not installed. Run: pip install ultralytics==8.2.18"
+                "ultralytics is not installed.\n"
+                "Install with: pip install ultralytics==8.3.143"
             )
 
-        logger.info("Loading RT-DETR-L weights from: %s", self.cfg.weights)
+        logger.info("Loading RT-DETR-L from: %s", self.cfg.weights)
         self._model = RTDETR(str(weights_path))
-        logger.info("Model loaded. Classes: %s", CLASS_NAMES)
+        logger.info("Model loaded | classes: %s", CLASS_NAMES)
+
+    def _validate_class_names(self) -> None:
+        """
+        Warn if the checkpoint's built-in class names differ from CLASS_NAMES.
+        A mismatch means the weights were trained on a different schema.
+        """
+        if self._model is None:
+            return
+        model_names = self._model.names or {}
+        for idx, expected in enumerate(CLASS_NAMES):
+            actual = model_names.get(idx, "<missing>")
+            if actual != expected:
+                logger.warning(
+                    "Class ID %d mismatch -- checkpoint says '%s', "
+                    "CLASS_NAMES says '%s'. "
+                    "Ensure the weights match the N-RDD2024 10-class schema.",
+                    idx, actual, expected,
+                )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def run(
         self,
-        frames,   # List[FrameResult] from preprocessor
+        frames,                         # List[FrameResult] from preprocessor
         output_dir: Optional[str] = None,
     ) -> List[DetectionResult]:
         """
         Run RT-DETR inference on all frames in the manifest.
 
+        The global Ultralytics confidence threshold is set to 0.001 so that
+        all raw predictions reach this method. Per-class filtering using
+        CLASS_CONF_THRESHOLDS is applied in the inner loop.
+
         Args:
-            frames:     List of FrameResult objects from preprocessor.
+            frames:     List of FrameResult objects from Stage 1 (Preprocessor).
             output_dir: If provided, saves detections.json here.
 
         Returns:
-            List of DetectionResult, one per frame (including frames with
-            zero detections — these are kept so downstream stages can
-            correlate by frame_index).
+            List of DetectionResult, one per successfully processed frame.
+            Frames with zero accepted detections are included so downstream
+            stages can correlate by frame_index.
         """
         self._load_model()
+        self._validate_class_names()
 
         results: List[DetectionResult] = []
-        n_frames = len(frames)
-        total_boxes = 0
+        n_frames      = len(frames)
+        total_boxes   = 0
+        total_dropped = 0
 
-        logger.info("=== Detector.run === %d frames", n_frames)
+        logger.info(
+            "=== Detector.run === %d frames | device=%s",
+            n_frames, self.cfg.device,
+        )
 
         for idx, frame in enumerate(frames):
+
             if not Path(frame.frame_path).exists():
                 logger.warning(
-                    "Frame %d: image file not found at %s — skipping",
+                    "Frame %d: image not found at %s -- skipping",
                     frame.frame_index, frame.frame_path,
                 )
                 continue
 
-            # Run inference — Ultralytics handles resize, normalise, forward pass
-            preds = self._model.predict(
-                source=frame.frame_path,
-                conf=self.cfg.conf,
-                iou=self.cfg.iou,
-                imgsz=self.cfg.imgsz,
-                device=self.cfg.device,
-                verbose=False,
-            )
+            # ----------------------------------------------------------
+            # Inference.
+            # conf=0.001 -- cast the widest possible net; per-class
+            # filtering happens below.  TTA is disabled (augment=False).
+            # ----------------------------------------------------------
+            try:
+                preds = self._model.predict(
+                    source=frame.frame_path,
+                    conf=0.001,
+                    iou=self.cfg.iou,
+                    imgsz=self.cfg.imgsz,
+                    device=self.cfg.device,
+                    augment=False,    # TTA disabled -- zero gain (Section 4.5)
+                    verbose=False,
+                    save=False,
+                )
+            except Exception:
+                logger.exception(
+                    "Frame %d: inference failed on %s",
+                    frame.frame_index, frame.frame_path,
+                )
+                continue
 
-            # Ultralytics returns a list of Results, one per image
-            pred = preds[0]
+            pred         = preds[0]
             img_h, img_w = pred.orig_shape
 
+            # ----------------------------------------------------------
+            # Per-class confidence filter
+            # ----------------------------------------------------------
             boxes: List[BoundingBox] = []
+
             if pred.boxes is not None and len(pred.boxes) > 0:
                 for box in pred.boxes:
-                    coords = box.xyxy[0].tolist()   # [x1, y1, x2, y2]
-                    cls_id = int(box.cls[0].item())
-                    conf   = float(box.conf[0].item())
+                    coords    = box.xyxy[0].tolist()
+                    cls_id    = int(box.cls[0].item())
+                    conf      = float(box.conf[0].item())
 
-                    # Guard against unexpected class IDs
                     if cls_id >= len(CLASS_NAMES):
                         logger.warning(
-                            "Frame %d: unknown class_id %d — skipping box",
+                            "Frame %d: unknown class_id %d -- skipping box",
                             frame.frame_index, cls_id,
                         )
                         continue
 
-                    cls_name = CLASS_NAMES[cls_id]
+                    cls_name  = CLASS_NAMES[cls_id]
+                    threshold = CLASS_CONF_THRESHOLDS.get(cls_name, 0.35)
+
+                    if conf < threshold:
+                        total_dropped += 1
+                        logger.debug(
+                            "DROPPED  %-28s  conf=%.3f  threshold=%.2f  "
+                            "frame=%d",
+                            cls_name, conf, threshold, frame.frame_index,
+                        )
+                        continue
+
                     boxes.append(BoundingBox(
-                        x1=coords[0], y1=coords[1],
-                        x2=coords[2], y2=coords[3],
-                        class_id=cls_id,
-                        class_name=cls_name,
-                        confidence=conf,
-                        severity_prior=CLASS_SEVERITY_PRIOR[cls_name],
+                        x1                = coords[0],
+                        y1                = coords[1],
+                        x2                = coords[2],
+                        y2                = coords[3],
+                        class_id          = cls_id,
+                        class_name        = cls_name,
+                        confidence        = round(conf, 4),
+                        threshold_applied = threshold,
+                        severity_prior    = CLASS_SEVERITY_PRIOR[cls_name],
+                        is_damage         = cls_name in DAMAGE_CLASSES,
+                        is_infrastructure = cls_name in INFRASTRUCTURE_CLASSES,
+                        is_marking        = cls_name in MARKING_CLASSES,
                     ))
 
             total_boxes += len(boxes)
 
             result = DetectionResult(
-                frame_path=frame.frame_path,
-                frame_index=frame.frame_index,
-                timestamp_s=frame.timestamp_s,
-                latitude=frame.latitude,
-                longitude=frame.longitude,
-                wall_time=frame.wall_time.isoformat() if frame.wall_time else None,
-                lighting=frame.lighting,
-                sun_elevation=frame.sun_elevation,
-                image_width=img_w,
-                image_height=img_h,
-                boxes=boxes,
+                frame_path    = frame.frame_path,
+                frame_index   = frame.frame_index,
+                timestamp_s   = frame.timestamp_s,
+                latitude      = frame.latitude,
+                longitude     = frame.longitude,
+                wall_time     = (
+                    frame.wall_time.isoformat() if frame.wall_time else None
+                ),
+                lighting      = frame.lighting,
+                sun_elevation = frame.sun_elevation,
+                image_width   = img_w,
+                image_height  = img_h,
+                boxes         = boxes,
             )
             results.append(result)
 
+            # Log every 10 frames, or any frame that has detections
             if idx % 10 == 0 or len(boxes) > 0:
                 logger.info(
-                    "Frame %d/%d | t=%.1fs | %d detection(s) %s",
-                    idx + 1, n_frames,
+                    "Frame %d/%d | t=%.1fs | gps=(%s,%s) | "
+                    "lighting=%-10s | %d det(s) %s",
+                    idx + 1,
+                    n_frames,
                     frame.timestamp_s,
+                    f"{frame.latitude:.5f}"
+                        if frame.latitude  is not None else "None",
+                    f"{frame.longitude:.5f}"
+                        if frame.longitude is not None else "None",
+                    frame.lighting or "unknown",
                     len(boxes),
                     [f"{b.class_name}({b.confidence:.2f})" for b in boxes],
                 )
 
+        # ------------------------------------------------------------------
         # Summary
-        frames_with_detections = sum(1 for r in results if r.has_detections)
-        logger.info("=== Detection complete ===")
-        logger.info("  Frames processed     : %d", len(results))
-        logger.info("  Frames with hits     : %d / %d (%.0f%%)",
-                    frames_with_detections, len(results),
-                    100 * frames_with_detections / max(len(results), 1))
-        logger.info("  Total boxes          : %d", total_boxes)
+        # ------------------------------------------------------------------
+        frames_with_hits = sum(1 for r in results if r.has_detections)
 
-        # Class breakdown
-        class_counts: dict = {}
+        logger.info("=== Detection complete ===")
+        logger.info("  Frames processed   : %d", len(results))
+        logger.info(
+            "  Frames with hits   : %d / %d  (%.0f%%)",
+            frames_with_hits, len(results),
+            100 * frames_with_hits / max(len(results), 1),
+        )
+        logger.info("  Boxes accepted     : %d", total_boxes)
+        logger.info(
+            "  Boxes dropped      : %d  (below per-class threshold)",
+            total_dropped,
+        )
+
+        class_counts: dict[str, int] = {}
         for r in results:
             for b in r.boxes:
-                class_counts[b.class_name] = class_counts.get(b.class_name, 0) + 1
+                class_counts[b.class_name] = \
+                    class_counts.get(b.class_name, 0) + 1
+
+        logger.info("  Per-class counts:")
         for cls, cnt in sorted(class_counts.items(), key=lambda x: -x[1]):
-            logger.info("    %-25s : %d", cls, cnt)
+            tag = (
+                "[DAMAGE]"  if cls in DAMAGE_CLASSES        else
+                "[INFRA]"   if cls in INFRASTRUCTURE_CLASSES else
+                "[MARKING]"
+            )
+            logger.info(
+                "    %-28s : %3d  %s  threshold=%.2f",
+                cls, cnt, tag, CLASS_CONF_THRESHOLDS.get(cls, 0.35),
+            )
 
         if output_dir:
             self.save_detections(results, output_dir)
@@ -371,24 +578,30 @@ class Detector:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def save_detections(results: List[DetectionResult], output_dir: str) -> str:
+    def save_detections(
+        results: List[DetectionResult],
+        output_dir: str,
+    ) -> str:
         """Save detection results to detections.json in output_dir."""
-        out = Path(output_dir)
+        out      = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         out_path = out / "detections.json"
 
         payload = {
-            "n_frames":   len(results),
-            "n_boxes":    sum(r.n_detections for r in results),
-            "class_names": CLASS_NAMES,
-            "frames":     [r.to_dict() for r in results],
+            "n_frames":         len(results),
+            "n_boxes_accepted": sum(r.n_detections for r in results),
+            "class_names":      CLASS_NAMES,
+            "class_thresholds": CLASS_CONF_THRESHOLDS,
+            "frames":           [r.to_dict() for r in results],
         }
 
         with out_path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(payload, f, indent=2, ensure_ascii=False)
 
-        logger.info("Detections saved: %s (%d frames, %d boxes)",
-                    out_path, payload["n_frames"], payload["n_boxes"])
+        logger.info(
+            "Detections saved: %s  (%d frames, %d boxes)",
+            out_path, payload["n_frames"], payload["n_boxes_accepted"],
+        )
         return str(out_path)
 
     @staticmethod
@@ -401,29 +614,48 @@ class Detector:
         for fr in payload["frames"]:
             boxes = [
                 BoundingBox(
-                    x1=b["x1"], y1=b["y1"], x2=b["x2"], y2=b["y2"],
-                    class_id=b["class_id"],
-                    class_name=b["class_name"],
-                    confidence=b["confidence"],
-                    severity_prior=b.get("severity_prior", "S2"),
+                    x1                = b["x1"],
+                    y1                = b["y1"],
+                    x2                = b["x2"],
+                    y2                = b["y2"],
+                    class_id          = b["class_id"],
+                    class_name        = b["class_name"],
+                    confidence        = b["confidence"],
+                    threshold_applied = b.get("threshold_applied", 0.35),
+                    severity_prior    = b.get("severity_prior", "S2"),
+                    is_damage         = b.get(
+                        "is_damage",
+                        b["class_name"] in DAMAGE_CLASSES,
+                    ),
+                    is_infrastructure = b.get(
+                        "is_infrastructure",
+                        b["class_name"] in INFRASTRUCTURE_CLASSES,
+                    ),
+                    is_marking        = b.get(
+                        "is_marking",
+                        b["class_name"] in MARKING_CLASSES,
+                    ),
                 )
                 for b in fr["boxes"]
             ]
             results.append(DetectionResult(
-                frame_path=fr["frame_path"],
-                frame_index=fr["frame_index"],
-                timestamp_s=fr["timestamp_s"],
-                latitude=fr.get("latitude"),
-                longitude=fr.get("longitude"),
-                wall_time=fr.get("wall_time"),
-                lighting=fr.get("lighting", "unknown"),
-                sun_elevation=fr.get("sun_elevation"),
-                image_width=fr["image_width"],
-                image_height=fr["image_height"],
-                boxes=boxes,
+                frame_path    = fr["frame_path"],
+                frame_index   = fr["frame_index"],
+                timestamp_s   = fr["timestamp_s"],
+                latitude      = fr.get("latitude"),
+                longitude     = fr.get("longitude"),
+                wall_time     = fr.get("wall_time"),
+                lighting      = fr.get("lighting", "unknown"),
+                sun_elevation = fr.get("sun_elevation"),
+                image_width   = fr["image_width"],
+                image_height  = fr["image_height"],
+                boxes         = boxes,
             ))
 
-        logger.info("Loaded detections: %s (%d frames)", detections_path, len(results))
+        logger.info(
+            "Loaded detections: %s  (%d frames)",
+            detections_path, len(results),
+        )
         return results
 
 
@@ -442,35 +674,53 @@ def _setup_logging(verbose: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="CRIS Stage 2 — RT-DETR-L road damage detector."
+        description="Stage 2 -- RT-DETR-L road damage detector (N-RDD2024)."
     )
-    parser.add_argument("--manifest",  required=True,
-                        help="manifest.json from preprocessor (Stage 1)")
-    parser.add_argument("--weights",   default="ml/weights/rtdetr_l_rdd2022.pt",
-                        help="Path to RT-DETR-L .pt weights file")
-    parser.add_argument("--output",    required=True,
-                        help="Output directory for detections.json")
-    parser.add_argument("--conf",      type=float, default=0.35,
-                        help="Confidence threshold (default 0.35)")
-    parser.add_argument("--iou",       type=float, default=0.6,
-                        help="IoU threshold (default 0.6)")
-    parser.add_argument("--device",    default="cpu",
-                        help="Device: cpu | cuda | cuda:0 (default: cpu)")
-    parser.add_argument("--verbose",   action="store_true")
+    parser.add_argument(
+        "--manifest", required=True,
+        help="manifest.json produced by Stage 1 (Preprocessor)",
+    )
+    parser.add_argument(
+        "--weights",
+        default="ml/weights/rtdetr_l_nrdd2024.pt",
+        help="Path to RT-DETR-L .pt checkpoint",
+    )
+    parser.add_argument(
+        "--output", required=True,
+        help="Output directory for detections.json",
+    )
+    parser.add_argument(
+        "--conf", type=float, default=0.35,
+        help="Reference confidence threshold (documented value; actual "
+             "per-class thresholds are defined in CLASS_CONF_THRESHOLDS)",
+    )
+    parser.add_argument(
+        "--iou", type=float, default=0.6,
+        help="IoU threshold (default 0.6)",
+    )
+    parser.add_argument(
+        "--device", default="cpu",
+        help="Inference device: cpu | cuda | cuda:0  (default: cpu)",
+    )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Enable DEBUG-level logging",
+    )
     args = parser.parse_args()
 
     _setup_logging(args.verbose)
 
-    # Load preprocessor manifest
     from pipeline.preprocessor import Preprocessor
     frames = Preprocessor.load_manifest(args.manifest)
-    logger.info("Loaded %d frames from manifest", len(frames))
+    logger.info(
+        "Loaded %d frames from manifest: %s", len(frames), args.manifest,
+    )
 
     cfg = DetectorConfig(
-        weights=args.weights,
-        conf=args.conf,
-        iou=args.iou,
-        device=args.device,
+        weights = args.weights,
+        conf    = args.conf,
+        iou     = args.iou,
+        device  = args.device,
     )
     detector = Detector(cfg)
     detector.run(frames, output_dir=args.output)
