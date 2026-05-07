@@ -162,10 +162,21 @@ def load_frame_list() -> list:
         logger.info("Loading manifest: %s", CLUJ_MANIFEST)
         with open(CLUJ_MANIFEST, encoding="utf-8") as f:
             manifest = json.load(f)
-        # Normalise Windows backslashes in stored frame_path values
+
+        # The manifest stores Windows-style relative paths
+        # (e.g. "data\processed\frames\cluj\frame_000000_t0.000.jpg").
+        # On Windows, Path() parses these correctly but resolves them
+        # against the CWD which may be wrong.
+        # Solution: use PureWindowsPath to reliably extract just the
+        # filename, then join with the absolute CLUJ_FRAME_DIR.
+        from pathlib import PureWindowsPath
         for entry in manifest:
-            entry["frame_path"] = str(Path(entry["frame_path"]))
+            raw = entry["frame_path"]
+            fname = PureWindowsPath(raw).name   # "frame_000000_t0.000.jpg"
+            entry["frame_path"] = str(CLUJ_FRAME_DIR / fname)
+
         logger.info("Manifest: %d entries", len(manifest))
+        logger.info("First frame path: %s", manifest[0]["frame_path"])
         return manifest
 
     # Fallback — no manifest present
@@ -178,7 +189,7 @@ def load_frame_list() -> list:
     logger.info("Found %d frames via glob (no manifest)", len(jpgs))
     return [
         {
-            "frame_path":    str(jpg),
+            "frame_path":    str(jpg.resolve()),  # absolute path
             "frame_index":   idx,
             "timestamp_s":   round(idx / EXTRACT_FPS, 3),
             "lighting":      None,
