@@ -213,7 +213,7 @@ def overlay_mask(image: np.ndarray, mask: np.ndarray, colour: tuple) -> np.ndarr
 # Main
 # ---------------------------------------------------------------------------
 
-def main(limit: int | None = None, damage_only: bool = False) -> None:
+def main(limit: int | None = None, damage_only: bool = False, device_str: str = "auto") -> None:
 
     # Create output directories
     OUT_BBOX_IMAGES.mkdir(parents=True, exist_ok=True)
@@ -234,9 +234,23 @@ def main(limit: int | None = None, damage_only: bool = False) -> None:
     logger.info("Total frames to process: %d", len(manifest))
 
     # ------------------------------------------------------------------
-    # Device selection -- use CUDA if available, fall back to CPU
+    # Device selection
     # ------------------------------------------------------------------
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device_str in ("auto", "cuda"):
+        if torch.cuda.is_available():
+            device = "cuda"
+        else:
+            if device_str == "cuda":
+                logger.error(
+                    "CUDA requested but torch.cuda.is_available() returned False. "
+                    "Falling back to CPU."
+                )
+            else:
+                logger.warning("CUDA not available — falling back to CPU.")
+            device = "cpu"
+    else:
+        device = device_str
+
     logger.info("Device: %s", device)
     if device == "cuda":
         logger.info("GPU: %s  |  VRAM: %.1f GB",
@@ -446,7 +460,8 @@ def main(limit: int | None = None, damage_only: bool = False) -> None:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA,
             )
 
-            mask_save_name = f"{frame_stem}_box{i}_{box['class_name']}_mask.jpg"
+            frame_stem_safe = frame_stem.replace(".", "_")
+            mask_save_name = f"{frame_stem_safe}_box{i}_{box['class_name']}_mask.jpg"
             cv2.imwrite(str(OUT_SAM_MASKS / mask_save_name), mask_overlay)
 
         # Update JSON with geometry features and SAM scores
@@ -512,5 +527,9 @@ if __name__ == "__main__":
         help="Only run SAM on structural damage classes "
              "(skip lane_line_blur, pedestrian_crossing_blur, manhole_cover)",
     )
+    parser.add_argument(
+        "--device", default="auto",
+        help="Inference device: auto | cpu | cuda | cuda:0  (default: auto)",
+    )
     args = parser.parse_args()
-    main(limit=args.limit, damage_only=args.damage_only)
+    main(limit=args.limit, damage_only=args.damage_only, device_str=args.device)

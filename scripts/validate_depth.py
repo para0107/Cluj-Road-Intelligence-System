@@ -454,7 +454,7 @@ def load_sam_mask_panel(
         mask_path = SAM_MASKS_DIR / filename
 
         if not mask_path.exists():
-            logger.debug("Mask not found (skipping): %s", mask_path)
+            logger.warning("Mask not found (skipping): %s", mask_path)
             continue
 
         mask_img = cv2.imread(str(mask_path))
