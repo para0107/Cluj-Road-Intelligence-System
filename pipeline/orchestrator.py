@@ -566,7 +566,17 @@ class Orchestrator:
             # Monodepth2 repo path and weights dir come from the existing
             # DepthEstimatorConfig defaults, which already encode the correct paths.
             # No .env override needed — the paths are static per-machine constants.
-            cfg = DepthEstimatorConfig(device=self._device)
+            cfg = DepthEstimatorConfig(
+                monodepth_root = os.environ.get(
+                    'MONODEPTH_ROOT',
+                    r'C:\Facultate\pothole-detection\Monodepth',
+                ),
+                weights_dir    = os.environ.get(
+                    'MONODEPTH_WEIGHTS_DIR',
+                    r'C:\Facultate\pothole-detection\Pothole-Detection\ml\weights\mono_640x192',
+                ),
+                device         = self._device,
+            )
             dep_results = DepthEstimator(cfg).run(
                 seg_results,
                 output_dir=str(depth_path.parent),

@@ -421,7 +421,17 @@ def run_drive(
 
         # ── Stage 4 — DepthEstimator ──────────────────────────────────────
         depth_path = session_dir / "04_depth" / "depth_estimates.json"
-        dep_cfg    = DepthEstimatorConfig(device=device)
+        dep_cfg    = DepthEstimatorConfig(
+            monodepth_root = os.environ.get(
+                'MONODEPTH_ROOT',
+                r'C:\Facultate\pothole-detection\Monodepth',
+            ),
+            weights_dir    = os.environ.get(
+                'MONODEPTH_WEIGHTS_DIR',
+                r'C:\Facultate\pothole-detection\Pothole-Detection\ml\weights\mono_640x192',
+            ),
+            device         = device,
+        )
         dep_results = _run_stage(
             summary, "depth_estimator",
             resume_path = depth_path,
