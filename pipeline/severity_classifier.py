@@ -17,14 +17,21 @@ Severity formula
 ----------------
 Step 1 — Signal normalisation (all to [0, 1]):
     S_depth     = depth_norm
-    S_area      = min(surface_area_px / 5000, 1.0)
-    S_contrast  = min(interior_contrast / 3.0, 1.0)
-    S_sharpness = min(edge_sharpness / 100.0, 1.0)
+    S_area      = min(surface_area_px / 1000, 1.0)
+    S_contrast  = min(interior_contrast / 2.0, 1.0)
+    S_sharpness = min(edge_sharpness / 60.0, 1.0)
 
-    Denominators derived from empirical class means in Run 3 validation:
-    - 5000 px: alligator crack mean area (largest damage class, 5,405 px)
-    - 3.0:     pedestrian crossing blur mean contrast (highest class, 2.882)
-    - 100.0:   maximum observed edge sharpness (~103, rutting)
+    Denominators recalibrated after first validation run (severity_summary.json
+    showed only 4/1919 detections at S4/S5 with original values):
+    - 1000 px: ~p25 of structural damage area range. Pothole mean=327px gives
+               S_area=0.327 (meaningful); alligator crack 5405px capped at 1.0.
+               Original 5000px produced S_area=0.065 for potholes (near-zero).
+    - 2.0:     midpoint of contrast range. Preserves differentiation between
+               low-contrast cracks and high-contrast crossings/potholes.
+               Original 3.0 squashed damage classes to <0.10.
+    - 60.0:    approximate sharpness of rutting (58.28), the sharpest structural
+               class. All damage classes now produce meaningful sharpness signals.
+               Original 100.0 compressed all signals to <0.50.
 
 Step 2 — Per-class weighted combination:
     raw_score = w_depth*S_depth + w_area*S_area
@@ -105,9 +112,13 @@ logger = logging.getLogger(__name__)
 # Formula constants
 # ---------------------------------------------------------------------------
 
-AREA_NORM_DENOM      = 5000.0
-CONTRAST_NORM_DENOM  = 3.0
-SHARPNESS_NORM_DENOM = 100.0
+AREA_NORM_DENOM      = 1000.0   # px -- recalibrated: ~p25 of structural damage area range
+                                 # pothole (327px) → S_area=0.327; alligator (5405px) → capped 1.0
+                                 # Original 5000.0 produced S_area≈0.065 for potholes (near-zero)
+CONTRAST_NORM_DENOM  = 2.0      # -- midpoint of contrast range; preserves damage differentiation
+                                 # Original 3.0 squashed low-contrast damage classes to <0.10
+SHARPNESS_NORM_DENOM = 60.0     # -- approximate mean sharpness of rutting (58.28), the sharpest
+                                 # structural damage class; original 100.0 compressed all signals
 
 # Per-class signal weights [w_depth, w_area, w_contrast, w_sharpness]
 # Each tuple sums to 1.0.
@@ -160,17 +171,18 @@ class SeverityConfig:
 
     area_norm_denom:
         Denominator for surface_area_px normalisation (pixels).
-        Default 5000 — the approximate mean area of alligator cracks,
-        the largest damage class in Run 3 (mean = 5,405 px).
+        Default 1000 — approximately the p25 of structural damage area range.
+        Recalibrated from 5000 (which produced near-zero signals for potholes).
 
     contrast_norm_denom:
         Denominator for interior_contrast normalisation.
-        Default 3.0 — the approximate mean contrast of
-        pedestrian_crossing_blur, the highest class in Run 3 (mean = 2.882).
+        Default 2.0 — midpoint of observed contrast range.
+        Recalibrated from 3.0 (which squashed damage class contrasts to <0.10).
 
     sharpness_norm_denom:
         Denominator for edge_sharpness normalisation.
-        Default 100.0 — the maximum observed sharpness value in Run 3 (~103).
+        Default 60.0 — approximate sharpness of rutting (58.28), the sharpest
+        structural damage class. Recalibrated from 100.0.
 
     signal_weights:
         Per-class signal weight tuples. Can be replaced with a custom dict

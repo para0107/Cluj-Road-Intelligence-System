@@ -12,9 +12,12 @@ Formula (fully documented in pipeline/severity_classifier.py):
 
   1. Four signal scores, each normalised to [0, 1]:
        S_depth     = depth_norm
-       S_area      = min(surface_area_px / 5000, 1.0)
-       S_contrast  = min(interior_contrast / 3.0, 1.0)
-       S_sharpness = min(edge_sharpness / 100.0, 1.0)
+       S_area      = min(surface_area_px / 1000, 1.0)
+       S_contrast  = min(interior_contrast / 2.0, 1.0)
+       S_sharpness = min(edge_sharpness / 60.0, 1.0)
+
+       Denominators recalibrated from (5000, 3.0, 100.0) after first
+       validation run showed only 4/1919 detections at S4/S5.
 
   2. Class-specific signal weights (sum to 1.0 per class):
        raw_score = w_depth*S_depth + w_area*S_area
@@ -90,9 +93,18 @@ OUT_DIR = PROJECT_ROOT / "data" / "validation_nrdd_2024" / "severity"
 # ---------------------------------------------------------------------------
 
 # Signal normalisation denominators
-AREA_NORM_DENOM      = 5000.0   # px -- alligator crack mean = 5,405 px (largest class)
-CONTRAST_NORM_DENOM  = 3.0      # -- pedestrian crossing mean = 2.882 (highest class)
-SHARPNESS_NORM_DENOM = 100.0    # -- max observed in data ~103 (rutting)
+# Recalibrated after first full validation run (severity_summary.json):
+# Original denominators (5000, 3.0, 100.0) set signals to near-zero for small
+# features (e.g. pothole S_area = 327/5000 = 0.065), causing only 4/1919
+# detections to reach S4/S5. Denominators are now set to the 25th percentile
+# of each signal across structural damage classes so that all classes produce
+# meaningful signal values, not only the largest/brightest instances.
+AREA_NORM_DENOM      = 1000.0   # px -- ~p25 of structural damage area range;
+                                 #      pothole (327px) S_area=0.327, alligator (5405px) capped at 1.0
+CONTRAST_NORM_DENOM  = 2.0      # -- midpoint of contrast range; preserves damage differentiation
+                                 #      without squashing low-contrast classes (cracks) to near-zero
+SHARPNESS_NORM_DENOM = 60.0     # -- approximate mean sharpness of rutting (58.28), the sharpest
+                                 #      structural damage class; all damage classes get meaningful signal
 
 # Per-class signal weights: [w_depth, w_area, w_contrast, w_sharpness]
 # Each row sums to 1.0.
