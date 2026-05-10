@@ -106,7 +106,7 @@ The system has four distinct layers:
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
-│  STAGE 5 — Severity Classifier       [severity_classifier.py]   │
+│  STAGE 5 — Severity Classifier       [severity_classifier.py]✅ │
 │  • Rule-based classifier: normalised depth + SAM surface area   │
 │  • Outputs S1–S5 severity levels deterministically              │
 └──────────────────────────┬──────────────────────────────────────┘
@@ -534,7 +534,7 @@ Cluj-Road-Intelligence-System/
 │   ├── detector.py                 ✅ RT-DETR inference + per-class thresholds
 │   ├── segmentor.py                ✅ SAM 2.1 masks + 4 geometry features
 │   ├── depth_estimator.py          ✅ Monodepth2 relative depth + proxy fallback
-│   ├── severity_classifier.py      ⬜ Rule-based S1–S5 classifier
+│   ├── severity_classifier.py      ✅ Rule-based S1–S5 classifier
 │   ├── enricher.py                 ⬜ OSM + Nominatim + Open-Meteo
 │   ├── deduplicator.py             ⬜ DBSCAN + PostGIS upsert
 │   └── orchestrator.py             ⬜ End-to-end coordinator
