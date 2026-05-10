@@ -6,40 +6,38 @@ Stage 6 of the road damage detection inference pipeline.
 Responsibilities:
   - Accept frames from Stage 5 (severity_results.json["frames"])
   - For every frame with valid GPS coordinates (latitude, longitude):
-      * Nominatim reverse geocoding → street_name, road_class (OSM highway tag),
-        road_importance (1-3)
+      * Nominatim reverse geocoding → street_name, road_class, road_importance
       * OSM Overpass API            → confirmed road_importance, infra_proximity (m)
       * Open-Meteo historical API   → weather at detection timestamp
-        (temperature_c, precipitation_mm, wind_speed_kmh, condition)
-  - Frames without GPS (latitude=None or longitude=None) are forwarded
-    with all enrichment fields set to None. No exception is raised.
-  - Returns a list of EnrichmentResult objects with all original fields
-    preserved and enrichment fields added.
+  - Frames without GPS are forwarded with all enrichment fields set to None.
+  - All API credentials and URLs are read from the .env file via python-dotenv.
+    No secrets are hardcoded in this file.
+
+Environment variables read (from .env):
+    NOMINATIM_USER_AGENT   — required by Nominatim usage policy (max 1 req/s)
+    OSM_OVERPASS_URL       — Overpass endpoint
+    OPEN_METEO_BASE_URL    — Open-Meteo endpoint
 
 API compliance:
   Nominatim — nominatim.openstreetmap.org
-    - Hard rate limit: max 1 request per second (enforced via delay_nominatim_s).
-    - User-Agent: set to a project-specific string (RIDS/1.0).
-      Stock library User-Agents are NOT permitted by the Nominatim usage policy.
+    - Max 1 request per second enforced via delay_nominatim_s (default 1.1 s).
+    - User-Agent is read from NOMINATIM_USER_AGENT in .env.
     - Reference: https://operations.osmfoundation.org/policies/nominatim/
-
-  OSM Overpass — overpass-api.de
-    - No strict per-second limit; heavy use discouraged.
+  OSM Overpass — overpass-api.de (or OVERPASS_URL from .env)
     - Rate-limited by delay_overpass_s (default 0.5 s).
-
-  Open-Meteo — api.open-meteo.com
+  Open-Meteo — api.open-meteo.com (or OPEN_METEO_BASE_URL from .env)
     - Free for non-commercial use. No API key required.
     - Reference: https://open-meteo.com/en/terms
 
-Road importance mapping (from OSM highway tag):
-  3 → primary, trunk, motorway, motorway_link, trunk_link, primary_link
-  2 → secondary, tertiary, secondary_link, tertiary_link, unclassified
+Road importance mapping (OSM highway tag → int):
+  3 → primary, trunk, motorway and their links
+  2 → secondary, tertiary, unclassified
   1 → residential, living_street, service, track, path, footway, cycleway
 
 Infrastructure proximity:
   Haversine distance (metres) from detection GPS to nearest OSM node tagged
-  amenity=hospital|fire_station|school within a 500 m Overpass radius.
-  None if no result is found.
+  amenity=hospital|fire_station|school within 500 m.
+  None if not found.
 
 Usage (module):
     from pipeline.enricher import Enricher, EnricherConfig
@@ -60,6 +58,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -67,48 +66,46 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import requests
+from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
-# Module-level logger — callers attach their own handlers.
+# Load .env — must happen before reading os.environ
+# ---------------------------------------------------------------------------
+load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Module-level logger
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# API endpoints
+# API configuration — all from .env, never hardcoded
 # ---------------------------------------------------------------------------
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
-OVERPASS_URL  = "https://overpass-api.de/api/interpreter"
-OPENMETEO_URL = "https://api.open-meteo.com/v1/forecast"
-
-# User-Agent required by Nominatim usage policy.
-# Stock library defaults (e.g. "python-requests/2.x") are not accepted.
-NOMINATIM_USER_AGENT = (
-    "RIDS/1.0 (Road Infrastructure Detection System; "
-    "Babes-Bolyai University thesis project 2026; "
-    "contact: student research project)"
+_NOMINATIM_URL       = "https://nominatim.openstreetmap.org/reverse"
+_OVERPASS_URL        = os.environ.get("OSM_OVERPASS_URL",      "https://overpass-api.de/api/interpreter")
+_OPENMETEO_URL       = os.environ.get("OPEN_METEO_BASE_URL",   "https://api.open-meteo.com/v1/forecast")
+_NOMINATIM_UA        = os.environ.get(
+    "NOMINATIM_USER_AGENT",
+    "RIDS/1.0 (Babes-Bolyai University thesis 2026)"
 )
 
 # ---------------------------------------------------------------------------
-# OSM highway tag → road importance (1–3)
+# OSM highway tag → road importance
 # ---------------------------------------------------------------------------
 _HIGHWAY_IMPORTANCE: Dict[str, int] = {
-    # 3 — major arterials
-    "motorway":      3, "motorway_link": 3,
-    "trunk":         3, "trunk_link":    3,
-    "primary":       3, "primary_link":  3,
-    # 2 — secondary network
-    "secondary":     2, "secondary_link": 2,
-    "tertiary":      2, "tertiary_link":  2,
+    "motorway": 3, "motorway_link": 3,
+    "trunk":    3, "trunk_link":    3,
+    "primary":  3, "primary_link":  3,
+    "secondary":     2, "secondary_link":  2,
+    "tertiary":      2, "tertiary_link":   2,
     "unclassified":  2,
-    # 1 — local / residential
-    "residential":   1, "living_street": 1,
-    "service":       1, "track":         1,
-    "path":          1, "footway":       1,
+    "residential":   1, "living_street":   1,
+    "service":       1, "track":           1,
+    "path":          1, "footway":         1,
     "cycleway":      1,
 }
 
-# OSM amenity tags considered critical infrastructure
-_INFRA_AMENITY_TAGS = ["hospital", "fire_station", "school"]
+_INFRA_AMENITY_TAGS   = ["hospital", "fire_station", "school"]
 _INFRA_SEARCH_RADIUS_M = 500
 
 
@@ -119,24 +116,23 @@ _INFRA_SEARCH_RADIUS_M = 500
 class EnricherConfig:
     """
     All tunable parameters for Stage 6.
+    Credentials and URLs are NOT stored here — they are read from .env.
 
     delay_nominatim_s:
-        Minimum seconds between consecutive Nominatim requests.
-        Nominatim usage policy mandates at most 1 request/second.
-        Default 1.1 s adds a small safety margin above that limit.
+        Seconds between Nominatim requests. Must be >= 1.0 per usage policy.
+        Default 1.1 adds a safety margin.
 
     delay_overpass_s:
-        Minimum seconds between consecutive Overpass requests.
-        Default 0.5 s is polite for the public endpoint.
+        Seconds between Overpass requests. Default 0.5 is polite.
 
     timeout_s:
-        HTTP request timeout in seconds for all APIs.
+        HTTP timeout in seconds for all API calls.
 
     skip_weather:
-        If True, skip Open-Meteo calls (useful for offline testing).
+        If True, skip Open-Meteo calls (faster, useful offline).
 
     skip_overpass:
-        If True, skip OSM Overpass calls (road importance + infra proximity).
+        If True, skip OSM Overpass calls.
     """
     delay_nominatim_s: float = 1.1
     delay_overpass_s:  float = 0.5
@@ -153,7 +149,7 @@ class WeatherInfo:
     temperature_c:    Optional[float]
     precipitation_mm: Optional[float]
     wind_speed_kmh:   Optional[float]
-    condition:        Optional[str]   # "clear" | "cloudy" | "rain" | "snow" | "unknown"
+    condition:        Optional[str]
 
     def to_dict(self) -> dict:
         return {
@@ -166,16 +162,12 @@ class WeatherInfo:
 
 @dataclass
 class EnrichedBox:
-    """
-    One detection from Stage 5, enriched with location and weather metadata.
-    All original Stage 5 fields are preserved via the raw dict.
-    Enrichment fields are None when GPS is unavailable.
-    """
+    """One detection from Stage 5, enriched with location and weather data."""
     raw:             dict
     street_name:     Optional[str]
-    road_class:      Optional[str]    # OSM highway tag, e.g. "residential"
-    road_importance: Optional[int]    # 1–3 derived from highway tag
-    infra_proximity: Optional[float]  # metres to nearest critical infrastructure
+    road_class:      Optional[str]
+    road_importance: Optional[int]
+    infra_proximity: Optional[float]
     weather:         Optional[WeatherInfo]
 
     def to_dict(self) -> dict:
@@ -233,7 +225,6 @@ class EnrichmentResult:
 # ---------------------------------------------------------------------------
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in metres between two GPS points."""
     R = 6_371_000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -243,43 +234,40 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def _wmo_to_condition(wmo_code: Optional[int]) -> str:
-    """
-    Map a WMO weather interpretation code to a human-readable condition.
-    Reference: https://open-meteo.com/en/docs#weathervariables
-    """
-    if wmo_code is None:
+def _wmo_to_condition(code: Optional[int]) -> str:
+    """Map WMO weather code to a human-readable condition string."""
+    if code is None:
         return "unknown"
-    if wmo_code == 0:
+    if code == 0:
         return "clear"
-    if wmo_code in (1, 2, 3):
+    if code in (1, 2, 3):
         return "cloudy"
-    if 51 <= wmo_code <= 67:
+    if 51 <= code <= 67:
         return "rain"
-    if 71 <= wmo_code <= 77:
+    if 71 <= code <= 77:
         return "snow"
-    if 80 <= wmo_code <= 99:
+    if 80 <= code <= 99:
         return "rain"
     return "unknown"
 
 
 # ---------------------------------------------------------------------------
-# Enricher class
+# Enricher
 # ---------------------------------------------------------------------------
 
 class Enricher:
     """
     Stage 6 — spatial and weather enrichment.
 
-    Instantiate once and call run() for each survey session.
-    The requests.Session is reused across all API calls to reduce
-    connection overhead.
+    All API credentials are loaded from .env at module import time.
+    No secrets are passed as constructor arguments or stored in config.
     """
 
     def __init__(self, cfg: EnricherConfig) -> None:
         self.cfg = cfg
         self._session = requests.Session()
-        self._session.headers.update({"User-Agent": NOMINATIM_USER_AGENT})
+        # User-Agent from .env — required by Nominatim usage policy
+        self._session.headers.update({"User-Agent": _NOMINATIM_UA})
         self._last_nominatim: float = 0.0
         self._last_overpass:  float = 0.0
 
@@ -293,34 +281,24 @@ class Enricher:
         output_dir: Optional[str] = None,
     ) -> List[EnrichmentResult]:
         """
-        Enrich all frames from a severity_results.json["frames"] list.
+        Enrich all frames from severity_results.json["frames"].
 
-        Parameters
-        ----------
-        frames     : list of frame dicts from severity_results.json
-        output_dir : if given, save enriched.json to this directory
-
-        Returns
-        -------
-        List[EnrichmentResult]
+        Per-frame enrichment: one Nominatim + one Overpass + one Open-Meteo
+        call per frame (not per box). Result is shared by all boxes in the frame.
         """
         t_start = time.perf_counter()
         results: List[EnrichmentResult] = []
 
-        n_gps_ok   = 0
-        n_gps_miss = 0
-        n_nom_ok   = 0
-        n_nom_fail = 0
-        n_ov_ok    = 0
-        n_ov_fail  = 0
-        n_wx_ok    = 0
-        n_wx_fail  = 0
-        n_boxes    = 0
+        n_gps_ok = n_gps_miss = 0
+        n_nom_ok = n_nom_fail = 0
+        n_ov_ok  = n_ov_fail  = 0
+        n_wx_ok  = n_wx_fail  = 0
+        n_boxes  = 0
 
         for frame in frames:
-            lat = frame.get("latitude")
-            lon = frame.get("longitude")
-            gps_ok = (lat is not None and lon is not None)
+            lat    = frame.get("latitude")
+            lon    = frame.get("longitude")
+            gps_ok = lat is not None and lon is not None
 
             if gps_ok:
                 n_gps_ok += 1
@@ -328,16 +306,10 @@ class Enricher:
                 n_gps_miss += 1
                 logger.debug(
                     "Frame %s — no GPS, enrichment skipped",
-                    frame.get("frame_stem", frame.get("frame_path", "?")),
+                    frame.get("frame_path", "?"),
                 )
 
-            # Per-frame enrichment (one Nominatim + one Overpass + one weather
-            # call per frame; the result is shared by all boxes in the frame)
-            street_name     = None
-            road_class      = None
-            road_importance = None
-            infra_proximity = None
-            weather         = None
+            street_name = road_class = road_importance = infra_proximity = weather = None
 
             if gps_ok:
                 nom = self._nominatim_reverse(lat, lon)
@@ -402,7 +374,7 @@ class Enricher:
         logger.info("  Nominatim OK / fail    : %d / %d", n_nom_ok, n_nom_fail)
         logger.info("  Overpass   OK / fail   : %d / %d", n_ov_ok, n_ov_fail)
         logger.info("  Weather    OK / fail   : %d / %d", n_wx_ok, n_wx_fail)
-        logger.info("  Boxes enriched         : %d", n_boxes)
+        logger.info("  Boxes total            : %d", n_boxes)
         logger.info("  Elapsed                : %.1f s", elapsed)
 
         if output_dir:
@@ -438,24 +410,17 @@ class Enricher:
         return payload["frames"]
 
     # ------------------------------------------------------------------
-    # Nominatim
+    # Nominatim — 1 req/s rate limit enforced here
     # ------------------------------------------------------------------
 
     def _nominatim_reverse(self, lat: float, lon: float) -> Optional[dict]:
-        """
-        Reverse geocode one GPS point to street name and OSM highway tag.
-
-        Enforces the Nominatim usage policy:
-          - 1 request per second (hard limit in the policy)
-          - Project-specific User-Agent set at session level
-        """
         elapsed = time.perf_counter() - self._last_nominatim
         if elapsed < self.cfg.delay_nominatim_s:
             time.sleep(self.cfg.delay_nominatim_s - elapsed)
 
         try:
             resp = self._session.get(
-                NOMINATIM_URL,
+                _NOMINATIM_URL,
                 params={
                     "lat": lat, "lon": lon,
                     "format": "jsonv2",
@@ -473,35 +438,31 @@ class Enricher:
             self._last_nominatim = time.perf_counter()
             return None
 
-        address = data.get("address", {}) or {}
+        address    = data.get("address", {}) or {}
         street_name = (
-            address.get("road")
-            or address.get("pedestrian")
-            or address.get("footway")
-            or address.get("cycleway")
-            or address.get("residential")
-            or "unknown"
+            address.get("road") or address.get("pedestrian")
+            or address.get("footway") or address.get("cycleway")
+            or address.get("residential") or "unknown"
         )
-        extratags  = data.get("extratags", {}) or {}
-        road_class = extratags.get("highway") or data.get("type") or "unknown"
+        extratags   = data.get("extratags", {}) or {}
+        road_class  = extratags.get("highway") or data.get("type") or "unknown"
         road_importance = _HIGHWAY_IMPORTANCE.get(road_class, 1)
 
         logger.debug(
             "Nominatim → street=%s  class=%s  importance=%d",
             street_name, road_class, road_importance,
         )
-        return {"street_name": street_name, "road_class": road_class,
-                "road_importance": road_importance}
+        return {
+            "street_name":     street_name,
+            "road_class":      road_class,
+            "road_importance": road_importance,
+        }
 
     # ------------------------------------------------------------------
     # Overpass
     # ------------------------------------------------------------------
 
     def _overpass_query(self, lat: float, lon: float) -> Optional[dict]:
-        """
-        Query Overpass for the nearest highway way (road_importance)
-        and nearest critical infrastructure node (infra_proximity).
-        """
         elapsed = time.perf_counter() - self._last_overpass
         if elapsed < self.cfg.delay_overpass_s:
             time.sleep(self.cfg.delay_overpass_s - elapsed)
@@ -513,13 +474,12 @@ class Enricher:
             f"  way(around:50,{lat},{lon})[highway];\n"
             f"  node(around:{_INFRA_SEARCH_RADIUS_M},{lat},{lon})"
             f'[amenity~"{amenity_filter}"];\n'
-            f");\n"
-            f"out body;\n"
+            f");\nout body;\n"
         )
 
         try:
             resp = self._session.post(
-                OVERPASS_URL,
+                _OVERPASS_URL,
                 data={"data": query},
                 timeout=self.cfg.timeout_s,
             )
@@ -537,11 +497,9 @@ class Enricher:
         for el in elements:
             tags = el.get("tags", {})
             if el.get("type") == "way" and road_importance is None:
-                hw = tags.get("highway", "")
-                road_importance = _HIGHWAY_IMPORTANCE.get(hw)
+                road_importance = _HIGHWAY_IMPORTANCE.get(tags.get("highway", ""))
             if el.get("type") == "node" and tags.get("amenity") in _INFRA_AMENITY_TAGS:
-                el_lat = el.get("lat")
-                el_lon = el.get("lon")
+                el_lat, el_lon = el.get("lat"), el.get("lon")
                 if el_lat and el_lon:
                     dist = _haversine_m(lat, lon, el_lat, el_lon)
                     if dist < min_dist:
@@ -555,17 +513,12 @@ class Enricher:
         return {"road_importance": road_importance, "infra_proximity": infra_proximity}
 
     # ------------------------------------------------------------------
-    # Open-Meteo weather
+    # Open-Meteo — no API key required
     # ------------------------------------------------------------------
 
     def _fetch_weather(
         self, lat: float, lon: float, timestamp_s: float
     ) -> Optional[WeatherInfo]:
-        """
-        Fetch hourly weather from Open-Meteo for the given GPS point
-        and approximate timestamp. The closest available hour is used.
-        No API key required for non-commercial use.
-        """
         try:
             dt = datetime.fromtimestamp(timestamp_s, tz=timezone.utc)
         except (OSError, OverflowError, ValueError):
@@ -575,11 +528,11 @@ class Enricher:
 
         try:
             resp = self._session.get(
-                OPENMETEO_URL,
+                _OPENMETEO_URL,
                 params={
                     "latitude":       lat,
                     "longitude":      lon,
-                    "hourly":         "temperature_2m,precipitation,windspeed_10m,weathercode",
+                    "hourly": "temperature_2m,precipitation,windspeed_10m,weathercode",
                     "start_date":     date_str,
                     "end_date":       date_str,
                     "timezone":       "UTC",
@@ -597,9 +550,7 @@ class Enricher:
         if not times:
             return None
 
-        # Select the index closest to the frame's hour-of-day
-        target_h = dt.hour
-        best_idx = min(range(len(times)), key=lambda i: abs(i - target_h))
+        best_idx = min(range(len(times)), key=lambda i: abs(i - dt.hour))
 
         def _val(key: str) -> Optional[float]:
             vals = hourly.get(key, [])
@@ -607,14 +558,17 @@ class Enricher:
             return float(v) if v is not None else None
 
         wmo_list  = hourly.get("weathercode", [])
-        wmo_code  = int(wmo_list[best_idx]) if best_idx < len(wmo_list) and wmo_list[best_idx] is not None else None
-        condition = _wmo_to_condition(wmo_code)
+        wmo_code  = (
+            int(wmo_list[best_idx])
+            if best_idx < len(wmo_list) and wmo_list[best_idx] is not None
+            else None
+        )
 
         return WeatherInfo(
             temperature_c    = _val("temperature_2m"),
             precipitation_mm = _val("precipitation"),
             wind_speed_kmh   = _val("windspeed_10m"),
-            condition        = condition,
+            condition        = _wmo_to_condition(wmo_code),
         )
 
 
@@ -638,7 +592,8 @@ def main() -> None:
                         help="severity_results.json from Stage 5")
     parser.add_argument("--output", required=True,
                         help="Output directory for enriched.json")
-    parser.add_argument("--delay_nominatim", type=float, default=1.1)
+    parser.add_argument("--delay_nominatim", type=float, default=1.1,
+                        help="Seconds between Nominatim requests (min 1.0)")
     parser.add_argument("--delay_overpass",  type=float, default=0.5)
     parser.add_argument("--skip_weather",  action="store_true")
     parser.add_argument("--skip_overpass", action="store_true")

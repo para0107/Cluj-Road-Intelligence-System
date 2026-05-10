@@ -7,56 +7,64 @@ pandas==2.2.2
 opencv-python==4.9.0.80
 Pillow==9.5.0
 albumentations==1.4.8
-networks
-tensorboardx
+tensorboardX
 
 # ─── Deep Learning ───────────────────────────────────────────────────────────
 # PyTorch — install separately depending on your CUDA version.
-# With CUDA 11.8 (most common on 4GB laptops):
+# With CUDA 12.1 (RTX 2050, driver 555.97):
+#   pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+# With CUDA 11.8:
 #   pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu118
-# CPU only (fallback, very slow for training):
+# CPU only (very slow for training):
 #   pip install torch==2.2.2 torchvision==0.17.2
 torch==2.2.2
 torchvision==0.17.2
 timm==0.9.16                   # EfficientNet-B3 pretrained weights
 
+# ─── Monodepth2 networks module ──────────────────────────────────────────────
+# NOT installed via pip. Copy ml/weights/networks/ from the Monodepth2 repo:
+#   git clone https://github.com/nianticlabs/monodepth2.git
+#   cp -r monodepth2/networks/ Pothole-Detection/ml/weights/networks/
+# Runtime dependency only (injected into sys.path at runtime):
+tensorboardX                   # required by Monodepth2 networks module at import time
+
 # ─── RT-DETR via Ultralytics ─────────────────────────────────────────────────
 ultralytics==8.2.18            # includes RT-DETR-L support
 
-# ─── Segment Anything Model ──────────────────────────────────────────────────
-# SAM is installed from the GitHub repo, not PyPI.
-# Run: pip install git+https://github.com/facebookresearch/segment-anything.git
-# Listed here for documentation:
-# segment-anything @ git+https://github.com/facebookresearch/segment-anything.git
+# ─── Segment Anything Model 2 ────────────────────────────────────────────────
+# SAM 2 is NOT on PyPI — install from GitHub:
+#   pip install git+https://github.com/facebookresearch/sam2.git
+# Listed here for documentation only:
+# sam2 @ git+https://github.com/facebookresearch/sam2.git
 
 # ─── Machine Learning ────────────────────────────────────────────────────────
 xgboost==2.0.3
-scikit-learn==1.4.2            # DBSCAN, preprocessing, metrics
-optuna==3.6.1                  # Bayesian hyperparameter optimization
+scikit-learn==1.4.2            # DBSCAN (Stage 7), preprocessing, metrics
+optuna==3.6.1                  # Bayesian hyperparameter optimisation
 mealpy==3.0.1                  # PSO, WOA, ACO via unified interface
 
 # ─── Database ────────────────────────────────────────────────────────────────
-psycopg2-binary==2.9.9         # PostgreSQL driver
-SQLAlchemy==2.0.30             # ORM
+psycopg2-binary==2.9.9         # PostgreSQL driver (Stage 8)
+SQLAlchemy==2.0.30             # ORM (backend)
 GeoAlchemy2==0.15.1            # PostGIS spatial types for SQLAlchemy
 alembic==1.13.1                # DB migrations
 
 # ─── Geospatial ──────────────────────────────────────────────────────────────
 shapely==2.0.4                 # geometry operations
 pyproj==3.6.1                  # coordinate reference system transforms
-osmnx==1.9.3                   # OpenStreetMap road network download
-networkx==3.3                  # graph algorithms (used by osmnx + ACO)
-geopy==2.4.1                   # Nominatim reverse geocoding
+osmnx==1.9.3                   # OpenStreetMap road network download + ACO route planning
+networkx==3.3                  # graph algorithms (osmnx + ACO)
+geopy==2.4.1                   # Nominatim geocoding (geopy.distance used as fallback)
 
 # ─── Solar / Sun Angle ───────────────────────────────────────────────────────
-pysolar==0.11                  # sun altitude + azimuth from GPS + timestamp
+pysolar==0.11                  # sun altitude + azimuth (Stage 1 lighting classification)
 
 # ─── GPX Parsing ─────────────────────────────────────────────────────────────
-gpxpy==1.6.2                   # parse .gpx GPS logs
+gpxpy==1.6.2                   # parse .gpx GPS logs (Stage 1)
 
-# ─── HTTP / APIs ─────────────────────────────────────────────────────────────
-requests==2.32.2               # Open-Meteo, Nominatim API calls
-httpx==0.27.0                  # async HTTP (used by FastAPI)
+# ─── HTTP / APIs (Stages 6 — Enrichment) ─────────────────────────────────────
+requests==2.32.2               # Nominatim, Overpass, Open-Meteo API calls
+httpx==0.27.0                  # async HTTP (FastAPI test client + uvicorn)
 
 # ─── Backend ─────────────────────────────────────────────────────────────────
 fastapi==0.111.0
@@ -65,15 +73,40 @@ pydantic==2.7.1
 pydantic-settings==2.2.1
 
 # ─── Scheduler ───────────────────────────────────────────────────────────────
-APScheduler==3.10.4
+APScheduler==3.10.4            # daily pipeline trigger (02:00 Bucharest TZ)
 
 # ─── Utilities ───────────────────────────────────────────────────────────────
-tqdm==4.66.4                   # progress bars during frame extraction / inference
-loguru==0.7.2                  # structured logging across all pipeline stages
+tqdm==4.66.4                   # progress bars
+loguru==0.7.2                  # structured logging (setup_db.py)
 PyYAML==6.0.1                  # config files
 python-multipart==0.0.9        # FastAPI file uploads
 
 # ─── Testing ─────────────────────────────────────────────────────────────────
 pytest==8.2.0
 pytest-asyncio==0.23.6
-httpx==0.27.0                  # also used for testing FastAPI endpoints
+# httpx is listed above; also used for FastAPI test client
+
+# =============================================================================
+# NEW DEPENDENCIES — added for Stages 6, 7, 8 and pipeline modules
+# =============================================================================
+
+# ─── Stage 6 (Enricher) ──────────────────────────────────────────────────────
+# requests already listed above — used for Nominatim, Overpass, Open-Meteo
+# No additional packages required for enricher.py
+
+# ─── Stage 7 (Deduplicator) ──────────────────────────────────────────────────
+# scikit-learn already listed above — DBSCAN
+# numpy already listed above — coordinate array construction
+
+# ─── Stage 8 (DbWriter) ──────────────────────────────────────────────────────
+# psycopg2-binary already listed above
+
+# ─── Pipeline dataclass helpers ──────────────────────────────────────────────
+# dataclasses is part of Python 3.7+ stdlib — no install needed
+
+# ─── Visualization (dedup HTML report, depth panels) ─────────────────────────
+# Chart.js and Leaflet.js are loaded from CDN in the HTML report — no pip package
+# opencv-python already listed above — three-panel depth visualisation
+
+# ─── Type hints / compatibility ──────────────────────────────────────────────
+typing-extensions==4.11.0      # backport for older Python; used by pydantic + SQLAlchemy

@@ -5,53 +5,33 @@ Stage 8 of the road damage detection inference pipeline.
 
 Responsibilities:
   - Accept frames from Stage 7 (deduplicated.json["frames"])
-  - Write every retained (non-duplicate) detection to the PostgreSQL 15 +
-    PostGIS database, table: detections
-  - Upsert logic: if a detection at the same GPS point (within 2 m) and
-    same class already exists in the database, update the existing record:
-      * Increment detection_count
-      * Update last_detection_date
-      * Recalculate deterioration_rate = (new_severity - old_severity) / days_since
-      * Update surrounding_density (count of detections within 50 m)
-  - New detections are inserted with detection_count=1
-  - Computes priority_score = severity_weight × road_weight × infra_weight
-    × log(detection_count + 1) after every upsert
-  - Skips detections without GPS (cannot be stored in PostGIS)
-  - Returns a DbWriteResult summary
+  - Write every retained (non-duplicate) GPS-equipped detection to the
+    PostgreSQL 15 + PostGIS database (table: detections, created by setup_db.py)
+  - Upsert: if same class already exists within DEDUP_CLUSTER_RADIUS_M metres,
+    UPDATE; otherwise INSERT
+  - Updates surrounding_density for all records within
+    SURROUNDING_DENSITY_RADIUS_M metres of each write
+  - Computes priority_score = w_severity × w_road × w_infra × log(count + 1)
+  - Detections without GPS are always skipped (PostGIS requires a POINT geometry)
 
-Database schema (created by scripts/setup_db.py):
-  CREATE EXTENSION IF NOT EXISTS postgis;
-  CREATE TABLE detections (
-      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      geom                  GEOMETRY(POINT, 4326),
-      damage_type           TEXT,
-      confidence            FLOAT,
-      surface_area          FLOAT,
-      edge_sharpness        FLOAT,
-      interior_contrast     FLOAT,
-      mask_compactness      FLOAT,
-      depth_estimate        FLOAT,
-      depth_confidence      FLOAT,
-      severity              TEXT,
-      severity_confidence   FLOAT,
-      lighting_condition    TEXT,
-      shadow_geometry_score FLOAT,
-      street_name           VARCHAR,
-      road_importance       SMALLINT,
-      infra_proximity       FLOAT,
-      weather               JSONB,
-      first_detection_date  TIMESTAMP,
-      last_detection_date   TIMESTAMP,
-      detection_count       INT DEFAULT 1,
-      deterioration_rate    FLOAT DEFAULT 0.0,
-      surrounding_density   INT DEFAULT 0,
-      priority_score        FLOAT
-  );
-  CREATE INDEX detections_geom_idx ON detections USING GIST(geom);
+Environment variables read exclusively from .env (via python-dotenv):
+    POSTGRES_HOST                — default localhost
+    POSTGRES_PORT                — default 5432
+    POSTGRES_DB                  — default cluj_monitor
+    POSTGRES_USER                — default postgres
+    POSTGRES_PASSWORD            — no default (must be set in .env)
+    DATABASE_URL                 — SQLAlchemy URL (read as fallback reference)
+    DEDUP_CLUSTER_RADIUS_M       — upsert proximity threshold (default 2.0)
+    SURROUNDING_DENSITY_RADIUS_M — density search radius (default 50.0)
 
-Connection:
-  Configured via DbWriterConfig or environment variables:
-    RIDS_DB_HOST, RIDS_DB_PORT, RIDS_DB_NAME, RIDS_DB_USER, RIDS_DB_PASSWORD
+NO credentials are hardcoded in this file. All secrets come from .env.
+
+Schema alignment with setup_db.py:
+    surface_area_px  → surface_area_cm2    (px used as proxy until metric depth available)
+    depth_norm       → depth_estimate_cm   (relative, not metric — name kept for compat)
+    infra_proximity  → infra_proximity_m
+    severity string  → severity SMALLINT   (S1=1 … S5=5)
+    first/last dates → first_detected, last_detected  (DATE columns)
 
 Usage (module):
     from pipeline.db_writer import DbWriter, DbWriterConfig
@@ -60,8 +40,7 @@ Usage (module):
 Usage (CLI):
     python pipeline/db_writer.py
         --input   data/validation_nrdd_2024/deduplicated/deduplicated.json
-        [--host localhost] [--port 5432] [--dbname rids]
-        [--user postgres] [--password postgres]
+        [--output data/validation_nrdd_2024/db_write/]
         [--dry_run]
         [--verbose]
 
@@ -75,10 +54,17 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timezone, date
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
+
+from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Load .env — must be called before reading os.environ
+# ---------------------------------------------------------------------------
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -86,48 +72,48 @@ from typing import Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Priority score weights
-# Mirrors Eq. (priority) in the thesis.
-# severity_weight: maps S1–S5 to numeric weight
-# road_weight:     maps road_importance 1–3 to weight
-# infra_weight:    distance-decayed weight from infra_proximity
+# DB connection parameters — all from .env, no defaults for the password
 # ---------------------------------------------------------------------------
+_DB_HOST     = os.environ.get("POSTGRES_HOST",     "localhost")
+_DB_PORT     = int(os.environ.get("POSTGRES_PORT", "5432"))
+_DB_NAME     = os.environ.get("POSTGRES_DB",       "cluj_monitor")
+_DB_USER     = os.environ.get("POSTGRES_USER",     "postgres")
+_DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
+
+# Radii from .env
+_UPSERT_RADIUS_M  = float(os.environ.get("DEDUP_CLUSTER_RADIUS_M",       "2.0"))
+_DENSITY_RADIUS_M = float(os.environ.get("SURROUNDING_DENSITY_RADIUS_M", "50.0"))
+
+# ---------------------------------------------------------------------------
+# Severity level → SMALLINT (setup_db.py uses SMALLINT for severity)
+# ---------------------------------------------------------------------------
+_SEVERITY_TO_INT: Dict[str, int] = {
+    "S1": 1, "S2": 2, "S3": 3, "S4": 4, "S5": 5,
+}
+
+# Score weights for priority formula
 _SEVERITY_WEIGHT: Dict[str, float] = {
-    "S1": 0.10,
-    "S2": 0.25,
-    "S3": 0.50,
-    "S4": 0.75,
-    "S5": 1.00,
+    "S1": 0.10, "S2": 0.25, "S3": 0.50, "S4": 0.75, "S5": 1.00,
 }
-
 _ROAD_WEIGHT: Dict[int, float] = {
-    1: 0.5,   # residential
-    2: 0.75,  # secondary
-    3: 1.0,   # primary / arterial
+    1: 0.50,   # residential
+    2: 0.75,   # secondary
+    3: 1.00,   # primary / arterial
 }
-
-# Infrastructure proximity weight: 1.0 if within 50 m, decays to 0.1 beyond 500 m
-_INFRA_MAX_WEIGHT   = 1.0
-_INFRA_MIN_WEIGHT   = 0.1
-_INFRA_CLOSE_M      = 50.0
-_INFRA_FAR_M        = 500.0
-
-# Neighbour search radius for surrounding_density (metres)
-_DENSITY_RADIUS_M   = 50.0
-
-# Upsert proximity threshold — reuse existing record if within this distance
-_UPSERT_RADIUS_M    = 2.0
+_INFRA_MAX_WEIGHT = 1.0
+_INFRA_MIN_WEIGHT = 0.1
+_INFRA_CLOSE_M    = 50.0
+_INFRA_FAR_M      = 500.0
 
 
-def _infra_weight(infra_proximity: Optional[float]) -> float:
-    if infra_proximity is None:
+def _infra_weight(infra_m: Optional[float]) -> float:
+    if infra_m is None:
         return _INFRA_MIN_WEIGHT
-    if infra_proximity <= _INFRA_CLOSE_M:
+    if infra_m <= _INFRA_CLOSE_M:
         return _INFRA_MAX_WEIGHT
-    if infra_proximity >= _INFRA_FAR_M:
+    if infra_m >= _INFRA_FAR_M:
         return _INFRA_MIN_WEIGHT
-    # Linear decay between CLOSE and FAR
-    frac = (infra_proximity - _INFRA_CLOSE_M) / (_INFRA_FAR_M - _INFRA_CLOSE_M)
+    frac = (infra_m - _INFRA_CLOSE_M) / (_INFRA_FAR_M - _INFRA_CLOSE_M)
     return _INFRA_MAX_WEIGHT - frac * (_INFRA_MAX_WEIGHT - _INFRA_MIN_WEIGHT)
 
 
@@ -139,9 +125,10 @@ def _priority_score(
 ) -> float:
     """
     priority_score = w_severity × w_road × w_infra × log(detection_count + 1)
+    Matches Eq. (priority) in the thesis.
     """
-    w_sev  = _SEVERITY_WEIGHT.get(severity_level, 0.25)
-    w_road = _ROAD_WEIGHT.get(road_importance or 1, 0.5)
+    w_sev   = _SEVERITY_WEIGHT.get(severity_level, 0.25)
+    w_road  = _ROAD_WEIGHT.get(road_importance or 1, 0.50)
     w_infra = _infra_weight(infra_proximity)
     return round(w_sev * w_road * w_infra * math.log(detection_count + 1), 6)
 
@@ -152,28 +139,36 @@ def _priority_score(
 @dataclass
 class DbWriterConfig:
     """
-    Database connection parameters for Stage 8.
-    Values are read first from the dataclass fields, then from environment
-    variables (RIDS_DB_*) as fallback, then from the defaults below.
+    All DB connection parameters are read from .env at class instantiation.
+    Do not pass credentials as constructor arguments — use the .env file.
 
     dry_run:
-        If True, build all SQL but do not execute or commit.
-        Useful for testing the pipeline without a live database.
+        If True, parse all rows and log what would be written, but do not
+        open a DB connection or execute any SQL. Safe without a running DB.
     """
-    host:     str  = "localhost"
-    port:     int  = 5432
-    dbname:   str  = "rids"
-    user:     str  = "postgres"
-    password: str  = "postgres"
-    dry_run:  bool = False
+    dry_run: bool = False
+
+    # These are populated from .env in __post_init__
+    host:     str = ""
+    port:     int = 0
+    dbname:   str = ""
+    user:     str = ""
+    password: str = ""
 
     def __post_init__(self) -> None:
-        # Allow environment variable overrides
-        self.host     = os.environ.get("RIDS_DB_HOST",     self.host)
-        self.port     = int(os.environ.get("RIDS_DB_PORT", self.port))
-        self.dbname   = os.environ.get("RIDS_DB_NAME",     self.dbname)
-        self.user     = os.environ.get("RIDS_DB_USER",     self.user)
-        self.password = os.environ.get("RIDS_DB_PASSWORD", self.password)
+        # Read exclusively from .env (already loaded above)
+        self.host     = _DB_HOST
+        self.port     = _DB_PORT
+        self.dbname   = _DB_NAME
+        self.user     = _DB_USER
+        self.password = _DB_PASSWORD
+
+        if not self.password and not self.dry_run:
+            logger.warning(
+                "POSTGRES_PASSWORD is not set in .env. "
+                "Connection will likely fail. "
+                "Set POSTGRES_PASSWORD in your .env file."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -181,17 +176,17 @@ class DbWriterConfig:
 # ---------------------------------------------------------------------------
 @dataclass
 class DbWriteResult:
-    n_frames_processed: int
-    n_inserted:         int
-    n_updated:          int
-    n_skipped_no_gps:   int
+    n_frames_processed:  int
+    n_inserted:          int
+    n_updated:           int
+    n_skipped_no_gps:    int
     n_skipped_duplicate: int
-    n_errors:           int
-    dry_run:            bool
-    elapsed_s:          float
+    n_errors:            int
+    dry_run:             bool
+    elapsed_s:           float
 
     def log_summary(self) -> None:
-        mode = "DRY RUN — no data was committed" if self.dry_run else "COMMITTED"
+        mode = "DRY RUN — nothing committed" if self.dry_run else "COMMITTED"
         logger.info("=== DB Write complete (%s) ===", mode)
         logger.info("  Frames processed       : %d", self.n_frames_processed)
         logger.info("  Rows inserted (new)    : %d", self.n_inserted)
@@ -203,23 +198,20 @@ class DbWriteResult:
 
 
 # ---------------------------------------------------------------------------
-# DbWriter class
+# DbWriter
 # ---------------------------------------------------------------------------
 
 class DbWriter:
     """
     Stage 8 — PostgreSQL/PostGIS database write with upsert logic.
 
-    psycopg2 is the only runtime dependency. Install with:
-        pip install psycopg2-binary
-
-    The class does NOT import psycopg2 at module level so that
-    the rest of the pipeline can be imported in dry_run mode or
-    on machines without a PostgreSQL installation.
+    All credentials come from .env. psycopg2 is imported lazily so the
+    module can be imported in dry_run mode or on machines without a
+    PostgreSQL client.
     """
 
     def __init__(self, cfg: DbWriterConfig) -> None:
-        self.cfg = cfg
+        self.cfg   = cfg
         self._conn = None
         self._cur  = None
 
@@ -232,46 +224,35 @@ class DbWriter:
         frames: List[dict],
         output_dir: Optional[str] = None,
     ) -> DbWriteResult:
-        """
-        Write all retained detections from deduplicated frames to the DB.
-
-        Parameters
-        ----------
-        frames     : list of frame dicts from deduplicated.json["frames"]
-        output_dir : if given, saves db_write_summary.json there
-
-        Returns
-        -------
-        DbWriteResult
-        """
         import time
         t_start = time.perf_counter()
 
-        n_inserted        = 0
-        n_updated         = 0
-        n_skipped_no_gps  = 0
-        n_skipped_dup     = 0
-        n_errors          = 0
+        n_inserted       = 0
+        n_updated        = 0
+        n_skipped_no_gps = 0
+        n_skipped_dup    = 0
+        n_errors         = 0
 
         if not self.cfg.dry_run:
             self._connect()
 
         try:
             for frame in frames:
-                lat = frame.get("latitude")
-                lon = frame.get("longitude")
+                lat    = frame.get("latitude")
+                lon    = frame.get("longitude")
                 gps_ok = lat is not None and lon is not None
 
-                ts_raw  = frame.get("timestamp_s", 0.0)
+                ts_raw = frame.get("timestamp_s", 0.0)
                 try:
-                    detection_dt = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+                    dt = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
                 except (OSError, OverflowError, ValueError):
-                    detection_dt = datetime.now(tz=timezone.utc)
+                    dt = datetime.now(tz=timezone.utc)
+                det_date = dt.date()
 
-                lighting = frame.get("lighting", "unknown")
+                lighting   = frame.get("lighting", "unknown")
+                video_file = frame.get("frame_path", "")
 
                 for box in frame.get("boxes", []):
-                    # Dedup metadata — skip duplicates
                     dedup = box.get("dedup", {})
                     if dedup.get("is_duplicate", False):
                         n_skipped_dup += 1
@@ -281,19 +262,24 @@ class DbWriter:
                         n_skipped_no_gps += 1
                         continue
 
-                    # Extract all fields
                     try:
-                        row = self._box_to_row(
-                            box, lat, lon, detection_dt, lighting
-                        )
+                        row = self._build_row(box, lat, lon, det_date,
+                                              lighting, video_file)
                     except Exception as exc:
-                        logger.error("Failed to parse box: %s — %s", box, exc)
+                        logger.error(
+                            "Row parse error — class=%s (%.5f, %.5f): %s",
+                            box.get("class_name", "?"), lat or 0, lon or 0, exc,
+                        )
                         n_errors += 1
                         continue
 
                     if self.cfg.dry_run:
-                        logger.debug("DRY RUN — would upsert: %s at (%.5f, %.5f)",
-                                     row["damage_type"], lat, lon)
+                        logger.debug(
+                            "DRY RUN — would upsert: %s sev=%d pri=%.4f "
+                            "at (%.5f, %.5f)",
+                            row["damage_type"], row["severity_int"],
+                            row["priority_score"], lat, lon,
+                        )
                         n_inserted += 1
                         continue
 
@@ -305,7 +291,7 @@ class DbWriter:
                             n_updated += 1
                     except Exception as exc:
                         logger.error(
-                            "DB upsert error for %s at (%.5f, %.5f): %s",
+                            "DB upsert error — %s at (%.5f, %.5f): %s",
                             row["damage_type"], lat, lon, exc,
                         )
                         n_errors += 1
@@ -339,59 +325,71 @@ class DbWriter:
         return result
 
     # ------------------------------------------------------------------
-    # Row construction
+    # Row construction — column names match setup_db.py exactly
     # ------------------------------------------------------------------
 
-    def _box_to_row(
+    def _build_row(
         self,
-        box:          dict,
-        lat:          float,
-        lon:          float,
-        detection_dt: datetime,
-        lighting:     str,
+        box:        dict,
+        lat:        float,
+        lon:        float,
+        det_date:   date,
+        lighting:   str,
+        video_file: str,
     ) -> dict:
-        """
-        Build a flat dict ready for SQL insertion from an enriched/deduped box.
-        Raises ValueError if required fields are missing.
-        """
         enrichment = box.get("enrichment", {}) or {}
         geometry   = box.get("geometry",   {}) or {}
         depth      = box.get("depth",      {}) or {}
         severity   = box.get("severity",   {}) or {}
         weather_d  = enrichment.get("weather") or {}
 
-        severity_level = severity.get("severity_level", "S1")
-        road_importance = enrichment.get("road_importance")
-        infra_proximity = enrichment.get("infra_proximity")
-        detection_count = 1  # Will be incremented on upsert
+        sev_level   = severity.get("severity_level", "S1")
+        sev_int     = _SEVERITY_TO_INT.get(sev_level, 1)
+        road_imp    = enrichment.get("road_importance")
+        infra_prox  = enrichment.get("infra_proximity")
 
         return {
-            "geom_lat":           lat,
-            "geom_lon":           lon,
-            "damage_type":        box.get("class_name", "unknown"),
-            "confidence":         box.get("confidence"),
-            "surface_area":       geometry.get("surface_area_px"),
-            "edge_sharpness":     geometry.get("edge_sharpness"),
-            "interior_contrast":  geometry.get("interior_contrast"),
-            "mask_compactness":   geometry.get("mask_compactness"),
-            "depth_estimate":     depth.get("depth_norm"),
-            "depth_confidence":   depth.get("depth_confidence"),
-            "severity":           severity_level,
-            "severity_confidence":severity.get("severity_confidence"),
-            "lighting_condition": lighting,
-            "shadow_geometry_score": None,          # Placeholder; Stage 1 output
-            "street_name":        enrichment.get("street_name"),
-            "road_importance":    road_importance,
-            "infra_proximity":    infra_proximity,
-            "weather":            json.dumps(weather_d) if weather_d else None,
-            "first_detection_date": detection_dt,
-            "last_detection_date":  detection_dt,
-            "detection_count":    detection_count,
+            # spatial
+            "geom_lon":          lon,
+            "geom_lat":          lat,
+            "latitude":          lat,
+            "longitude":         lon,
+            # detection
+            "damage_type":       box.get("class_name", "unknown"),
+            "confidence":        float(box.get("confidence") or 0.0),
+            "frame_path":        video_file,
+            # SAM geometry — surface_area_px stored in surface_area_cm2 until
+            # metric calibration is available (documented in setup_db.py comment)
+            "surface_area_cm2":  float(geometry.get("surface_area_px") or 0.0),
+            "edge_sharpness":    float(geometry.get("edge_sharpness")  or 0.0),
+            "interior_contrast": float(geometry.get("interior_contrast") or 0.0),
+            "mask_compactness":  float(geometry.get("mask_compactness")  or 0.0),
+            # depth — relative, not metric
+            "depth_estimate_cm": float(depth.get("depth_norm") or 0.0),
+            "depth_confidence":  float(depth.get("depth_confidence") or 1.0),
+            # lighting
+            "lighting_condition":     lighting,
+            "shadow_geometry_score":  None,
+            # severity (SMALLINT 1-5)
+            "severity_int":      sev_int,
+            "severity_level":    sev_level,   # kept for internal priority calc
+            "severity_confidence": float(severity.get("severity_confidence") or 1.0),
+            # enrichment
+            "street_name":       enrichment.get("street_name"),
+            "road_importance":   road_imp,
+            "infra_proximity_m": infra_prox,
+            "weather":           json.dumps(weather_d) if weather_d else None,
+            # temporal (DATE columns in setup_db.py)
+            "first_detected":    det_date,
+            "last_detected":     det_date,
+            "detection_count":   1,
             "deterioration_rate": 0.0,
+            # derived
             "surrounding_density": 0,
-            "priority_score":     _priority_score(
-                severity_level, road_importance, infra_proximity, detection_count
-            ),
+            "priority_score":    _priority_score(sev_level, road_imp, infra_prox, 1),
+            # survey
+            "survey_date":       det_date,
+            "survey_video_file": video_file,
         }
 
     # ------------------------------------------------------------------
@@ -400,20 +398,14 @@ class DbWriter:
 
     def _upsert(self, row: dict, lat: float, lon: float) -> str:
         """
-        Upsert one detection row.
-
-        1. Search for an existing detection of the same class within
-           UPSERT_RADIUS_M metres using PostGIS ST_DWithin.
-        2. If found: UPDATE detection_count, last_detection_date,
-           deterioration_rate, surrounding_density, priority_score.
-        3. If not found: INSERT a new row.
-
+        Search for an existing detection of the same class within
+        _UPSERT_RADIUS_M (from .env DEDUP_CLUSTER_RADIUS_M).
+        UPDATE if found; INSERT if not.
         Returns "insert" or "update".
         """
-        # Search for existing record
         self._cur.execute(
             """
-            SELECT id, severity, first_detection_date, detection_count
+            SELECT id, severity, first_detected, detection_count
             FROM   detections
             WHERE  damage_type = %s
             AND    ST_DWithin(
@@ -427,32 +419,31 @@ class DbWriter:
                       ) ASC
             LIMIT  1;
             """,
-            (
-                row["damage_type"],
-                lon, lat, _UPSERT_RADIUS_M,
-                lon, lat,
-            ),
+            (row["damage_type"], lon, lat, _UPSERT_RADIUS_M, lon, lat),
         )
         existing = self._cur.fetchone()
 
         if existing is None:
-            # INSERT
+            # INSERT new row
             self._cur.execute(
                 """
                 INSERT INTO detections (
-                    geom, damage_type, confidence,
-                    surface_area, edge_sharpness, interior_contrast, mask_compactness,
-                    depth_estimate, depth_confidence,
-                    severity, severity_confidence,
+                    geom, latitude, longitude,
+                    damage_type, confidence, frame_path,
+                    surface_area_cm2, edge_sharpness,
+                    interior_contrast, mask_compactness,
+                    depth_estimate_cm, depth_confidence,
                     lighting_condition, shadow_geometry_score,
-                    street_name, road_importance, infra_proximity,
+                    severity, severity_confidence,
+                    street_name, road_importance, infra_proximity_m,
                     weather,
-                    first_detection_date, last_detection_date,
+                    first_detected, last_detected,
                     detection_count, deterioration_rate,
-                    surrounding_density, priority_score
+                    surrounding_density, priority_score,
+                    survey_date, survey_video_file
                 ) VALUES (
-                    ST_SetSRID(ST_MakePoint(%s, %s), 4326),
-                    %s, %s,
+                    ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s,
+                    %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s,
                     %s, %s,
@@ -461,87 +452,90 @@ class DbWriter:
                     %s::jsonb,
                     %s, %s,
                     %s, %s,
+                    %s, %s,
                     %s, %s
                 );
                 """,
                 (
                     row["geom_lon"], row["geom_lat"],
-                    row["damage_type"], row["confidence"],
-                    row["surface_area"], row["edge_sharpness"],
+                    row["latitude"], row["longitude"],
+                    row["damage_type"], row["confidence"], row["frame_path"],
+                    row["surface_area_cm2"], row["edge_sharpness"],
                     row["interior_contrast"], row["mask_compactness"],
-                    row["depth_estimate"], row["depth_confidence"],
-                    row["severity"], row["severity_confidence"],
+                    row["depth_estimate_cm"], row["depth_confidence"],
                     row["lighting_condition"], row["shadow_geometry_score"],
-                    row["street_name"], row["road_importance"], row["infra_proximity"],
+                    row["severity_int"], row["severity_confidence"],
+                    row["street_name"], row["road_importance"],
+                    row["infra_proximity_m"],
                     row["weather"],
-                    row["first_detection_date"], row["last_detection_date"],
+                    row["first_detected"], row["last_detected"],
                     row["detection_count"], row["deterioration_rate"],
                     row["surrounding_density"], row["priority_score"],
+                    row["survey_date"], row["survey_video_file"],
                 ),
             )
-
-            # Update surrounding_density for this new point
-            self._update_surrounding_density(lon, lat, row["damage_type"])
+            self._update_density(lon, lat)
+            logger.debug(
+                "INSERT  %s  sev=%d  pri=%.4f",
+                row["damage_type"], row["severity_int"], row["priority_score"],
+            )
             return "insert"
 
         else:
-            # UPDATE
-            existing_id          = existing[0]
-            old_severity_str     = existing[1]
-            first_dt             = existing[2]
-            old_count            = existing[3]
-            new_count            = old_count + 1
+            # UPDATE existing row
+            existing_id      = existing[0]
+            old_sev_int      = existing[1] or 1
+            first_det        = existing[2]
+            old_count        = existing[3]
+            new_count        = old_count + 1
 
-            # Deterioration rate: change in severity score per day
-            old_sev_score = _SEVERITY_WEIGHT.get(old_severity_str, 0.0)
-            new_sev_score = _SEVERITY_WEIGHT.get(row["severity"], 0.0)
-            now           = row["last_detection_date"]
-            if first_dt and isinstance(first_dt, datetime):
-                days_since = max((now - first_dt).total_seconds() / 86400.0, 1.0)
-            else:
-                days_since = 1.0
-            deterioration_rate = round((new_sev_score - old_sev_score) / days_since, 6)
-
-            new_priority = _priority_score(
-                row["severity"],
+            # Deterioration rate: Δseverity per day
+            today      = row["last_detected"]
+            days_since = max(
+                (today - first_det).days if isinstance(first_det, date) else 1,
+                1,
+            )
+            detn_rate = round(
+                (row["severity_int"] / 5.0 - old_sev_int / 5.0) / days_since, 6
+            )
+            new_pri = _priority_score(
+                row["severity_level"],
                 row["road_importance"],
-                row["infra_proximity"],
+                row["infra_proximity_m"],
                 new_count,
             )
 
             self._cur.execute(
                 """
                 UPDATE detections
-                SET    last_detection_date = %s,
+                SET    last_detected       = %s,
                        detection_count     = %s,
                        deterioration_rate  = %s,
                        priority_score      = %s,
                        severity            = %s,
                        severity_confidence = %s,
-                       confidence          = %s
+                       confidence          = %s,
+                       updated_at          = NOW()
                 WHERE  id = %s;
                 """,
                 (
-                    now,
-                    new_count,
-                    deterioration_rate,
-                    new_priority,
-                    row["severity"],
-                    row["severity_confidence"],
-                    row["confidence"],
-                    existing_id,
+                    today, new_count, detn_rate, new_pri,
+                    row["severity_int"], row["severity_confidence"],
+                    row["confidence"], existing_id,
                 ),
             )
-
-            self._update_surrounding_density(lon, lat, row["damage_type"])
+            self._update_density(lon, lat)
+            logger.debug(
+                "UPDATE  %s  id=%s  count=%d→%d  pri=%.4f",
+                row["damage_type"], existing_id, old_count, new_count, new_pri,
+            )
             return "update"
 
-    def _update_surrounding_density(
-        self, lon: float, lat: float, damage_type: str
-    ) -> None:
+    def _update_density(self, lon: float, lat: float) -> None:
         """
-        Update surrounding_density for all records within DENSITY_RADIUS_M
-        of the newly inserted/updated detection.
+        Recalculate surrounding_density for all records within
+        _DENSITY_RADIUS_M (from .env SURROUNDING_DENSITY_RADIUS_M)
+        of the point just written.
         """
         self._cur.execute(
             """
@@ -550,9 +544,7 @@ class DbWriter:
                        SELECT COUNT(*) - 1
                        FROM   detections d2
                        WHERE  ST_DWithin(
-                                  d.geom::geography,
-                                  d2.geom::geography,
-                                  %s
+                                  d.geom::geography, d2.geom::geography, %s
                               )
                    )
             WHERE  ST_DWithin(
@@ -573,13 +565,13 @@ class DbWriter:
             import psycopg2
         except ImportError:
             logger.error(
-                "psycopg2 is required for Stage 8. "
-                "Install with: pip install psycopg2-binary"
+                "psycopg2 is required for Stage 8.\n"
+                "Install: pip install psycopg2-binary"
             )
             raise
 
         logger.info(
-            "Connecting to PostgreSQL: %s@%s:%d/%s",
+            "Connecting: %s@%s:%d/%s (password from .env)",
             self.cfg.user, self.cfg.host, self.cfg.port, self.cfg.dbname,
         )
         self._conn = psycopg2.connect(
@@ -591,19 +583,15 @@ class DbWriter:
         )
         self._conn.autocommit = False
         self._cur = self._conn.cursor()
-        logger.info("Connected.")
+        logger.info("Connected to PostgreSQL.")
 
     def _disconnect(self) -> None:
-        if self._cur:
-            try:
-                self._cur.close()
-            except Exception:
-                pass
-        if self._conn:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
+        for obj in (self._cur, self._conn):
+            if obj:
+                try:
+                    obj.close()
+                except Exception:
+                    pass
         self._conn = None
         self._cur  = None
 
@@ -645,20 +633,18 @@ def _setup_logging(verbose: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Stage 8 — PostgreSQL/PostGIS database write."
+        description=(
+            "Stage 8 — PostgreSQL/PostGIS database write. "
+            "DB credentials are read from .env (POSTGRES_*)."
+        )
     )
-    parser.add_argument("--input",    required=True,
+    parser.add_argument("--input",   required=True,
                         help="deduplicated.json from Stage 7")
-    parser.add_argument("--output",   default=None,
+    parser.add_argument("--output",  default=None,
                         help="Directory to save db_write_summary.json (optional)")
-    parser.add_argument("--host",     default="localhost")
-    parser.add_argument("--port",     type=int, default=5432)
-    parser.add_argument("--dbname",   default="rids")
-    parser.add_argument("--user",     default="postgres")
-    parser.add_argument("--password", default="postgres")
-    parser.add_argument("--dry_run",  action="store_true",
+    parser.add_argument("--dry_run", action="store_true",
                         help="Parse and validate without writing to DB")
-    parser.add_argument("--verbose",  action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     _setup_logging(args.verbose)
@@ -674,14 +660,8 @@ def main() -> None:
     frames = dedup_data.get("frames", [])
     logger.info("Loaded %d frames from %s", len(frames), in_path)
 
-    cfg = DbWriterConfig(
-        host     = args.host,
-        port     = args.port,
-        dbname   = args.dbname,
-        user     = args.user,
-        password = args.password,
-        dry_run  = args.dry_run,
-    )
+    # Credentials come entirely from .env — no CLI arguments for secrets
+    cfg = DbWriterConfig(dry_run=args.dry_run)
     DbWriter(cfg).run(frames, output_dir=args.output)
 
 
