@@ -199,7 +199,7 @@ export default function MapPage() {
   // Load all detections (up to 500 for the map)
   useEffect(() => {
     Promise.all([
-      fetchDetections({ page: 1, page_size: 500 }),
+      fetchDetections({ page: 1, page_size: 100 }),
       fetchStats(),
     ])
       .then(([det, st]) => {
