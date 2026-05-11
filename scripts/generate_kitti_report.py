@@ -25,7 +25,7 @@ Data sources (all read from disk — no reprocessing):
   data/processed/sessions/kitti_<drive>/
       01_manifest/manifest.json          → frame count, GPS rate, lighting
       02_detections/detections.json      → raw detection count, class dist
-      07_deduplicated/deduplicated.json  → DBSCAN results, before/after counts
+      06_deduplicated/deduplicated.json  → DBSCAN results, before/after counts
       05_severity/severity_estimates.json → S1–S5 distribution
       session.json                       → stage timings, final counts
 
@@ -137,7 +137,7 @@ def load_drive_data(drive_id: str) -> dict:
         "manifest":   _load_json(base / "01_manifest" / "manifest.json"),
         "detections": _load_json(base / "02_detections" / "detections.json"),
         "severity":   _load_json(base / "05_severity" / "severity_estimates.json"),
-        "dedup":      _load_json(base / "07_deduplicated" / "deduplicated.json"),
+        "dedup":      _load_json(base / "06_deduplicated" / "deduplicated.json"),
     }
 
 
@@ -590,7 +590,6 @@ def fig_stage_timing(drive_data: dict) -> Optional[str]:
         "segmentor",
         "depth_estimator",
         "severity_classifier",
-        "enricher",
         "deduplicator",
         "db_writer",
     ]
@@ -600,13 +599,12 @@ def fig_stage_timing(drive_data: dict) -> Optional[str]:
         "segmentor":           "S3  Segmentor (SAM)",
         "depth_estimator":     "S4  Depth Estimator",
         "severity_classifier": "S5  Severity",
-        "enricher":            "S6  Enricher",
-        "deduplicator":        "S7  Deduplicator",
-        "db_writer":           "S8  DB Writer",
+        "deduplicator":        "S6  Deduplicator",
+        "db_writer":           "S7  DB Writer",
     }
     stage_colours = [
         "#3498db", "#e74c3c", "#8e44ad", "#27ae60",
-        "#f39c12", "#1abc9c", "#e67e22", "#2c3e50",
+        "#f39c12", "#1abc9c", "#2c3e50",
     ]
 
     drive_timings = []

@@ -1,36 +1,29 @@
 """
 scripts/validate_db_write.py
 ------------------------------
-Validation script for Stage 8 — PostgreSQL / PostGIS database write.
+Validation script for Stage 7 — PostgreSQL/PostGIS database write.
+(Renumbered from Stage 8 after enrichment removal.)
 
-Reads deduplicated.json (output of validate_deduplication.py) and runs the
-DbWriter. All database credentials are read exclusively from the project
-.env file. No passwords or connection strings are accepted as CLI arguments.
+Reads deduplicated.json (output of validate_deduplication.py).
+All DB credentials are read exclusively from .env.
 
-Environment variables used (from .env):
-    POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB
-    POSTGRES_USER, POSTGRES_PASSWORD
-    DATABASE_URL  (logged for reference only, not used directly here)
-    DEDUP_CLUSTER_RADIUS_M       — upsert proximity threshold
-    SURROUNDING_DENSITY_RADIUS_M — density search radius
+Run modes
+---------
+  Default (dry run): parses all rows, logs what would be inserted,
+      produces db_write_summary.json. No DB connection opened.
 
-Run modes:
-    Default (--dry_run, the safe default): parses all rows, logs what would
-    be inserted or updated, produces db_write_summary.json — no DB connection
-    is opened, no data is written.
-
-    --live: executes real writes. Requires a running PostgreSQL + PostGIS
-    instance (docker-compose up -d) and the tables created by setup_db.py.
+  --live: executes real writes. Requires running PostgreSQL + PostGIS
+      (docker-compose up -d) and tables created by setup_db.py.
 
 Outputs
 -------
   data/validation_nrdd_2024/db_write/
-      db_write_summary.json   -- insert/update/skip/error counts
+      db_write_summary.json
 
 Usage
 -----
     python scripts/validate_db_write.py              # dry run (safe default)
-    python scripts/validate_db_write.py --live       # real writes from .env creds
+    python scripts/validate_db_write.py --live       # real writes
     python scripts/validate_db_write.py --verbose
 
 Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
@@ -49,9 +42,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level   = logging.INFO,
     format  = "%(asctime)s | %(levelname)-8s | %(message)s",
@@ -59,18 +49,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("validate_db_write")
 
-# ---------------------------------------------------------------------------
-# Project root
-# ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(r"C:\Facultate\pothole-detection\Pothole-Detection")
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from pipeline.db_writer import DbWriter, DbWriterConfig  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 DEDUP_JSON = (
     PROJECT_ROOT
     / "data" / "validation_nrdd_2024" / "deduplicated" / "deduplicated.json"
@@ -78,20 +62,12 @@ DEDUP_JSON = (
 OUT_DIR = PROJECT_ROOT / "data" / "validation_nrdd_2024" / "db_write"
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(live: bool = False, verbose: bool = False) -> None:
-
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # Log .env config (no passwords printed)
-    # ------------------------------------------------------------------
     logger.info(
         "DB config from .env: host=%s  port=%s  db=%s  user=%s",
         os.environ.get("POSTGRES_HOST", "localhost"),
@@ -102,13 +78,10 @@ def main(live: bool = False, verbose: bool = False) -> None:
     logger.info(
         "Radii from .env: DEDUP_CLUSTER_RADIUS_M=%s m  "
         "SURROUNDING_DENSITY_RADIUS_M=%s m",
-        os.environ.get("DEDUP_CLUSTER_RADIUS_M",       "2.0"),
+        os.environ.get("DEDUP_CLUSTER_RADIUS_M",       "0.5"),
         os.environ.get("SURROUNDING_DENSITY_RADIUS_M", "50.0"),
     )
 
-    # ------------------------------------------------------------------
-    # Load deduplicated.json
-    # ------------------------------------------------------------------
     if not DEDUP_JSON.exists():
         logger.error("deduplicated.json not found: %s", DEDUP_JSON)
         logger.error("Run scripts/validate_deduplication.py first.")
@@ -145,19 +118,12 @@ def main(live: bool = False, verbose: bool = False) -> None:
     if n_gps == 0:
         logger.warning(
             "No GPS coordinates — 0 rows will be inserted. "
-            "PostGIS requires valid lat/lon for the POINT geometry. "
-            "This is expected for the current Cluj session (no .gpx file)."
+            "PostGIS requires valid lat/lon for the POINT geometry."
         )
 
-    # ------------------------------------------------------------------
-    # Run DB write — credentials from .env via DbWriterConfig.__post_init__
-    # ------------------------------------------------------------------
     cfg    = DbWriterConfig(dry_run=not live)
     result = DbWriter(cfg).run(frames, output_dir=str(OUT_DIR))
 
-    # ------------------------------------------------------------------
-    # Final log
-    # ------------------------------------------------------------------
     mode = "LIVE" if live else "DRY RUN"
     logger.info("=== DB Write Validation Complete (%s) ===", mode)
     logger.info("  Inserted : %d", result.n_inserted)
@@ -172,19 +138,13 @@ def main(live: bool = False, verbose: bool = False) -> None:
     logger.info("  Output   : %s", OUT_DIR)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=(
-            "Stage 8 validation — PostgreSQL/PostGIS database write. "
-            "All DB credentials are read from .env (POSTGRES_*)."
-        )
+        description="Stage 7 validation — DB write. Credentials from .env."
     )
     parser.add_argument(
         "--live", action="store_true",
-        help="Execute real writes (default: dry run, no DB connection opened)",
+        help="Execute real writes (default: dry run)",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
