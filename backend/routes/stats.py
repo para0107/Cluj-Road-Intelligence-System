@@ -22,9 +22,7 @@ router = APIRouter()
 
 @router.get("/stats", response_model=StatsResponse)
 def get_stats(db: Session = Depends(get_db)):
-
     total = db.query(func.count(Detection.id)).scalar() or 0
-
     last_survey = db.query(func.max(Detection.survey_date)).scalar()
 
     detections_today = 0
@@ -32,7 +30,8 @@ def get_stats(db: Session = Depends(get_db)):
         detections_today = (
             db.query(func.count(Detection.id))
             .filter(Detection.survey_date == last_survey)
-            .scalar() or 0
+            .scalar()
+            or 0
         )
 
     type_rows = (
@@ -58,19 +57,11 @@ def get_stats(db: Session = Depends(get_db)):
     avg_severity = db.query(func.avg(Detection.severity)).scalar()
     avg_severity = round(float(avg_severity), 2) if avg_severity else None
 
-    most_damaged_street_row = (
-        db.query(Detection.street_name, func.count(Detection.id).label("cnt"))
-        .filter(Detection.street_name.isnot(None))
-        .group_by(Detection.street_name)
-        .order_by(func.count(Detection.id).desc())
-        .first()
-    )
-    most_damaged_street = most_damaged_street_row[0] if most_damaged_street_row else None
-
     critical_count = (
         db.query(func.count(Detection.id))
         .filter(Detection.severity >= 4)
-        .scalar() or 0
+        .scalar()
+        or 0
     )
 
     return StatsResponse(
@@ -80,6 +71,5 @@ def get_stats(db: Session = Depends(get_db)):
         damage_type_breakdown=damage_type_breakdown,
         severity_breakdown=severity_breakdown,
         avg_severity=avg_severity,
-        most_damaged_street=most_damaged_street,
         critical_count=critical_count,
     )
