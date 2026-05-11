@@ -18,6 +18,7 @@ from backend.schemas import PriorityListResponse, PriorityItem
 
 router = APIRouter()
 
+# backend/routes/priority.py
 
 @router.get("/priority-list", response_model=PriorityListResponse)
 def get_priority_list(
@@ -43,7 +44,6 @@ def get_priority_list(
             longitude=row.longitude,
             detection_count=row.detection_count,
             last_detected=row.last_detected,
-            crop_path=row.crop_path,
         )
         for idx, row in enumerate(rows)
     ]
