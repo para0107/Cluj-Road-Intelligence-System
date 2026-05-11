@@ -728,4 +728,4 @@ Model attributions: RT-DETR ([Zhao et al., 2024](https://arxiv.org/abs/2304.0806
 
 <div align="center">
 <i>Cluj-Napoca · Babeș-Bolyai University · Faculty of Mathematics and Computer Science · 2026</i>
-</div>
+</div>  
