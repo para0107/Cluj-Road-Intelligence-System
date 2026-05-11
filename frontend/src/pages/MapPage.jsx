@@ -1,116 +1,604 @@
-import React from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
-import { Map, BarChart2, Search } from 'lucide-react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
+import { useNavigate } from 'react-router-dom'
+import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle } from 'lucide-react'
+import {
+  CLASS_COLORS, CLASS_LABELS, CLASS_ICONS,
+  SEVERITY_COLORS, SEVERITY_LABELS,
+  CLUJ_CENTER, CLUJ_ZOOM, TILE_URL, TILE_ATTR,
+} from '../utils/constants'
+import { fetchDetections, fetchStats } from '../utils/api'
 
-const NAV = [
-  { to: '/',          label: 'MAP',       Icon: Map        },
-  { to: '/stats',     label: 'STATS',     Icon: BarChart2  },
-  { to: '/explorer',  label: 'EXPLORER',  Icon: Search     },
-]
+// ── Auto-fit map to data bounds ───────────────────────────────────────────
+function FitBounds({ detections }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!detections || detections.length === 0) return
+    const lats = detections.map(d => d.latitude)
+    const lons = detections.map(d => d.longitude)
+    const bounds = [
+      [Math.min(...lats) - 0.002, Math.min(...lons) - 0.002],
+      [Math.max(...lats) + 0.002, Math.max(...lons) + 0.002],
+    ]
+    map.fitBounds(bounds, { padding: [40, 40] })
+  }, [detections, map])
+  return null
+}
 
-export default function Navbar() {
+// ── Class filter toggle pill ──────────────────────────────────────────────
+function ClassPill({ cls, active, count, onToggle }) {
+  const color = CLASS_COLORS[cls] || '#888'
   return (
-    <nav style={styles.nav}>
-      {/* Logo */}
-      <div style={styles.logo}>
-        <span style={styles.logoAccent}>RIDS</span>
-        <span style={styles.logoSub}>Road Infrastructure Detection</span>
+    <button
+      onClick={() => onToggle(cls)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        borderRadius: 20,
+        border: `1px solid ${active ? color : 'var(--border)'}`,
+        background: active ? `${color}18` : 'transparent',
+        color: active ? color : 'var(--text-muted)',
+        fontSize: 11,
+        fontFamily: 'var(--font-sans)',
+        cursor: 'pointer',
+        transition: 'var(--transition)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{
+        width: 7, height: 7, borderRadius: '50%',
+        background: active ? color : 'var(--text-muted)',
+        flexShrink: 0,
+      }} />
+      {CLASS_LABELS[cls] || cls}
+      <span style={{
+        background: active ? `${color}30` : 'var(--border)',
+        borderRadius: 8, padding: '0 5px',
+        fontSize: 10, color: active ? color : 'var(--text-muted)',
+      }}>
+        {count}
+      </span>
+    </button>
+  )
+}
+
+// ── Severity badge ────────────────────────────────────────────────────────
+function SevBadge({ s }) {
+  const color = SEVERITY_COLORS[s] || '#888'
+  return (
+    <span style={{
+      background: `${color}25`, color, border: `1px solid ${color}50`,
+      borderRadius: 4, padding: '2px 7px',
+      fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700,
+    }}>
+      {SEVERITY_LABELS[s] || `S${s}`}
+    </span>
+  )
+}
+
+// ── Report generator ──────────────────────────────────────────────────────
+function generateReport(detections, stats) {
+  const byClass = {}
+  const bySev   = {}
+  detections.forEach(d => {
+    byClass[d.damage_type] = (byClass[d.damage_type] || 0) + 1
+    bySev[d.severity]      = (bySev[d.severity]      || 0) + 1
+  })
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RIDS — Detection Report</title>
+<style>
+  body { font-family: 'Segoe UI', sans-serif; background: #f8f9fa; color: #1a1a2e; margin:0; padding:0; }
+  .cover { background: #0a0c10; color: #e8ff47; padding: 60px 48px 40px; }
+  .cover h1 { font-size: 36px; font-weight: 800; margin-bottom: 8px; letter-spacing:-1px; }
+  .cover p { color: #9ca3af; font-size: 14px; margin: 0; }
+  .body { padding: 40px 48px; }
+  .section { margin-bottom: 36px; }
+  h2 { font-size: 20px; font-weight: 700; border-bottom: 2px solid #e8ff47; padding-bottom: 8px; margin-bottom: 20px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+  .stat-card { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align:center; }
+  .stat-val { font-size: 32px; font-weight: 800; color: #0a0c10; }
+  .stat-lbl { font-size: 12px; color: #6b7280; margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+  table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  th { background: #0a0c10; color: #e8ff47; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding: 12px 16px; text-align: left; }
+  td { padding: 11px 16px; border-bottom: 1px solid #f1f3f5; font-size: 13px; }
+  tr:last-child td { border: none; }
+  .badge { display:inline-block; padding: 2px 8px; border-radius:4px; font-size:11px; font-weight:700; }
+  .footer { background:#0a0c10; color:#6b7280; padding: 24px 48px; font-size: 12px; text-align: center; margin-top: 40px; }
+  @media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+<div class="cover">
+  <h1>RIDS Detection Report</h1>
+  <p>Road Infrastructure Detection System · Babeș-Bolyai University · Generated ${new Date().toLocaleString()}</p>
+</div>
+<div class="body">
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-val">${stats?.total_detections ?? detections.length}</div><div class="stat-lbl">Total Detections</div></div>
+    <div class="stat-card"><div class="stat-val">${stats?.critical_count ?? 0}</div><div class="stat-lbl">Critical (S4–S5)</div></div>
+    <div class="stat-card"><div class="stat-val">${stats?.avg_severity?.toFixed(1) ?? '—'}</div><div class="stat-lbl">Avg Severity</div></div>
+    <div class="stat-card"><div class="stat-val">${stats?.last_survey_date ?? '—'}</div><div class="stat-lbl">Last Survey</div></div>
+  </div>
+
+  <div class="section">
+    <h2>Detections by Class</h2>
+    <table>
+      <thead><tr><th>Class</th><th>Count</th><th>Share</th></tr></thead>
+      <tbody>
+        ${Object.entries(byClass).sort((a,b)=>b[1]-a[1]).map(([cls,cnt]) =>
+          `<tr><td>${CLASS_LABELS[cls]||cls}</td><td><strong>${cnt}</strong></td><td>${((cnt/detections.length)*100).toFixed(1)}%</td></tr>`
+        ).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Severity Distribution</h2>
+    <table>
+      <thead><tr><th>Level</th><th>Count</th><th>Share</th></tr></thead>
+      <tbody>
+        ${[1,2,3,4,5].map(s => {
+          const cnt = bySev[s] || 0
+          const colors = {1:'#4ade80',2:'#fbbf24',3:'#fb923c',4:'#f87171',5:'#a21caf'}
+          return `<tr><td><span class="badge" style="background:${colors[s]}22;color:${colors[s]}">${SEVERITY_LABELS[s]}</span></td><td><strong>${cnt}</strong></td><td>${detections.length ? ((cnt/detections.length)*100).toFixed(1) : 0}%</td></tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Top 30 Priority Detections</h2>
+    <table>
+      <thead><tr><th>#</th><th>Type</th><th>Severity</th><th>Priority</th><th>GPS</th><th>Date</th></tr></thead>
+      <tbody>
+        ${[...detections].sort((a,b)=>(b.priority_score||0)-(a.priority_score||0)).slice(0,30).map((d,i) => {
+          const colors={1:'#4ade80',2:'#fbbf24',3:'#fb923c',4:'#f87171',5:'#a21caf'}
+          const sc = colors[d.severity]||'#888'
+          return `<tr>
+            <td style="color:#6b7280;font-size:11px">${i+1}</td>
+            <td>${CLASS_LABELS[d.damage_type]||d.damage_type}</td>
+            <td><span class="badge" style="background:${sc}22;color:${sc}">S${d.severity}</span></td>
+            <td style="font-family:monospace">${(d.priority_score||0).toFixed(4)}</td>
+            <td style="font-family:monospace;font-size:11px">${d.latitude?.toFixed(5)}, ${d.longitude?.toFixed(5)}</td>
+            <td style="font-size:11px;color:#6b7280">${d.last_detected||'—'}</td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="footer">
+  RIDS · Road Infrastructure Detection System · Babeș-Bolyai University, Faculty of Mathematics and Computer Science, 2026
+</div>
+<script>window.onload = () => window.print()</script>
+</body></html>`
+
+  const w = window.open('', '_blank')
+  w.document.write(html)
+  w.document.close()
+}
+
+// ── Main MapPage ──────────────────────────────────────────────────────────
+export default function MapPage() {
+  const navigate = useNavigate()
+
+  const [detections, setDetections] = useState([])
+  const [stats,      setStats]      = useState(null)
+  const [loading,    setLoading]    = useState(true)
+  const [error,      setError]      = useState(null)
+  const [activeClasses, setActiveClasses] = useState(new Set())
+  const [selected,   setSelected]   = useState(null)
+  const [showLegend, setShowLegend] = useState(true)
+
+  // Load all detections (up to 500 for the map)
+  useEffect(() => {
+    Promise.all([
+      fetchDetections({ page: 1, page_size: 500 }),
+      fetchStats(),
+    ])
+      .then(([det, st]) => {
+        setDetections(det.items || [])
+        setStats(st)
+        const classes = new Set((det.items || []).map(d => d.damage_type))
+        setActiveClasses(classes)
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const toggleClass = useCallback((cls) => {
+    setActiveClasses(prev => {
+      const next = new Set(prev)
+      next.has(cls) ? next.delete(cls) : next.add(cls)
+      return next
+    })
+  }, [])
+
+  // Count per class across ALL detections
+  const classCounts = {}
+  detections.forEach(d => {
+    classCounts[d.damage_type] = (classCounts[d.damage_type] || 0) + 1
+  })
+
+  const visible = detections.filter(d => activeClasses.has(d.damage_type))
+
+  return (
+    <div style={styles.page}>
+
+      {/* ── Map ─────────────────────────────────────────────────────── */}
+      <MapContainer
+        center={CLUJ_CENTER}
+        zoom={CLUJ_ZOOM}
+        style={styles.map}
+        zoomControl={false}
+      >
+        <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+        <FitBounds detections={detections} />
+
+        {visible.map(d => {
+          const color = CLASS_COLORS[d.damage_type] || '#888'
+          const sevColor = SEVERITY_COLORS[d.severity] || color
+          return (
+            <CircleMarker
+              key={d.id}
+              center={[d.latitude, d.longitude]}
+              radius={d.severity >= 4 ? 9 : d.severity === 3 ? 7 : 5}
+              pathOptions={{
+                color: sevColor,
+                fillColor: color,
+                fillOpacity: 0.85,
+                weight: d.severity >= 4 ? 2 : 1,
+              }}
+              eventHandlers={{ click: () => setSelected(d) }}
+            >
+              <Popup>
+                <div style={styles.popup}>
+                  <div style={styles.popupHeader}>
+                    <span style={{ color: CLASS_COLORS[d.damage_type] || '#888', fontSize: 18 }}>
+                      {CLASS_ICONS[d.damage_type] || '●'}
+                    </span>
+                    <div>
+                      <div style={styles.popupTitle}>
+                        {CLASS_LABELS[d.damage_type] || d.damage_type}
+                      </div>
+                      <div style={styles.popupSub}>
+                        {d.latitude?.toFixed(5)}, {d.longitude?.toFixed(5)}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={styles.popupRow}>
+                    <SevBadge s={d.severity} />
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      conf {(d.confidence * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  {d.street_name && (
+                    <div style={styles.popupStreet}>{d.street_name}</div>
+                  )}
+                  <div style={styles.popupMeta}>
+                    <span>Seen {d.detection_count}×</span>
+                    <span>Priority {(d.priority_score || 0).toFixed(3)}</span>
+                  </div>
+                </div>
+              </Popup>
+            </CircleMarker>
+          )
+        })}
+      </MapContainer>
+
+      {/* ── Top-right action buttons ─────────────────────────────────── */}
+      <div style={styles.actions}>
+        <button style={styles.actionBtn} onClick={() => navigate('/stats')}>
+          <BarChart2 size={14} />
+          Stats
+        </button>
+        <button
+          style={{ ...styles.actionBtn, ...styles.actionBtnAccent }}
+          onClick={() => generateReport(detections, stats)}
+          disabled={detections.length === 0}
+        >
+          <FileText size={14} />
+          Report
+        </button>
       </div>
 
-      {/* Links */}
-      <div style={styles.links}>
-        {NAV.map(({ to, label, Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            style={({ isActive }) => ({
-              ...styles.link,
-              ...(isActive ? styles.linkActive : {}),
-            })}
-          >
-            <Icon size={13} style={{ marginRight: 6 }} />
-            {label}
-          </NavLink>
-        ))}
+      {/* ── Bottom stat strip ────────────────────────────────────────── */}
+      {stats && (
+        <div style={styles.statStrip}>
+          <StatChip label="Total" value={stats.total_detections} color="var(--accent)" />
+          <div style={styles.stripDivider} />
+          <StatChip label="Critical" value={stats.critical_count} color="var(--red)" />
+          <div style={styles.stripDivider} />
+          <StatChip label="Avg Severity" value={stats.avg_severity?.toFixed(1) ?? '—'} color="var(--orange)" />
+          <div style={styles.stripDivider} />
+          <StatChip label="Visible" value={visible.length} color="var(--blue)" />
+          {stats.last_survey_date && (
+            <>
+              <div style={styles.stripDivider} />
+              <StatChip label="Last Survey" value={stats.last_survey_date} color="var(--text-muted)" />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Class filter panel ───────────────────────────────────────── */}
+      <div style={styles.filterPanel}>
+        <div style={styles.filterHeader}>
+          <span style={styles.filterTitle}>LAYERS</span>
+          <div style={styles.filterHeaderBtns}>
+            <button style={styles.tinyBtn}
+              onClick={() => setActiveClasses(new Set(Object.keys(classCounts)))}>
+              <Eye size={11} /> ALL
+            </button>
+            <button style={styles.tinyBtn}
+              onClick={() => setActiveClasses(new Set())}>
+              <EyeOff size={11} /> NONE
+            </button>
+            <button style={styles.tinyBtn}
+              onClick={() => setShowLegend(v => !v)}>
+              {showLegend ? '▲' : '▼'}
+            </button>
+          </div>
+        </div>
+        {showLegend && (
+          <div style={styles.filterList}>
+            {Object.entries(classCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([cls, cnt]) => (
+                <ClassPill
+                  key={cls}
+                  cls={cls}
+                  count={cnt}
+                  active={activeClasses.has(cls)}
+                  onToggle={toggleClass}
+                />
+              ))}
+          </div>
+        )}
       </div>
 
-      {/* Status dot */}
-      <div style={styles.status}>
-        <span style={styles.dot} />
-        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>LIVE</span>
+      {/* ── Loading overlay ──────────────────────────────────────────── */}
+      {loading && (
+        <div style={styles.overlay}>
+          <div style={styles.overlayContent}>
+            <div style={styles.spinner} />
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 13 }}>
+              Loading detections…
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Error banner ─────────────────────────────────────────────── */}
+      {error && !loading && (
+        <div style={styles.errorBanner}>
+          <AlertTriangle size={14} />
+          <span>Could not reach API: {error}</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 8 }}>
+            Make sure the backend is running on port 8000
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StatChip({ label, value, color }) {
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color, fontFamily: 'var(--font-mono)' }}>
+        {value}
       </div>
-    </nav>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+        {label}
+      </div>
+    </div>
   )
 }
 
 const styles = {
-  nav: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    height: 48,
-    padding: '0 20px',
-    background: 'var(--bg-card)',
-    borderBottom: '1px solid var(--border)',
+  page: {
     position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
+    inset: '48px 0 0 0',
+    overflow: 'hidden',
   },
-  logo: {
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+
+  // Action buttons
+  actions: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 800,
     display: 'flex',
-    alignItems: 'baseline',
     gap: 8,
   },
-  logoAccent: {
-    fontFamily: 'var(--font-mono)',
-    fontWeight: 700,
-    fontSize: 15,
-    color: 'var(--accent)',
-    letterSpacing: '0.08em',
-  },
-  logoSub: {
-    fontSize: 11,
-    color: 'var(--text-muted)',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
-  },
-  links: {
-    display: 'flex',
-    gap: 4,
-  },
-  link: {
-    display: 'flex',
-    alignItems: 'center',
-    padding: '5px 12px',
-    borderRadius: 'var(--radius)',
-    fontFamily: 'var(--font-mono)',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.1em',
-    color: 'var(--text-muted)',
-    textDecoration: 'none',
-    transition: 'var(--transition)',
-    border: '1px solid transparent',
-  },
-  linkActive: {
-    color: 'var(--accent)',
-    background: 'var(--accent-dim)',
-    border: '1px solid rgba(232,255,71,0.2)',
-  },
-  status: {
+  actionBtn: {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
+    padding: '8px 14px',
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border-bright)',
+    borderRadius: 'var(--radius)',
+    color: 'var(--text)',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'var(--transition)',
+    backdropFilter: 'blur(8px)',
   },
-  dot: {
-    display: 'inline-block',
-    width: 7,
-    height: 7,
+  actionBtnAccent: {
+    background: 'var(--accent)',
+    border: '1px solid var(--accent)',
+    color: '#0a0c10',
+  },
+
+  // Bottom stat strip
+  statStrip: {
+    position: 'absolute',
+    bottom: 16,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 800,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 20,
+    padding: '10px 24px',
+    background: 'rgba(17,19,24,0.92)',
+    border: '1px solid var(--border-bright)',
+    borderRadius: 40,
+    backdropFilter: 'blur(12px)',
+    boxShadow: 'var(--shadow-lg)',
+  },
+  stripDivider: {
+    width: 1,
+    height: 24,
+    background: 'var(--border)',
+  },
+
+  // Filter panel
+  filterPanel: {
+    position: 'absolute',
+    bottom: 80,
+    left: 16,
+    zIndex: 800,
+    background: 'rgba(17,19,24,0.94)',
+    border: '1px solid var(--border-bright)',
+    borderRadius: 'var(--radius-lg)',
+    backdropFilter: 'blur(12px)',
+    maxWidth: 340,
+    boxShadow: 'var(--shadow)',
+  },
+  filterHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '10px 14px',
+    borderBottom: '1px solid var(--border)',
+  },
+  filterTitle: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: 10,
+    fontWeight: 700,
+    color: 'var(--text-muted)',
+    letterSpacing: '.12em',
+  },
+  filterHeaderBtns: { display: 'flex', gap: 4 },
+  tinyBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 3,
+    padding: '3px 7px',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    borderRadius: 4,
+    color: 'var(--text-muted)',
+    fontSize: 10,
+    fontFamily: 'var(--font-mono)',
+    cursor: 'pointer',
+    transition: 'var(--transition)',
+  },
+  filterList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    padding: '10px 14px',
+    maxHeight: 200,
+    overflowY: 'auto',
+  },
+
+  // Popup
+  popup: {
+    minWidth: 200,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  popupHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+  },
+  popupTitle: {
+    fontWeight: 600,
+    fontSize: 13,
+    color: 'var(--text)',
+  },
+  popupSub: {
+    fontSize: 10,
+    color: 'var(--text-muted)',
+    fontFamily: 'var(--font-mono)',
+  },
+  popupRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  popupStreet: {
+    fontSize: 11,
+    color: 'var(--text-dim)',
+    borderTop: '1px solid var(--border)',
+    paddingTop: 6,
+  },
+  popupMeta: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: 10,
+    color: 'var(--text-muted)',
+    fontFamily: 'var(--font-mono)',
+  },
+
+  // Overlays
+  overlay: {
+    position: 'absolute',
+    inset: 0,
+    background: 'rgba(10,12,16,0.75)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 900,
+    backdropFilter: 'blur(4px)',
+  },
+  overlayContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 16,
+  },
+  spinner: {
+    width: 32,
+    height: 32,
+    border: '3px solid var(--border)',
+    borderTop: '3px solid var(--accent)',
     borderRadius: '50%',
-    background: 'var(--green)',
-    boxShadow: '0 0 6px var(--green)',
-    animation: 'pulse 2s infinite',
+    animation: 'spin 0.8s linear infinite',
+  },
+  errorBanner: {
+    position: 'absolute',
+    top: 16,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 900,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '10px 18px',
+    background: 'rgba(255,68,68,0.12)',
+    border: '1px solid rgba(255,68,68,0.4)',
+    borderRadius: 'var(--radius)',
+    color: 'var(--red)',
+    fontSize: 12,
+    fontWeight: 600,
+    backdropFilter: 'blur(8px)',
   },
 }
