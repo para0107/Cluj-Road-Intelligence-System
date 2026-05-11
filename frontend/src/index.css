@@ -1,0 +1,80 @@
+/* ─── Design tokens ─────────────────────────────────────────────────────── */
+:root {
+  --bg:          #0a0c10;
+  --bg-card:     #111318;
+  --bg-card2:    #16191f;
+  --border:      #1f2330;
+  --border-bright: #2a3040;
+  --text:        #e8eaf0;
+  --text-muted:  #6b7280;
+  --text-dim:    #9ca3af;
+  --accent:      #e8ff47;
+  --accent-dim:  rgba(232, 255, 71, 0.12);
+  --accent-glow: rgba(232, 255, 71, 0.25);
+  --red:         #ff4444;
+  --orange:      #ff8c42;
+  --yellow:      #ffc107;
+  --green:       #4ade80;
+  --blue:        #60a5fa;
+  --purple:      #a78bfa;
+  --teal:        #2dd4bf;
+  --pink:        #f472b6;
+  --font-mono:   'Space Mono', monospace;
+  --font-sans:   'DM Sans', sans-serif;
+  --radius:      6px;
+  --radius-lg:   12px;
+  --shadow:      0 4px 24px rgba(0,0,0,0.4);
+  --shadow-lg:   0 8px 48px rgba(0,0,0,0.6);
+  --transition:  all 0.18s cubic-bezier(0.4,0,0.2,1);
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Scrollbars ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+
+/* ─── Leaflet overrides ──────────────────────────────────────────────────── */
+.leaflet-container {
+  background: #0e1117 !important;
+  font-family: var(--font-sans) !important;
+}
+.leaflet-popup-content-wrapper {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-bright) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+  color: var(--text) !important;
+}
+.leaflet-popup-tip { background: var(--bg-card) !important; }
+.leaflet-popup-close-button { color: var(--text-muted) !important; }
+.leaflet-control-zoom a {
+  background: var(--bg-card) !important;
+  border-color: var(--border-bright) !important;
+  color: var(--text) !important;
+}
+.leaflet-control-zoom a:hover { background: var(--bg-card2) !important; }
+.leaflet-control-attribution {
+  background: rgba(10,12,16,0.85) !important;
+  color: var(--text-muted) !important;
+  font-size: 10px !important;
+}
+.leaflet-control-attribution a { color: var(--accent) !important; }
+
+/* ─── Utility classes ────────────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); }
+.text-accent { color: var(--accent); }
+.text-muted { color: var(--text-muted); }
+.text-dim { color: var(--text-dim); }

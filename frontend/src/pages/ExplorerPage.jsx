@@ -1,0 +1,438 @@
+import React, { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Search } from 'lucide-react'
+import { fetchDetections } from '../utils/api'
+import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS } from '../utils/constants'
+
+const DAMAGE_TYPES = [
+  'longitudinal_crack','transverse_crack','alligator_crack','repaired_crack',
+  'pothole','pedestrian_crossing_blur','lane_line_blur','manhole_cover',
+  'patchy_road','rutting',
+]
+
+function SortIcon({ col, sortCol, sortDir }) {
+  if (sortCol !== col) return <ChevronUp size={11} style={{ opacity: 0.2 }} />
+  return sortDir === 'desc'
+    ? <ChevronDown size={11} style={{ color: 'var(--accent)' }} />
+    : <ChevronUp   size={11} style={{ color: 'var(--accent)' }} />
+}
+
+export default function ExplorerPage() {
+  const navigate = useNavigate()
+
+  // Pagination
+  const [page,     setPage]     = useState(1)
+  const PAGE_SIZE = 25
+
+  // Filters
+  const [damageType,  setDamageType]  = useState('')
+  const [severityMin, setSeverityMin] = useState('')
+  const [severityMax, setSeverityMax] = useState('')
+  const [dateFrom,    setDateFrom]    = useState('')
+  const [dateTo,      setDateTo]      = useState('')
+  const [street,      setStreet]      = useState('')
+
+  // Sort (client-side on the fetched page)
+  const [sortCol, setSortCol] = useState('priority_score')
+  const [sortDir, setSortDir] = useState('desc')
+
+  // Data
+  const [data,    setData]    = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const params = {
+        page,
+        page_size: PAGE_SIZE,
+        ...(damageType  && { damage_type:  damageType  }),
+        ...(severityMin && { severity_min: Number(severityMin) }),
+        ...(severityMax && { severity_max: Number(severityMax) }),
+        ...(dateFrom    && { date_from:    dateFrom    }),
+        ...(dateTo      && { date_to:      dateTo      }),
+        ...(street      && { street_name:  street      }),
+      }
+      const result = await fetchDetections(params)
+      setData(result)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo, street])
+
+  useEffect(() => { load() }, [load])
+
+  // Reset to page 1 when filters change
+  const applyFilter = () => { setPage(1); load() }
+  const clearFilters = () => {
+    setDamageType(''); setSeverityMin(''); setSeverityMax('')
+    setDateFrom(''); setDateTo(''); setStreet(''); setPage(1)
+  }
+
+  // Client-side sort on current page
+  const items = data?.items ? [...data.items].sort((a, b) => {
+    const av = a[sortCol] ?? -Infinity
+    const bv = b[sortCol] ?? -Infinity
+    return sortDir === 'desc' ? (bv > av ? 1 : -1) : (av > bv ? 1 : -1)
+  }) : []
+
+  const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1
+
+  const toggleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
+    else { setSortCol(col); setSortDir('desc') }
+  }
+
+  const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo || street
+
+  return (
+    <div style={styles.page}>
+      {/* ── Header ────────────────────────────────────────────────── */}
+      <div style={styles.header}>
+        <div style={styles.headerLeft}>
+          <button style={styles.backBtn} onClick={() => navigate('/')}>
+            <ArrowLeft size={14} /> MAP
+          </button>
+          <div>
+            <h1 style={styles.title}>Explorer</h1>
+            <p style={styles.subtitle}>
+              {data ? `${data.total.toLocaleString()} detections` : 'Loading…'}
+              {hasFilters && <span style={{ color: 'var(--accent)', marginLeft: 6 }}>· filtered</span>}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div style={styles.body}>
+        {/* ── Filter bar ─────────────────────────────────────────── */}
+        <div style={styles.filterBar}>
+          <div style={styles.filterBarLeft}>
+            <Filter size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+
+            {/* Damage type */}
+            <select
+              value={damageType}
+              onChange={e => { setDamageType(e.target.value); setPage(1) }}
+              style={styles.select}
+            >
+              <option value="">All classes</option>
+              {DAMAGE_TYPES.map(t => (
+                <option key={t} value={t}>{CLASS_LABELS[t] || t}</option>
+              ))}
+            </select>
+
+            {/* Severity range */}
+            <select
+              value={severityMin}
+              onChange={e => { setSeverityMin(e.target.value); setPage(1) }}
+              style={styles.select}
+            >
+              <option value="">Sev ≥</option>
+              {[1,2,3,4,5].map(s => <option key={s} value={s}>S{s}+</option>)}
+            </select>
+            <select
+              value={severityMax}
+              onChange={e => { setSeverityMax(e.target.value); setPage(1) }}
+              style={styles.select}
+            >
+              <option value="">Sev ≤</option>
+              {[1,2,3,4,5].map(s => <option key={s} value={s}>S{s}-</option>)}
+            </select>
+
+            {/* Date range */}
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => { setDateFrom(e.target.value); setPage(1) }}
+              style={styles.dateInput}
+              placeholder="From"
+            />
+            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>→</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => { setDateTo(e.target.value); setPage(1) }}
+              style={styles.dateInput}
+              placeholder="To"
+            />
+
+            {/* Street search */}
+            <div style={styles.searchWrap}>
+              <Search size={12} style={{ position:'absolute', left:9, color:'var(--text-muted)' }} />
+              <input
+                type="text"
+                value={street}
+                onChange={e => { setStreet(e.target.value); setPage(1) }}
+                placeholder="Street name…"
+                style={{ ...styles.dateInput, paddingLeft: 28, minWidth: 140 }}
+              />
+            </div>
+          </div>
+
+          {hasFilters && (
+            <button style={styles.clearBtn} onClick={clearFilters}>
+              <X size={12} /> Clear
+            </button>
+          )}
+        </div>
+
+        {/* ── Table ──────────────────────────────────────────────── */}
+        <div style={styles.tableWrap}>
+          {/* Head */}
+          <div style={styles.tableHead}>
+            {[
+              { key: 'damage_type',    label: 'Class'       },
+              { key: 'severity',       label: 'Severity'    },
+              { key: 'confidence',     label: 'Confidence'  },
+              { key: 'priority_score', label: 'Priority'    },
+              { key: 'detection_count',label: 'Seen'        },
+              { key: 'latitude',       label: 'GPS'         },
+              { key: 'last_detected',  label: 'Last Seen'   },
+              { key: 'street_name',    label: 'Street'      },
+            ].map(col => (
+              <div
+                key={col.key}
+                style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }}
+                onClick={() => toggleSort(col.key)}
+              >
+                {col.label}
+                <SortIcon col={col.key} sortCol={sortCol} sortDir={sortDir} />
+              </div>
+            ))}
+          </div>
+
+          {/* Body */}
+          {loading && (
+            <div style={styles.tableLoading}>
+              <div style={styles.spinner} />
+              <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Loading…</span>
+            </div>
+          )}
+
+          {!loading && error && (
+            <div style={styles.tableError}>
+              Could not load detections: {error}
+            </div>
+          )}
+
+          {!loading && !error && items.map((item, i) => {
+            const clsColor = CLASS_COLORS[item.damage_type] || '#888'
+            const sevColor = SEVERITY_COLORS[item.severity] || '#888'
+            return (
+              <div
+                key={item.id}
+                style={{
+                  ...styles.tableRow,
+                  background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)',
+                }}
+              >
+                {/* Class */}
+                <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{
+                    width: 8, height: 8, borderRadius: '50%',
+                    background: clsColor, flexShrink: 0,
+                  }} />
+                  <span style={{ fontSize: 12 }}>
+                    {CLASS_LABELS[item.damage_type] || item.damage_type}
+                  </span>
+                </div>
+
+                {/* Severity */}
+                <div style={styles.td}>
+                  <span style={{
+                    background: `${sevColor}20`, color: sevColor,
+                    border: `1px solid ${sevColor}45`,
+                    borderRadius: 4, padding: '2px 7px',
+                    fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700,
+                  }}>
+                    S{item.severity}
+                  </span>
+                </div>
+
+                {/* Confidence */}
+                <div style={styles.td}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{
+                      width: 48, height: 4, borderRadius: 2,
+                      background: 'var(--border-bright)', overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        width: `${(item.confidence || 0) * 100}%`,
+                        height: '100%', background: clsColor,
+                      }} />
+                    </div>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                      {((item.confidence || 0) * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Priority */}
+                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 12 }}>
+                  {(item.priority_score || 0).toFixed(4)}
+                </div>
+
+                {/* Seen */}
+                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                  {item.detection_count}×
+                </div>
+
+                {/* GPS */}
+                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>
+                  {item.latitude?.toFixed(5)}<br />{item.longitude?.toFixed(5)}
+                </div>
+
+                {/* Last seen */}
+                <div style={{ ...styles.td, fontSize: 11, color: 'var(--text-dim)' }}>
+                  {item.last_detected || '—'}
+                </div>
+
+                {/* Street */}
+                <div style={{ ...styles.td, fontSize: 11, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {item.street_name || <span style={{ color: 'var(--border-bright)' }}>—</span>}
+                </div>
+              </div>
+            )
+          })}
+
+          {!loading && !error && items.length === 0 && (
+            <div style={styles.tableEmpty}>No detections match the current filters.</div>
+          )}
+        </div>
+
+        {/* ── Pagination ─────────────────────────────────────────── */}
+        {data && data.total > PAGE_SIZE && (
+          <div style={styles.pagination}>
+            <button
+              style={styles.pageBtn}
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              <ChevronLeft size={14} />
+            </button>
+
+            <div style={styles.pageInfo}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                Page {page} of {totalPages}
+              </span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                ({data.total.toLocaleString()} total)
+              </span>
+            </div>
+
+            <button
+              style={styles.pageBtn}
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const COL = '1.8fr 90px 110px 110px 60px 120px 90px 1fr'
+
+const styles = {
+  page: { paddingTop: 48, minHeight: '100vh', background: 'var(--bg)' },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '24px 32px 0',
+  },
+  headerLeft: { display: 'flex', alignItems: 'center', gap: 16 },
+  backBtn: {
+    display: 'flex', alignItems: 'center', gap: 5,
+    padding: '6px 12px', background: 'transparent',
+    border: '1px solid var(--border-bright)', borderRadius: 'var(--radius)',
+    color: 'var(--text-muted)', fontSize: 11, fontFamily: 'var(--font-mono)',
+    fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em',
+  },
+  title: { fontSize: 26, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.5px' },
+  subtitle: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 },
+  body: { padding: '20px 32px 48px' },
+
+  filterBar: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8, padding: '12px 16px',
+    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-lg)', marginBottom: 16,
+    flexWrap: 'wrap',
+  },
+  filterBarLeft: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1 },
+  select: {
+    background: 'var(--bg-card2)', border: '1px solid var(--border-bright)',
+    borderRadius: 'var(--radius)', color: 'var(--text)',
+    fontSize: 12, padding: '5px 10px', cursor: 'pointer',
+    fontFamily: 'var(--font-sans)',
+  },
+  dateInput: {
+    background: 'var(--bg-card2)', border: '1px solid var(--border-bright)',
+    borderRadius: 'var(--radius)', color: 'var(--text)',
+    fontSize: 12, padding: '5px 10px',
+    fontFamily: 'var(--font-sans)',
+  },
+  searchWrap: { position: 'relative', display: 'flex', alignItems: 'center' },
+  clearBtn: {
+    display: 'flex', alignItems: 'center', gap: 5,
+    padding: '5px 10px', background: 'rgba(255,68,68,0.1)',
+    border: '1px solid rgba(255,68,68,0.3)', borderRadius: 'var(--radius)',
+    color: 'var(--red)', fontSize: 11, cursor: 'pointer',
+    fontFamily: 'var(--font-mono)', fontWeight: 700,
+  },
+
+  tableWrap: {
+    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-lg)', overflow: 'hidden',
+  },
+  tableHead: {
+    display: 'grid', gridTemplateColumns: COL,
+    background: 'var(--bg-card2)', borderBottom: '1px solid var(--border)',
+  },
+  tableRow: {
+    display: 'grid', gridTemplateColumns: COL,
+    borderBottom: '1px solid var(--border)',
+    transition: 'background 0.1s',
+  },
+  th: {
+    padding: '10px 12px', fontSize: 10, fontFamily: 'var(--font-mono)',
+    fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '.08em',
+    textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4,
+  },
+  td: { padding: '10px 12px', fontSize: 13, color: 'var(--text)', alignSelf: 'center' },
+
+  tableLoading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: 12, padding: 48,
+  },
+  tableError: {
+    padding: 32, textAlign: 'center', color: 'var(--red)', fontSize: 13,
+  },
+  tableEmpty: {
+    padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13,
+  },
+  spinner: {
+    width: 18, height: 18, border: '2px solid var(--border)',
+    borderTop: '2px solid var(--accent)', borderRadius: '50%',
+    animation: 'spin 0.8s linear infinite',
+  },
+
+  pagination: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: 16, padding: '20px 0 0',
+  },
+  pageBtn: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 32, height: 32,
+    background: 'var(--bg-card)', border: '1px solid var(--border-bright)',
+    borderRadius: 'var(--radius)', color: 'var(--text)', cursor: 'pointer',
+    transition: 'var(--transition)',
+  },
+  pageInfo: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 },
+}

@@ -6,7 +6,7 @@ Documentation
 data
 rtdetr-l.pt
 ml/weights
-frontend
+frontend/node_modules
 # 1. Ignore everything in runs
 runs/*
 
