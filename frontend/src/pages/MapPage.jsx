@@ -235,10 +235,12 @@ export default function MapPage() {
       <MapContainer
         center={CLUJ_CENTER}
         zoom={CLUJ_ZOOM}
+        maxZoom={20}
+        minZoom={3}
         style={styles.map}
         zoomControl={false}
       >
-        <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+        <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxZoom={30} maxNativeZoom={19}/>
         <FitBounds detections={detections} />
 
         {visible.map(d => {
