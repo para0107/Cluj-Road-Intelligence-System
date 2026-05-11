@@ -270,6 +270,11 @@ class Enricher:
         self._session.headers.update({"User-Agent": _NOMINATIM_UA})
         self._last_nominatim: float = 0.0
         self._last_overpass:  float = 0.0
+        # Overpass cache: avoid re-querying when consecutive frames are on the same road
+        self._overpass_cache_result: Optional[dict] = None
+        self._overpass_cache_lat:    Optional[float] = None
+        self._overpass_cache_lon:    Optional[float] = None
+        self._overpass_cache_radius_m: float         = 50.0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -332,7 +337,11 @@ class Enricher:
                         n_ov_fail += 1
 
                 if not self.cfg.skip_weather:
-                    wx = self._fetch_weather(lat, lon, frame.get("timestamp_s", 0.0))
+                    wx = self._fetch_weather(
+                        lat, lon,
+                        frame.get("wall_time"),       # ISO string from FrameResult
+                        frame.get("timestamp_s", 0.0), # relative fallback
+                    )
                     if wx:
                         weather = wx
                         n_wx_ok += 1
@@ -459,10 +468,30 @@ class Enricher:
         }
 
     # ------------------------------------------------------------------
-    # Overpass
+    # Overpass — with GPS-proximity cache to avoid redundant calls
     # ------------------------------------------------------------------
 
     def _overpass_query(self, lat: float, lon: float) -> Optional[dict]:
+        # Reuse the cached result if the new GPS point is within 50 m of the
+        # last queried point. Consecutive KITTI/dashcam frames are typically
+        # <1 m apart — without caching, every frame triggers a new Overpass
+        # call, causing 429 rate-limit and timeout errors.
+        if (
+            self._overpass_cache_result is not None
+            and self._overpass_cache_lat is not None
+            and self._overpass_cache_lon is not None
+        ):
+            dist = _haversine_m(
+                lat, lon,
+                self._overpass_cache_lat,
+                self._overpass_cache_lon,
+            )
+            if dist <= self._overpass_cache_radius_m:
+                logger.debug(
+                    "Overpass cache hit (%.1f m from last query)", dist
+                )
+                return self._overpass_cache_result
+
         elapsed = time.perf_counter() - self._last_overpass
         if elapsed < self.cfg.delay_overpass_s:
             time.sleep(self.cfg.delay_overpass_s - elapsed)
@@ -510,19 +539,67 @@ class Enricher:
             "Overpass → road_importance=%s  infra_proximity=%s m",
             road_importance, infra_proximity,
         )
-        return {"road_importance": road_importance, "infra_proximity": infra_proximity}
+        result = {"road_importance": road_importance, "infra_proximity": infra_proximity}
+        # Cache this result for nearby frames
+        self._overpass_cache_result = result
+        self._overpass_cache_lat    = lat
+        self._overpass_cache_lon    = lon
+        return result
 
     # ------------------------------------------------------------------
     # Open-Meteo — no API key required
     # ------------------------------------------------------------------
 
     def _fetch_weather(
-        self, lat: float, lon: float, timestamp_s: float
+        self,
+        lat: float,
+        lon: float,
+        wall_time: Optional[str]   = None,
+        timestamp_s: float         = 0.0,
     ) -> Optional[WeatherInfo]:
-        try:
-            dt = datetime.fromtimestamp(timestamp_s, tz=timezone.utc)
-        except (OSError, OverflowError, ValueError):
+        """
+        Fetch weather from Open-Meteo.
+
+        wall_time: ISO 8601 string from FrameResult (e.g. "2011-09-26T13:02:25+00:00").
+                   Used when available — gives the correct absolute date.
+        timestamp_s: relative seconds since drive start — NOT a Unix epoch timestamp.
+                   Only used as a last resort if wall_time is absent.
+
+        Open-Meteo free tier covers approximately the last 90 days.
+        Historical dates outside this range are detected and skipped gracefully.
+        """
+        from datetime import timedelta
+
+        # --- Resolve the wall-clock datetime ---
+        dt: Optional[datetime] = None
+
+        if wall_time:
+            try:
+                # FrameResult.wall_time is stored as an ISO string
+                dt = datetime.fromisoformat(wall_time)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                dt = None
+
+        if dt is None:
+            # timestamp_s is relative (seconds since drive start), not Unix epoch.
+            # Do not call datetime.fromtimestamp() on it — that gives wrong results.
+            # Use today as the best available approximation.
+            logger.debug(
+                "weather: wall_time unavailable, using today as date approximation"
+            )
             dt = datetime.now(tz=timezone.utc)
+
+        # --- Check if date is within Open-Meteo free tier range (last ~90 days) ---
+        now = datetime.now(tz=timezone.utc)
+        age_days = (now - dt.replace(tzinfo=timezone.utc if dt.tzinfo is None else dt.tzinfo)).days
+        if age_days > 90:
+            logger.debug(
+                "weather: date %s is %d days old (>90) — outside Open-Meteo free tier range, skipping",
+                dt.strftime("%Y-%m-%d"), age_days,
+            )
+            return None
 
         date_str = dt.strftime("%Y-%m-%d")
 

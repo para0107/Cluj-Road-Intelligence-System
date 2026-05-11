@@ -342,6 +342,7 @@ def run_drive(
     skip_overpass:   bool,
     dry_run_db:      bool,
     resume:          bool,
+    skip_dedup:      bool = False,
 ) -> dict:
     """
     Run the full pipeline (Stages 1*–9) on one KITTI drive.
@@ -485,22 +486,38 @@ def run_drive(
             else:
                 enr_frames = enr_results_obj
 
-        # ── Stage 7 — Deduplicator ────────────────────────────────────────
+        # ── Stage 7 — Deduplicator ─────────────────────────────────────────────
         dedup_path = session_dir / "07_deduplicated" / "deduplicated.json"
-        dedup_cfg  = DeduplicatorConfig()
-        dedup_results_obj = _run_stage(
-            summary, "deduplicator",
-            resume_path = dedup_path,
-            load_fn     = lambda: Deduplicator.load_deduplicated(str(dedup_path)),
-            run_fn      = lambda: Deduplicator(dedup_cfg).run(
-                enr_frames, output_dir=str(dedup_path.parent)
-            ),
-        )
-        # Deduplicator.run() returns List[DeduplicationResult]; convert to dicts
-        if dedup_results_obj and hasattr(dedup_results_obj[0], "to_dict"):
-            dedup_frames = [r.to_dict() for r in dedup_results_obj]
+
+        if skip_dedup:
+            logger.info("Drive %s Stage 7 — Deduplication SKIPPED (--skip_dedup)", drive_id)
+            dedup_frames = []
+            for fr in enr_frames:
+                fr_copy = dict(fr)
+                fr_copy["boxes"] = [
+                    dict(b, dedup={"cluster_id": -1, "is_duplicate": False, "cluster_size": 1})
+                    for b in fr.get("boxes", [])
+                ]
+                dedup_frames.append(fr_copy)
+            summary["stages"].append({
+                "name": "deduplicator", "skipped": True,
+                "elapsed_s": 0.0, "output": None, "error": None,
+            })
         else:
-            dedup_frames = dedup_results_obj
+            dedup_cfg  = DeduplicatorConfig()
+            dedup_results_obj = _run_stage(
+                summary, "deduplicator",
+                resume_path = dedup_path,
+                load_fn     = lambda: Deduplicator.load_deduplicated(str(dedup_path)),
+                run_fn      = lambda: Deduplicator(dedup_cfg).run(
+                    enr_frames, output_dir=str(dedup_path.parent)
+                ),
+            )
+            # Deduplicator.run() returns List[DeduplicationResult]; convert to dicts
+            if dedup_results_obj and hasattr(dedup_results_obj[0], "to_dict"):
+                dedup_frames = [r.to_dict() for r in dedup_results_obj]
+            else:
+                dedup_frames = dedup_results_obj
 
         # ── Stage 8 — DbWriter ────────────────────────────────────────────
         db_path  = session_dir / "08_db_write" / "db_write_summary.json"
@@ -673,6 +690,10 @@ def _survey_log_start(
             INSERT INTO survey_log
                 (survey_date, started_at, status, video_files)
             VALUES (%s, %s, 'running', %s)
+            ON CONFLICT (survey_date) DO UPDATE
+                SET started_at  = EXCLUDED.started_at,
+                    status      = 'running',
+                    video_files = survey_log.video_files || EXCLUDED.video_files
             RETURNING id;
             """,
             (
@@ -795,6 +816,13 @@ def main() -> None:
         help="Skip stages whose output JSON already exists on disk",
     )
     parser.add_argument(
+        "--skip_dedup", action="store_true",
+        help=(
+            "Skip DBSCAN deduplication and insert all retained detections. "
+            "Recommended for validation runs where all detections should be stored."
+        ),
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
@@ -827,6 +855,7 @@ def main() -> None:
             skip_overpass   = args.skip_overpass,
             dry_run_db      = args.dry_run_db,
             resume          = args.resume,
+            skip_dedup      = args.skip_dedup,
         )
         all_summaries.append(summary)
         if summary["status"] == "failed":

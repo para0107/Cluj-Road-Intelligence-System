@@ -242,10 +242,18 @@ class DbWriter:
                 lon    = frame.get("longitude")
                 gps_ok = lat is not None and lon is not None
 
-                ts_raw = frame.get("timestamp_s", 0.0)
-                try:
-                    dt = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
-                except (OSError, OverflowError, ValueError):
+                # Use wall_time (ISO string) when available.
+                # timestamp_s is a relative offset (seconds since drive start),
+                # NOT a Unix epoch — datetime.fromtimestamp() must not be called on it.
+                wall_time_str = frame.get("wall_time")
+                if wall_time_str:
+                    try:
+                        dt = datetime.fromisoformat(wall_time_str)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        dt = datetime.now(tz=timezone.utc)
+                else:
                     dt = datetime.now(tz=timezone.utc)
                 det_date = dt.date()
 
