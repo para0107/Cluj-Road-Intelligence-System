@@ -50,7 +50,7 @@ class DetectionBase(BaseModel):
     survey_video_file: Optional[str] = None
 
     frame_path: Optional[str] = None
-    crop_path: Optional[str] = None
+    # crop_path: Optional[str] = None
 
 
 # ─────────────────────────────────────────────
@@ -128,7 +128,7 @@ class PriorityItem(BaseModel):
     longitude: float
     detection_count: int
     last_detected: Optional[date]
-    crop_path: Optional[str]
+    # crop_path: Optional[str]
 
 
 class PriorityListResponse(BaseModel):

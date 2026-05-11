@@ -37,7 +37,7 @@ class Detection(Base):
     damage_type = Column(String(30), nullable=False)
     confidence = Column(Float, nullable=False)
     frame_path = Column(Text)
-    crop_path = Column(Text)
+    # crop_path = Column(Text)
 
     # ── SAM segmentation geometry ─────────────────────────────────────────────
     surface_area_cm2 = Column(Float)
