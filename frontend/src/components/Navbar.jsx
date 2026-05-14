@@ -1,6 +1,6 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { Map, BarChart2, Search } from 'lucide-react'
+import { Map, BarChart2, Search, Sun, Moon } from 'lucide-react'
 
 const NAV = [
   { to: '/',          label: 'MAP',       Icon: Map        },
@@ -9,6 +9,19 @@ const NAV = [
 ]
 
 export default function Navbar() {
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark')
+
+  useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.classList.add('light')
+    } else {
+      document.documentElement.classList.remove('light')
+    }
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => setTheme(t => t === 'light' ? 'dark' : 'light')
+
   return (
     <nav style={styles.nav}>
       {/* Logo */}
@@ -34,10 +47,17 @@ export default function Navbar() {
         ))}
       </div>
 
-      {/* Status dot */}
-      <div style={styles.status}>
-        <span style={styles.dot} />
-        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>LIVE</span>
+      <div style={styles.rightSection}>
+        {/* Theme toggle */}
+        <button onClick={toggleTheme} style={styles.themeBtn} title="Toggle light/dark mode">
+          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+        </button>
+
+        {/* Status dot */}
+        <div style={styles.status}>
+          <span style={styles.dot} />
+          <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>LIVE</span>
+        </div>
       </div>
     </nav>
   )
@@ -98,6 +118,23 @@ const styles = {
     color: 'var(--accent)',
     background: 'var(--accent-dim)',
     border: '1px solid rgba(232,255,71,0.2)',
+  },
+  rightSection: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+  },
+  themeBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--text-muted)',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
+    borderRadius: 'var(--radius)',
+    transition: 'var(--transition)',
   },
   status: {
     display: 'flex',

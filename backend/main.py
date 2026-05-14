@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from backend.database import check_connection
-from backend.routes import detections, stats, heatmap, priority
+from backend.routes import detections, stats, heatmap, priority, export
 
 load_dotenv()
 
@@ -55,6 +55,7 @@ app.include_router(detections.router, prefix="/api", tags=["Detections"])
 app.include_router(stats.router,      prefix="/api", tags=["Stats"])
 app.include_router(heatmap.router,    prefix="/api", tags=["Heatmap"])
 app.include_router(priority.router,   prefix="/api", tags=["Priority"])
+app.include_router(export.router,     prefix="/api", tags=["Export"])
 
 # ─────────────────────────────────────────────
 # Startup event
