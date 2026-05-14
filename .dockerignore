@@ -1,0 +1,45 @@
+# ── .dockerignore ─────────────────────────────────────────────────────────────
+# Keeps the Docker build context small and fast.
+
+# Python artefacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+**/*.egg-info/
+
+# Virtual environment
+.venv/
+venv/
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+
+# Data & ML weights (large files not needed by the API container)
+data/
+runs/
+ml/weights/*.pt
+ml/weights/*.pth
+ml/weights/*.json
+validation_logs/
+
+# Git
+.git/
+.gitignore
+
+# IDE / OS
+.idea/
+.vscode/
+**/.DS_Store
+**/Thumbs.db
+
+# Test results / coverage
+.pytest_cache/
+**/.coverage
+htmlcov/
+
+# Logs
+logs/
+*.log
