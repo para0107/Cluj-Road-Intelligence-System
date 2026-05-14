@@ -52,6 +52,8 @@ export default function ExplorerPage() {
         ...(severityMax && { severity_max: Number(severityMax) }),
         ...(dateFrom    && { date_from:    dateFrom    }),
         ...(dateTo      && { date_to:      dateTo      }),
+        sort_by: sortCol,
+        sort_order: sortDir,
       }
       const result = await fetchDetections(params)
       setData(result)
@@ -60,7 +62,7 @@ export default function ExplorerPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo])
+  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo, sortCol, sortDir])
 
   useEffect(() => { load() }, [load])
 
@@ -71,18 +73,17 @@ export default function ExplorerPage() {
     setDateFrom(''); setDateTo(''); setPage(1)
   }
 
-  // Client-side sort on current page
-  const items = data?.items ? [...data.items].sort((a, b) => {
-    const av = a[sortCol] ?? -Infinity
-    const bv = b[sortCol] ?? -Infinity
-    return sortDir === 'desc' ? (bv > av ? 1 : -1) : (av > bv ? 1 : -1)
-  }) : []
+  const items = data?.items || []
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1
 
   const toggleSort = (col) => {
-    if (sortCol === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
-    else { setSortCol(col); setSortDir('desc') }
+    setPage(1) // Reset to page 1 on sort change
+    if (sortCol === col) {
+      setSortDir(d => d === 'desc' ? 'asc' : 'desc')
+    } else { 
+      setSortCol(col); setSortDir('desc') 
+    }
   }
 
   const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo

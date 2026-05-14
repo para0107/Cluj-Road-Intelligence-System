@@ -35,6 +35,8 @@ def list_detections(
     severity_max: Optional[int] = Query(None, ge=1, le=5),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
+    sort_by: Optional[str] = Query("priority_score"),
+    sort_order: Optional[str] = Query("desc"),
     db: Session = Depends(get_db),
 ):
     query = db.query(Detection)
@@ -51,8 +53,25 @@ def list_detections(
         query = query.filter(Detection.last_detected <= date_to)
 
     total = query.count()
+
+    # Handle sorting safely
+    valid_sort_columns = {
+        "damage_type": Detection.damage_type,
+        "severity": Detection.severity,
+        "confidence": Detection.confidence,
+        "priority_score": Detection.priority_score,
+        "detection_count": Detection.detection_count,
+        "latitude": Detection.latitude,
+        "last_detected": Detection.last_detected,
+    }
+    order_col = valid_sort_columns.get(sort_by, Detection.priority_score)
+    if sort_order == "asc":
+        query = query.order_by(order_col.asc())
+    else:
+        query = query.order_by(order_col.desc())
+
     items = (
-        query.order_by(Detection.priority_score.desc())
+        query
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
