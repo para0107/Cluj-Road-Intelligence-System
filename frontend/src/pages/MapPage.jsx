@@ -195,14 +195,6 @@ export default function MapPage() {
   const [activeClasses, setActiveClasses] = useState(new Set())
   const [selected,   setSelected]   = useState(null)
   const [showLegend, setShowLegend] = useState(true)
-  const [isLight,    setIsLight]    = useState(() => document.documentElement.classList.contains('light'))
-
-  // Listen to theme changes from Navbar
-  useEffect(() => {
-    const onThemeChange = () => setIsLight(document.documentElement.classList.contains('light'))
-    window.addEventListener('themeChanged', onThemeChange)
-    return () => window.removeEventListener('themeChanged', onThemeChange)
-  }, [])
 
   // Load all detections (up to 500 for the map)
   useEffect(() => {
@@ -248,11 +240,7 @@ export default function MapPage() {
         style={styles.map}
         zoomControl={false}
       >
-        <TileLayer 
-          key={isLight ? 'light' : 'dark'}
-          url={isLight ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' : TILE_URL} 
-          attribution={TILE_ATTR} maxZoom={30} maxNativeZoom={19}
-        />
+        <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxZoom={30} maxNativeZoom={19}/>
         <FitBounds detections={detections} />
 
         {visible.map(d => {

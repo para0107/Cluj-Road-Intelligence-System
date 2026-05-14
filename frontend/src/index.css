@@ -63,6 +63,9 @@ html, body, #root {
 ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
 
 /* ─── Leaflet overrides ──────────────────────────────────────────────────── */
+:root.light .leaflet-tile-pane {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
 .leaflet-container {
   background: var(--bg-card) !important;
   font-family: var(--font-sans) !important;
