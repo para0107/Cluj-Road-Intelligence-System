@@ -29,7 +29,7 @@ router = APIRouter()
 @router.get("/detections", response_model=DetectionListResponse)
 def list_detections(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),
     damage_type: Optional[str] = Query(None),
     severity_min: Optional[int] = Query(None, ge=1, le=5),
     severity_max: Optional[int] = Query(None, ge=1, le=5),

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
 import { useNavigate } from 'react-router-dom'
-import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle } from 'lucide-react'
+import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle, Map } from 'lucide-react'
 import {
   CLASS_COLORS, CLASS_LABELS, CLASS_ICONS,
   SEVERITY_COLORS, SEVERITY_LABELS,
@@ -195,11 +195,12 @@ export default function MapPage() {
   const [activeClasses, setActiveClasses] = useState(new Set())
   const [selected,   setSelected]   = useState(null)
   const [showLegend, setShowLegend] = useState(true)
+  const [heatmapMode, setHeatmapMode] = useState(false)
 
   // Load all detections (up to 500 for the map)
   useEffect(() => {
     Promise.all([
-      fetchDetections({ page: 1, page_size: 100 }),
+      fetchDetections({ page: 1, page_size: 500 }),
       fetchStats(),
     ])
       .then(([det, st]) => {
@@ -250,16 +251,18 @@ export default function MapPage() {
             <CircleMarker
               key={d.id}
               center={[d.latitude, d.longitude]}
-              radius={d.severity >= 4 ? 9 : d.severity === 3 ? 7 : 5}
+              radius={heatmapMode ? (d.severity * 8) : (d.severity >= 4 ? 9 : d.severity === 3 ? 7 : 5)}
               pathOptions={{
-                color: sevColor,
-                fillColor: color,
-                fillOpacity: 0.85,
-                weight: d.severity >= 4 ? 2 : 1,
+                color: heatmapMode ? 'transparent' : sevColor,
+                fillColor: heatmapMode ? sevColor : color,
+                fillOpacity: heatmapMode ? 0.3 : 0.85,
+                weight: heatmapMode ? 0 : (d.severity >= 4 ? 2 : 1),
+                className: heatmapMode ? 'heatmap-blob' : ''
               }}
-              eventHandlers={{ click: () => setSelected(d) }}
+              eventHandlers={{ click: () => !heatmapMode && setSelected(d) }}
             >
-              <Popup>
+              {!heatmapMode && (
+                <Popup>
                 <div style={styles.popup}>
                   <div style={styles.popupHeader}>
                     <span style={{ color: CLASS_COLORS[d.damage_type] || '#888', fontSize: 18 }}>
@@ -289,6 +292,7 @@ export default function MapPage() {
                   </div>
                 </div>
               </Popup>
+              )}
             </CircleMarker>
           )
         })}
@@ -296,6 +300,13 @@ export default function MapPage() {
 
       {/* ── Top-right action buttons ─────────────────────────────────── */}
       <div style={styles.actions}>
+        <button 
+          style={{ ...styles.actionBtn, ...(heatmapMode ? styles.actionBtnActive : {}) }} 
+          onClick={() => setHeatmapMode(!heatmapMode)}
+        >
+          <Map size={14} />
+          {heatmapMode ? 'Points' : 'Heatmap'}
+        </button>
         <button style={styles.actionBtn} onClick={() => navigate('/stats')}>
           <BarChart2 size={14} />
           Stats
@@ -438,6 +449,11 @@ const styles = {
     cursor: 'pointer',
     transition: 'var(--transition)',
     backdropFilter: 'blur(8px)',
+  },
+  actionBtnActive: {
+    background: 'var(--accent-dim)',
+    border: '1px solid var(--accent)',
+    color: 'var(--accent)',
   },
   actionBtnAccent: {
     background: 'var(--accent)',

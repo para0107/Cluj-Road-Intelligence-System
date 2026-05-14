@@ -59,6 +59,7 @@ The system has four distinct layers:
 ┌─────────────────────────────────────────────────────────────────┐
 │ LAYER 4 — Frontend (frontend/)                                  │
 │ Interactive Leaflet map · filters · report + stats dashboard    │
+│ Dark/Light mode · CSS-blended Heatmap · CSV Export              │
 │ React 18 + Vite + react-leaflet (complete)                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -133,11 +134,22 @@ The system has four distinct layers:
 ┌──────────────────────────▼──────────────────────────────────────┐
 │ STAGE 8 — Backend API + Dashboard [FastAPI + frontend/] ✅      │
 │ • REST API reads from PostGIS                                   │
-│ • Routes: detections · stats · heatmap · priority               │
+│ • Routes: detections · stats · heatmap · priority · export      │
 │ • Frontend consumes API and displays map + analytics            │
+│ • Advanced UI: Heatmap Mode, Light/Dark toggle, CSV Export      │
 │ • Daily pipeline trigger via APScheduler (02:00 Bucharest TZ)   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Interactive Dashboard Features
+
+The frontend application (`http://localhost:3000`) provides several advanced visualization tools for exploring the pipeline's detection data:
+
+- **Dynamic Heatmap Overlay:** A toggle on the Map Page that instantly switches standard detection point markers to a density-based heatmap. It uses mathematically driven CSS blending filters (`mix-blend-mode: screen/multiply` and `blur`) to visually highlight "Critical Zones"—dense clusters of severe detections (S4/S5)—without requiring expensive client-side charting libraries.
+- **Light/Dark Mode:** A unified, dynamic theme system. Toggling the theme instantly recolors all UI components and mathematically inverts the CartoDB base map tiles using a CSS hue-rotation, guaranteeing an instant visual swap without reloading heavy map tiles.
+- **Server-Side Sorting & Export:** The Explorer Page table performs full-database sorting directly on PostgreSQL (via the API) before paginating, ensuring you always see the absolute most critical detections first. The data can also be downloaded locally via the **Export CSV** backend endpoint.
 
 ---
 
@@ -515,6 +527,7 @@ This starts:
 | GET | `/stats` | City-wide counts by type and severity |
 | GET | `/heatmap` | Density grid for map overlay |
 | GET | `/priority-list` | Ranked repair list by priority_score |
+| GET | `/export/csv` | Download all detections as a formatted CSV |
 | POST | `/process` | Trigger processing of new survey footage |
 
 ---
@@ -552,6 +565,7 @@ All secrets and paths live in `.env`. Never committed to git.
 - [x] TTA evaluated — zero gain, disabled
 - [x] FastAPI backend — all routes tested on Swagger
 - [x] React frontend — interactive map (Leaflet), filters, explorer and stats pages
+- [x] Advanced UI features — CSS-blended Heatmap Mode, Light/Dark toggle, Server-side sorting, CSV Export
 - [x] APScheduler daily job (02:00 Europe/Bucharest)
 - [x] Docker Compose — PostgreSQL 15 + PostGIS + pgAdmin
 - [x] preprocessor.py — frame extraction, GPS sync, lighting, shadow, sun angle

@@ -92,6 +92,16 @@ html, body, #root {
 }
 .leaflet-control-attribution a { color: var(--accent) !important; }
 
+/* ─── Heatmap Blob Effect ────────────────────────────────────────────────── */
+.heatmap-blob {
+  filter: blur(6px);
+  mix-blend-mode: screen;
+}
+:root.light .heatmap-blob {
+  mix-blend-mode: multiply;
+  filter: blur(5px);
+}
+
 /* ─── Utility classes ────────────────────────────────────────────────────── */
 .mono { font-family: var(--font-mono); }
 .text-accent { color: var(--accent); }
