@@ -23,3 +23,7 @@ runs/detect/*
 yolov8n.pt
 runs.zip
 results.xlsx
+
+# Python bytecode
+*.pyc
+__pycache__/
