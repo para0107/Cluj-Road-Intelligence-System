@@ -107,9 +107,6 @@ export default function StatsPage() {
           <StatCard icon={TrendingUp}    label="Avg Severity"       value={stats.avg_severity?.toFixed(2) ?? '—'} color="var(--orange)"
             sub={stats.avg_severity ? ['Low','Low-Med','Medium','High','Critical'][Math.round(stats.avg_severity)-1] : null}
           />
-          <StatCard icon={Activity}      label="Most Damaged Street" value={stats.most_damaged_street || '—'}  color="var(--purple)"
-            sub={stats.most_damaged_street ? 'highest detection count' : 'enrichment not available'}
-          />
         </div>
 
         <div style={styles.grid}>
@@ -265,7 +262,7 @@ const styles = {
   title: { fontSize: 26, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.5px' },
   subtitle: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 },
   body: { padding: '24px 32px 48px' },
-  kpiRow: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 },
+  kpiRow: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 24 },
   card: {
     background: 'var(--bg-card)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', padding: '20px 24px',

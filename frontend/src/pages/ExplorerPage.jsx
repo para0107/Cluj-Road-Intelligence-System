@@ -30,7 +30,6 @@ export default function ExplorerPage() {
   const [severityMax, setSeverityMax] = useState('')
   const [dateFrom,    setDateFrom]    = useState('')
   const [dateTo,      setDateTo]      = useState('')
-  const [street,      setStreet]      = useState('')
 
   // Sort (client-side on the fetched page)
   const [sortCol, setSortCol] = useState('priority_score')
@@ -53,7 +52,6 @@ export default function ExplorerPage() {
         ...(severityMax && { severity_max: Number(severityMax) }),
         ...(dateFrom    && { date_from:    dateFrom    }),
         ...(dateTo      && { date_to:      dateTo      }),
-        ...(street      && { street_name:  street      }),
       }
       const result = await fetchDetections(params)
       setData(result)
@@ -62,7 +60,7 @@ export default function ExplorerPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo, street])
+  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo])
 
   useEffect(() => { load() }, [load])
 
@@ -70,7 +68,7 @@ export default function ExplorerPage() {
   const applyFilter = () => { setPage(1); load() }
   const clearFilters = () => {
     setDamageType(''); setSeverityMin(''); setSeverityMax('')
-    setDateFrom(''); setDateTo(''); setStreet(''); setPage(1)
+    setDateFrom(''); setDateTo(''); setPage(1)
   }
 
   // Client-side sort on current page
@@ -87,7 +85,7 @@ export default function ExplorerPage() {
     else { setSortCol(col); setSortDir('desc') }
   }
 
-  const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo || street
+  const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo
 
   return (
     <div style={styles.page}>
@@ -160,17 +158,6 @@ export default function ExplorerPage() {
               placeholder="To"
             />
 
-            {/* Street search */}
-            <div style={styles.searchWrap}>
-              <Search size={12} style={{ position:'absolute', left:9, color:'var(--text-muted)' }} />
-              <input
-                type="text"
-                value={street}
-                onChange={e => { setStreet(e.target.value); setPage(1) }}
-                placeholder="Street name…"
-                style={{ ...styles.dateInput, paddingLeft: 28, minWidth: 140 }}
-              />
-            </div>
           </div>
 
           {hasFilters && (
@@ -192,7 +179,6 @@ export default function ExplorerPage() {
               { key: 'detection_count',label: 'Seen'        },
               { key: 'latitude',       label: 'GPS'         },
               { key: 'last_detected',  label: 'Last Seen'   },
-              { key: 'street_name',    label: 'Street'      },
             ].map(col => (
               <div
                 key={col.key}
@@ -290,11 +276,6 @@ export default function ExplorerPage() {
                 <div style={{ ...styles.td, fontSize: 11, color: 'var(--text-dim)' }}>
                   {item.last_detected || '—'}
                 </div>
-
-                {/* Street */}
-                <div style={{ ...styles.td, fontSize: 11, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.street_name || <span style={{ color: 'var(--border-bright)' }}>—</span>}
-                </div>
               </div>
             )
           })}
@@ -338,7 +319,7 @@ export default function ExplorerPage() {
   )
 }
 
-const COL = '1.8fr 90px 110px 110px 60px 120px 90px 1fr'
+const COL = '1.8fr 90px 110px 110px 60px 120px 1fr'
 
 const styles = {
   page: { paddingTop: 48, minHeight: '100vh', background: 'var(--bg)' },
