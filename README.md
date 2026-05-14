@@ -404,10 +404,10 @@ RIDS/
 # Install dependencies
 pip install -r requirements.txt
 
-# Start PostgreSQL + PostGIS
-docker-compose up -d
+# Start the entire stack (Database, Backend API, Frontend)
+docker compose up -d
 
-# Create tables, indexes, triggers
+# Create tables, indexes, triggers (if starting from a fresh DB volume)
 python scripts/setup_db.py
 ```
 
@@ -466,6 +466,8 @@ Each run creates `data/processed/sessions/<session_id>/` containing:
 - `07_db_write/db_write_summary.json`
 - `session.json`
 
+> **Note on Workflow:** Because the `.env` uses `POSTGRES_PORT=5433` (which is mapped to the Docker database container), running `orchestrator.py` or any pipeline script locally will inject data **directly into the running Docker database**. You do not need to restart Docker after running a pipeline; just refresh the frontend to see new detections.
+
 ### KITTI dataset pipeline test
 
 ```bash
@@ -487,21 +489,19 @@ python scripts/generate_kitti_report.py
 
 > KITTI drives processed: 2011_09_26_drive_0001_sync (108 frames), 0002 (77 frames), 0018, 0057. Camera: image_03 (right colour, focal length 721 px). GPS: from oxts/data/{N:010d}.txt (field 0 = lat, field 1 = lon). Timestamps: from image_03/timestamps.txt.
 
-### Backend API
+### Running the Application
+
+The entire application is containerized using Docker.
 
 ```bash
-uvicorn backend.main:app --reload
-# Swagger UI: http://localhost:8000/docs
+docker compose up -d
 ```
 
-### Frontend (React + Vite)
-
-```bash
-cd frontend
-npm install
-npm run dev
-# App: http://localhost:5173
-```
+This starts:
+1. **Frontend (React + Vite served by Nginx):** http://localhost:3000
+2. **Backend API (FastAPI):** http://localhost:8000
+3. **Swagger API Docs:** http://localhost:8000/docs
+4. **PostgreSQL/PostGIS Database:** localhost:5433
 
 ---
 
@@ -691,7 +691,7 @@ All papers used across 10 categories. Papers marked `[EVALUATED, NOT DEPLOYED]` 
 | Backend | FastAPI + Pydantic v2 | 0.111 |
 | Scheduler | APScheduler | Europe/Bucharest TZ |
 | Frontend | React 18 + Leaflet.js | Vite + react-leaflet |
-| Containerisation | Docker Compose | PostgreSQL + pgAdmin |
+| Containerisation | Docker Compose | Full app (Frontend Nginx, Backend FastAPI, PostGIS) |
 | Test dataset | KITTI 2011_09_26 | image_03, 4 drives, real GPS |
 | Language | Python 3.12 | — |
 
