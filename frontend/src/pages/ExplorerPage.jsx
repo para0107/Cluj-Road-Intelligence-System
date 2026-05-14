@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Search } from 'lucide-react'
+import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Search, Download } from 'lucide-react'
 import { fetchDetections } from '../utils/api'
 import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS } from '../utils/constants'
 
@@ -102,6 +102,11 @@ export default function ExplorerPage() {
               {hasFilters && <span style={{ color: 'var(--accent)', marginLeft: 6 }}>· filtered</span>}
             </p>
           </div>
+        </div>
+        <div style={styles.headerRight}>
+          <a href="/api/export/csv" download style={styles.exportBtn}>
+            <Download size={13} /> EXPORT CSV
+          </a>
         </div>
       </div>
 
@@ -334,6 +339,15 @@ const styles = {
     border: '1px solid var(--border-bright)', borderRadius: 'var(--radius)',
     color: 'var(--text-muted)', fontSize: 11, fontFamily: 'var(--font-mono)',
     fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em',
+  },
+  headerRight: { display: 'flex', alignItems: 'center' },
+  exportBtn: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '6px 14px', background: 'var(--accent-dim)',
+    border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+    color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--font-mono)',
+    fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em', textDecoration: 'none',
+    transition: 'var(--transition)',
   },
   title: { fontSize: 26, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.5px' },
   subtitle: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 },
