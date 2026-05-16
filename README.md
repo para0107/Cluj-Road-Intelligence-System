@@ -341,7 +341,8 @@ RIDS/
 │   ├── validate_db_write.py      ✅ Stage 7 DB write validation (dry run + live)
 │   ├── run_survey.py             ✅ Manual one-shot pipeline trigger
 │   ├── run_kitti_pipeline.py     ✅ Full pipeline test on KITTI dataset
-│   └── generate_kitti_report.py  ✅ HTML visual report for KITTI runs
+│   ├── generate_kitti_report.py  ✅ HTML visual report for KITTI runs
+│   └── download_comma2k19_selective.py ✅ Comma2k19 dataset downloader + pipeline runner
 │
 ├── backend/
 │   ├── main.py        ✅ FastAPI app + CORS + routers
@@ -500,6 +501,21 @@ python scripts/generate_kitti_report.py
 ```
 
 > KITTI drives processed: 2011_09_26_drive_0001_sync (108 frames), 0002 (77 frames), 0018, 0057. Camera: image_03 (right colour, focal length 721 px). GPS: from oxts/data/{N:010d}.txt (field 0 = lat, field 1 = lon). Timestamps: from image_03/timestamps.txt.
+
+### Comma2k19 dataset pipeline test
+
+```bash
+# Download all chunks + extract (no pipeline)
+python scripts/download_comma2k19_selective.py --skip_pipeline
+
+# Download + extract + run full RIDS pipeline
+python scripts/download_comma2k19_selective.py --device cuda
+
+# Already downloaded and extracted — pipeline only
+python scripts/download_comma2k19_selective.py --skip_download --device cuda
+```
+
+> The script downloads the ~94.6 GB Comma2k19 dataset over plain HTTPS from HuggingFace (avoiding university BitTorrent blocks), selectively extracts only `video.hevc` and `global_pos/` to save space, converts ECEF GPS coordinates to WGS84, and runs the full RIDS pipeline on each segment.
 
 ### Running the Application
 
