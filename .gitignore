@@ -19,7 +19,7 @@ runs/detect/*
 # 4. Un-ignore the specific folders you want inside `detect`
 !runs/detect/val/
 !runs/detect/val2/
-
+logs
 yolov8n.pt
 runs.zip
 results.xlsx
