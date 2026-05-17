@@ -97,6 +97,7 @@ class StatsResponse(BaseModel):
     damage_type_breakdown: List[DamageTypeCount]
     severity_breakdown: List[SeverityCount]
     avg_severity: Optional[float]
+    avg_confidence: Optional[float]
     critical_count: int  # severity >= 4
 
 

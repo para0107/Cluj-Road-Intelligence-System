@@ -204,14 +204,26 @@ def _ecef_to_wgs84(x: float, y: float, z: float) -> Tuple[float, float, float]:
 # ---------------------------------------------------------------------------
 # GPX writer — reads actual global_pos/ numpy files from disk
 # ---------------------------------------------------------------------------
-def _write_gpx_from_global_pos(pose_dir: Path, out_gpx: Path) -> bool:
+def _write_gpx_from_global_pos(
+    pose_dir: Path, out_gpx: Path, route_name: str = ""
+) -> "Tuple[bool, Optional[datetime]]":
     """
-    Reads global_pos/frame_positions (ECEF, shape N x 3) and
-    global_pos/frame_times (boot-time s, shape N) from actual extracted
+    Reads global_pose/frame_positions (ECEF, shape N x 3) and
+    global_pose/frame_times (boot-time s, shape N) from actual extracted
     files, converts ECEF to WGS84, writes a GPX 1.1 file.
 
-    Comma2k19 arrays are stored without .npy extension; tries both forms.
-    Returns True on success, False if files are missing or malformed.
+    frame_times in Comma2k19 are boot-time seconds (seconds since device
+    boot), NOT Unix timestamps. Values are typically in the range 0-86400.
+    Using datetime.fromtimestamp() on them produces 1970-01-01 dates which
+    causes the preprocessor to compute a negative video duration.
+
+    Fix: extract the date from the route name (e.g. 2018-07-27--06-03-57)
+    and use it as the base date. The boot-time seconds then become the
+    intra-day offset, producing realistic GPX timestamps that the
+    preprocessor can use correctly.
+
+    Returns (True, gpx_start_datetime) on success,
+            (False, None) if files are missing or malformed.
     DATA NOTE: reads actual files from disk — no mocks.
     """
     try:
@@ -237,16 +249,41 @@ def _write_gpx_from_global_pos(pose_dir: Path, out_gpx: Path) -> bool:
 
     if positions is None:
         logger.warning(
-            "global_pos/frame_positions not found in %s — no GPS for this segment",
+            "global_pose/frame_positions not found in %s — no GPS for this segment",
             pose_dir,
         )
-        return False
+        return False, None
 
     if positions.ndim != 2 or positions.shape[1] < 3:
         logger.warning(
             "frame_positions unexpected shape %s in %s", positions.shape, pose_dir
         )
-        return False
+        return False, None
+
+    # ------------------------------------------------------------------
+    # Derive base date from route name: e.g. "99c94dc769b5d96e_2018-07-27--06-03-57"
+    # The date part is after the first underscore.
+    # Boot-time seconds are used as intra-day offsets from midnight UTC
+    # on that date, producing valid absolute timestamps the preprocessor
+    # can use to compute video duration correctly.
+    # ------------------------------------------------------------------
+    base_ts = 0.0   # Unix timestamp of midnight UTC on the recording date
+    try:
+        # Route name format: <dongle_id>_<YYYY-MM-DD>--<HH-MM-SS>
+        date_part = route_name.split("_", 1)[-1]   # "2018-07-27--06-03-57"
+        date_str  = date_part.split("--")[0]         # "2018-07-27"
+        base_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        base_ts   = base_date.timestamp()
+    except Exception:
+        # Fallback: use 2018-01-01 as a reasonable Comma2k19 base date
+        base_ts = datetime(2018, 1, 1, tzinfo=timezone.utc).timestamp()
+
+    # Normalise boot times so they start from 0 within the segment
+    if times is not None and len(times) > 0:
+        t0 = float(times[0])
+        times_normalised = [float(t) - t0 for t in times]
+    else:
+        times_normalised = [float(i) / 10.0 for i in range(len(positions))]
 
     out_gpx.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -256,11 +293,15 @@ def _write_gpx_from_global_pos(pose_dir: Path, out_gpx: Path) -> bool:
         "  <trk><trkseg>",
     ]
     n = len(positions)
+    gpx_start: Optional[datetime] = None
     for i in range(n):
         x, y, z       = float(positions[i, 0]), float(positions[i, 1]), float(positions[i, 2])
         lat, lon, alt = _ecef_to_wgs84(x, y, z)
-        ts  = float(times[i]) if (times is not None and i < len(times)) else 0.0
-        iso = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        abs_ts = base_ts + times_normalised[i]
+        dt     = datetime.fromtimestamp(abs_ts, tz=timezone.utc)
+        if i == 0:
+            gpx_start = dt
+        iso = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         lines.append(
             f'    <trkpt lat="{lat:.8f}" lon="{lon:.8f}">'
             f"<ele>{alt:.2f}</ele><time>{iso}</time></trkpt>"
@@ -268,8 +309,8 @@ def _write_gpx_from_global_pos(pose_dir: Path, out_gpx: Path) -> bool:
     lines += ["  </trkseg></trk>", "</gpx>"]
     with out_gpx.open("w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    logger.info("GPX written: %s (%d trackpoints)", out_gpx, n)
-    return True
+    logger.info("GPX written: %s (%d trackpoints, start=%s)", out_gpx, n, gpx_start)
+    return True, gpx_start
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +440,7 @@ def _extract_zips(zip_paths: List[Path], dest: Path) -> List[Path]:
 
                     want = (
                         entry_norm.endswith("video.hevc")
-                        or "/global_pos/" in entry_norm
+                        or "/global_pose/" in entry_norm
                     )
                     if not want:
                         continue
@@ -505,13 +546,13 @@ def _run_segment(
     dry_run_db:  bool,
 ) -> dict:
     """
-    1. Converts global_pos/frame_positions (ECEF) -> WGS84 -> GPX.
+    1. Converts global_pose/frame_positions (ECEF) -> WGS84 -> GPX.
     2. Runs the full RIDS orchestrator (Stages 1-7) on video.hevc.
     Returns a summary dict of real pipeline metrics — nothing mocked.
     """
     seg_name   = segment_dir.name
     video_path = segment_dir / "video.hevc"
-    pose_dir   = segment_dir / "global_pos"
+    pose_dir   = segment_dir / "global_pose"
 
     if not video_path.exists():
         return {
@@ -525,12 +566,12 @@ def _run_segment(
         work_dir / "tmp_gpx"
         / f"{segment_dir.parent.name}_{seg_name}.gpx"
     )
-    has_gps = _write_gpx_from_global_pos(pose_dir, tmp_gpx)
+    has_gps, gpx_start = _write_gpx_from_global_pos(
+        pose_dir, tmp_gpx, route_name=segment_dir.parent.name
+    )
 
     # Pass empty string (not None) when no GPS — OrchestratorConfig
     # coerces None to "" internally which then fails the format check.
-    # Passing "" directly triggers the "GPS file not found" branch which
-    # is handled gracefully (DBSCAN + DB write skipped, pipeline continues).
     gps_arg = str(tmp_gpx) if has_gps else ""
 
     if not has_gps:
@@ -554,14 +595,15 @@ def _run_segment(
         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
     cfg = OrchestratorConfig(
-        video_path  = str(video_path),
-        gps_path    = gps_arg,
-        work_dir    = str(work_dir / "sessions"),
-        session_id  = session_id,
-        device      = device,
-        fps         = fps,
-        dry_run_db  = dry_run_db,
-        resume      = False,
+        video_path       = str(video_path),
+        gps_path         = gps_arg,
+        work_dir         = str(work_dir / "sessions"),
+        session_id       = session_id,
+        device           = device,
+        fps              = fps,
+        dry_run_db       = dry_run_db,
+        resume           = False,
+        video_start_time = gpx_start,   # tells preprocessor when frame 0 is
     )
 
     t0 = time.perf_counter()

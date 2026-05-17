@@ -57,6 +57,9 @@ def get_stats(db: Session = Depends(get_db)):
     avg_severity = db.query(func.avg(Detection.severity)).scalar()
     avg_severity = round(float(avg_severity), 2) if avg_severity else None
 
+    avg_confidence = db.query(func.avg(Detection.confidence)).scalar()
+    avg_confidence = round(float(avg_confidence), 3) if avg_confidence else None
+
     critical_count = (
         db.query(func.count(Detection.id))
         .filter(Detection.severity >= 4)
@@ -71,5 +74,6 @@ def get_stats(db: Session = Depends(get_db)):
         damage_type_breakdown=damage_type_breakdown,
         severity_breakdown=severity_breakdown,
         avg_severity=avg_severity,
+        avg_confidence=avg_confidence,
         critical_count=critical_count,
     )

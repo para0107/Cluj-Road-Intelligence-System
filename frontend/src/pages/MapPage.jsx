@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts'
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents, Polygon, Polyline } from 'react-leaflet'
 import { useNavigate } from 'react-router-dom'
-import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle, Map } from 'lucide-react'
+import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle, Map, PenTool, XCircle, Check } from 'lucide-react'
 import {
   CLASS_COLORS, CLASS_LABELS, CLASS_ICONS,
   SEVERITY_COLORS, SEVERITY_LABELS,
@@ -22,6 +23,57 @@ function FitBounds({ detections }) {
     ]
     map.fitBounds(bounds, { padding: [40, 40] })
   }, [detections, map])
+  return null
+}
+
+// ── Point in Polygon ──────────────────────────────────────────────────────
+function isPointInPolygon(point, vs) {
+  const x = point[0], y = point[1];
+  let inside = false;
+  for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+    const xi = vs[i][0], yi = vs[i][1];
+    const xj = vs[j][0], yj = vs[j][1];
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// ── Map Click Handler ─────────────────────────────────────────────────────
+function MapClickHandler({ drawingMode, addPoint, finishDrawing }) {
+  const [isDrawing, setIsDrawing] = useState(false)
+  const map = useMap()
+
+  useMapEvents({
+    mousedown(e) {
+      if (drawingMode) {
+        setIsDrawing(true)
+        map.dragging.disable()
+        addPoint([e.latlng.lat, e.latlng.lng], true)
+      }
+    },
+    mousemove(e) {
+      if (drawingMode && isDrawing) {
+        addPoint([e.latlng.lat, e.latlng.lng], false)
+      }
+    },
+    mouseup(e) {
+      if (drawingMode && isDrawing) {
+        setIsDrawing(false)
+        map.dragging.enable()
+        finishDrawing()
+      }
+    }
+  })
+
+  useEffect(() => {
+    if (!drawingMode) {
+      map.dragging.enable()
+      setIsDrawing(false)
+    }
+  }, [drawingMode, map])
+
   return null
 }
 
@@ -197,6 +249,11 @@ export default function MapPage() {
   const [showLegend, setShowLegend] = useState(true)
   const [heatmapMode, setHeatmapMode] = useState(false)
 
+  // Drawing state
+  const [drawingMode, setDrawingMode] = useState(false)
+  const [polygonPoints, setPolygonPoints] = useState([])
+  const [finishedPolygon, setFinishedPolygon] = useState(null)
+
   // Load all detections (up to 500 for the map)
   useEffect(() => {
     Promise.all([
@@ -227,7 +284,37 @@ export default function MapPage() {
     classCounts[d.damage_type] = (classCounts[d.damage_type] || 0) + 1
   })
 
-  const visible = detections.filter(d => activeClasses.has(d.damage_type))
+  const currentPolygon = finishedPolygon || (drawingMode && polygonPoints.length > 2 ? polygonPoints : null)
+
+  const visible = detections.filter(d => {
+    if (!activeClasses.has(d.damage_type)) return false
+    if (currentPolygon) {
+      return isPointInPolygon([d.latitude, d.longitude], currentPolygon)
+    }
+    return true
+  })
+
+  const displayStats = currentPolygon ? {
+    total_detections: visible.length,
+    critical_count: visible.filter(d => d.severity >= 4).length,
+    avg_severity: visible.length ? (visible.reduce((acc, d) => acc + d.severity, 0) / visible.length) : 0,
+    avg_confidence: visible.length ? (visible.reduce((acc, d) => acc + d.confidence, 0) / visible.length) : 0,
+    last_survey_date: stats?.last_survey_date
+  } : stats;
+
+  const confidenceData = useMemo(() => {
+    if (!finishedPolygon) return []
+    const bins = { '0-20%':0, '20-40%':0, '40-60%':0, '60-80%':0, '80-100%':0 }
+    visible.forEach(d => {
+      const c = d.confidence
+      if (c < 0.2) bins['0-20%']++
+      else if (c < 0.4) bins['20-40%']++
+      else if (c < 0.6) bins['40-60%']++
+      else if (c < 0.8) bins['60-80%']++
+      else bins['80-100%']++
+    })
+    return Object.entries(bins).map(([name, count]) => ({ name, count }))
+  }, [finishedPolygon, visible])
 
   return (
     <div style={styles.page}>
@@ -238,11 +325,33 @@ export default function MapPage() {
         zoom={CLUJ_ZOOM}
         maxZoom={20}
         minZoom={3}
-        style={styles.map}
+        style={{ ...styles.map, cursor: drawingMode ? 'crosshair' : 'grab' }}
         zoomControl={false}
       >
         <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxZoom={30} maxNativeZoom={19}/>
         <FitBounds detections={detections} />
+        <MapClickHandler 
+          drawingMode={drawingMode} 
+          addPoint={(p, reset) => setPolygonPoints(prev => reset ? [p] : [...prev, p])}
+          finishDrawing={() => {
+            setPolygonPoints(prev => {
+              if (prev.length > 2) {
+                setFinishedPolygon(prev)
+                setDrawingMode(false)
+              } else {
+                setDrawingMode(false)
+              }
+              return prev
+            })
+          }}
+        />
+
+        {finishedPolygon && (
+          <Polygon positions={finishedPolygon} pathOptions={{ color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.1, weight: 2 }} />
+        )}
+        {!finishedPolygon && polygonPoints.length > 0 && (
+          <Polygon positions={polygonPoints} pathOptions={{ color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.1, weight: 2, dashArray: '4' }} />
+        )}
 
         {visible.map(d => {
           const color = CLASS_COLORS[d.damage_type] || '#888'
@@ -300,6 +409,45 @@ export default function MapPage() {
 
       {/* ── Top-right action buttons ─────────────────────────────────── */}
       <div style={styles.actions}>
+        {!drawingMode && !finishedPolygon && (
+          <button style={styles.actionBtn} onClick={() => setDrawingMode(true)}>
+            <PenTool size={14} /> Draw Zone
+          </button>
+        )}
+        {drawingMode && (
+          <>
+            <button 
+              style={{ ...styles.actionBtn, ...styles.actionBtnAccent }}
+              onClick={() => {
+                if (polygonPoints.length > 2) {
+                  setFinishedPolygon(polygonPoints)
+                  setDrawingMode(false)
+                }
+              }}
+              disabled={polygonPoints.length < 3}
+            >
+              <Check size={14} /> Finish Zone
+            </button>
+            <button 
+              style={{ ...styles.actionBtn, color: 'var(--red)' }}
+              onClick={() => {
+                setDrawingMode(false)
+                setPolygonPoints([])
+              }}
+            >
+              <XCircle size={14} /> Cancel
+            </button>
+          </>
+        )}
+        {finishedPolygon && (
+          <button style={{ ...styles.actionBtn, color: 'var(--red)' }} onClick={() => {
+            setFinishedPolygon(null)
+            setPolygonPoints([])
+          }}>
+            <XCircle size={14} /> Clear Zone
+          </button>
+        )}
+
         <button 
           style={{ ...styles.actionBtn, ...(heatmapMode ? styles.actionBtnActive : {}) }} 
           onClick={() => setHeatmapMode(!heatmapMode)}
@@ -322,19 +470,21 @@ export default function MapPage() {
       </div>
 
       {/* ── Bottom stat strip ────────────────────────────────────────── */}
-      {stats && (
+      {displayStats && (
         <div style={styles.statStrip}>
-          <StatChip label="Total" value={stats.total_detections} color="var(--accent)" />
+          <StatChip label={currentPolygon ? "Zone Total" : "Total"} value={displayStats.total_detections} color="var(--accent)" />
           <div style={styles.stripDivider} />
-          <StatChip label="Critical" value={stats.critical_count} color="var(--red)" />
+          <StatChip label="Critical" value={displayStats.critical_count} color="var(--red)" />
           <div style={styles.stripDivider} />
-          <StatChip label="Avg Severity" value={stats.avg_severity?.toFixed(1) ?? '—'} color="var(--orange)" />
+          <StatChip label="Avg Severity" value={typeof displayStats.avg_severity === 'number' ? displayStats.avg_severity.toFixed(1) : (displayStats.avg_severity ?? '—')} color="var(--orange)" />
           <div style={styles.stripDivider} />
-          <StatChip label="Visible" value={visible.length} color="var(--blue)" />
-          {stats.last_survey_date && (
+          <StatChip label="Avg Conf" value={typeof displayStats.avg_confidence === 'number' ? `${(displayStats.avg_confidence * 100).toFixed(0)}%` : '—'} color="var(--blue)" />
+          <div style={styles.stripDivider} />
+          <StatChip label="Visible" value={visible.length} color="var(--text)" />
+          {displayStats.last_survey_date && (
             <>
               <div style={styles.stripDivider} />
-              <StatChip label="Last Survey" value={stats.last_survey_date} color="var(--text-muted)" />
+              <StatChip label="Last Survey" value={displayStats.last_survey_date} color="var(--text-muted)" />
             </>
           )}
         </div>
@@ -372,6 +522,23 @@ export default function MapPage() {
                   onToggle={toggleClass}
                 />
               ))}
+          </div>
+        )}
+        {finishedPolygon && showLegend && (
+          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
+            <span style={{ ...styles.filterTitle, display: 'block', marginBottom: 8 }}>ZONE CONFIDENCE</span>
+            <div style={{ height: 100, width: '100%' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={confidenceData}>
+                  <XAxis dataKey="name" tick={{ fill: '#6b7280', fontSize: 9 }} interval={0} />
+                  <Tooltip 
+                    contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', fontSize: 11 }}
+                    itemStyle={{ color: 'var(--accent)' }}
+                  />
+                  <Bar dataKey="count" fill="var(--accent)" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         )}
       </div>
