@@ -538,6 +538,46 @@ def _discover_segments(dest: Path) -> List[Path]:
 # ---------------------------------------------------------------------------
 # Per-segment RIDS pipeline runner
 # ---------------------------------------------------------------------------
+def _hevc_to_mp4(hevc_path: Path, work_dir: Path) -> Path:
+    """
+    Converts video.hevc to a temporary .mp4 using ffmpeg stream-copy.
+    Stream-copy means no re-encoding — takes ~2 s per segment.
+    The .mp4 container has correct duration metadata that OpenCV can read,
+    unlike raw HEVC streams where CAP_PROP_FRAME_COUNT returns garbage.
+
+    Output is written to work_dir/tmp_mp4/<route>_<seg>.mp4.
+    If the .mp4 already exists and is non-empty it is reused (resumable).
+
+    DATA NOTE: reads actual video.hevc, writes actual .mp4 — no mocks.
+    """
+    import subprocess
+    out_dir  = work_dir / "tmp_mp4"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{hevc_path.parent.parent.name}_{hevc_path.parent.name}.mp4"
+
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return out_path
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i",  str(hevc_path),
+        "-c:v", "copy",       # stream-copy — no re-encoding
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not out_path.exists():
+        raise RuntimeError(
+            f"ffmpeg failed for {hevc_path.name}:\n{result.stderr[-500:]}"
+        )
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 def _run_segment(
     segment_dir: Path,
     work_dir:    Path,
@@ -546,8 +586,10 @@ def _run_segment(
     dry_run_db:  bool,
 ) -> dict:
     """
-    1. Converts global_pose/frame_positions (ECEF) -> WGS84 -> GPX.
-    2. Runs the full RIDS orchestrator (Stages 1-7) on video.hevc.
+    1. Converts video.hevc -> .mp4 via ffmpeg stream-copy (fixes HEVC
+       container metadata so OpenCV CAP_PROP_FRAME_COUNT works correctly).
+    2. Converts global_pose/frame_positions (ECEF) -> WGS84 -> GPX.
+    3. Runs the full RIDS orchestrator (Stages 1-7) on the .mp4.
     Returns a summary dict of real pipeline metrics — nothing mocked.
     """
     seg_name   = segment_dir.name
@@ -560,6 +602,18 @@ def _run_segment(
             "route":   segment_dir.parent.name,
             "status":  "skipped",
             "reason":  "no_video.hevc",
+        }
+
+    # Convert HEVC -> MP4 (stream-copy, ~2 s, fixes container metadata)
+    try:
+        mp4_path = _hevc_to_mp4(video_path, work_dir)
+    except Exception as exc:
+        logger.error("ffmpeg conversion failed for %s: %s", seg_name, exc)
+        return {
+            "segment": seg_name,
+            "route":   segment_dir.parent.name,
+            "status":  "failed",
+            "error":   str(exc),
         }
 
     tmp_gpx = (
@@ -595,15 +649,14 @@ def _run_segment(
         f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
     cfg = OrchestratorConfig(
-        video_path       = str(video_path),
-        gps_path         = gps_arg,
-        work_dir         = str(work_dir / "sessions"),
-        session_id       = session_id,
-        device           = device,
-        fps              = fps,
-        dry_run_db       = dry_run_db,
-        resume           = False,
-        video_start_time = gpx_start,   # tells preprocessor when frame 0 is
+        video_path  = str(mp4_path),   # .mp4 with valid container metadata
+        gps_path    = gps_arg,
+        work_dir    = str(work_dir / "sessions"),
+        session_id  = session_id,
+        device      = device,
+        fps         = fps,
+        dry_run_db  = dry_run_db,
+        resume      = False,
     )
 
     t0 = time.perf_counter()
