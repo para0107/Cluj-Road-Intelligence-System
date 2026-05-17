@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts'
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents, Polygon, Polyline } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents, Rectangle } from 'react-leaflet'
 import { useNavigate } from 'react-router-dom'
 import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle, Map, PenTool, XCircle, Check } from 'lucide-react'
 import {
@@ -27,21 +27,18 @@ function FitBounds({ detections }) {
 }
 
 // ── Point in Polygon ──────────────────────────────────────────────────────
-function isPointInPolygon(point, vs) {
-  const x = point[0], y = point[1];
-  let inside = false;
-  for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
-    const xi = vs[i][0], yi = vs[i][1];
-    const xj = vs[j][0], yj = vs[j][1];
-    const intersect = ((yi > y) !== (yj > y)) &&
-      (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
+// ── Point in Rectangle ──────────────────────────────────────────────────────
+function isPointInRect(point, rect) {
+  const [start, end] = rect;
+  const latMin = Math.min(start[0], end[0]);
+  const latMax = Math.max(start[0], end[0]);
+  const lngMin = Math.min(start[1], end[1]);
+  const lngMax = Math.max(start[1], end[1]);
+  return point[0] >= latMin && point[0] <= latMax && point[1] >= lngMin && point[1] <= lngMax;
 }
 
 // ── Map Click Handler ─────────────────────────────────────────────────────
-function MapClickHandler({ drawingMode, addPoint, finishDrawing }) {
+function MapClickHandler({ drawingMode, setStart, setEnd, finishDrawing }) {
   const [isDrawing, setIsDrawing] = useState(false)
   const map = useMap()
 
@@ -50,12 +47,13 @@ function MapClickHandler({ drawingMode, addPoint, finishDrawing }) {
       if (drawingMode) {
         setIsDrawing(true)
         map.dragging.disable()
-        addPoint([e.latlng.lat, e.latlng.lng], true)
+        setStart([e.latlng.lat, e.latlng.lng])
+        setEnd([e.latlng.lat, e.latlng.lng])
       }
     },
     mousemove(e) {
       if (drawingMode && isDrawing) {
-        addPoint([e.latlng.lat, e.latlng.lng], false)
+        setEnd([e.latlng.lat, e.latlng.lng])
       }
     },
     mouseup(e) {
@@ -251,8 +249,9 @@ export default function MapPage() {
 
   // Drawing state
   const [drawingMode, setDrawingMode] = useState(false)
-  const [polygonPoints, setPolygonPoints] = useState([])
-  const [finishedPolygon, setFinishedPolygon] = useState(null)
+  const [rectStart, setRectStart] = useState(null)
+  const [rectEnd, setRectEnd] = useState(null)
+  const [finishedRect, setFinishedRect] = useState(null)
 
   // Load all detections (up to 500 for the map)
   useEffect(() => {
@@ -284,17 +283,17 @@ export default function MapPage() {
     classCounts[d.damage_type] = (classCounts[d.damage_type] || 0) + 1
   })
 
-  const currentPolygon = finishedPolygon || (drawingMode && polygonPoints.length > 2 ? polygonPoints : null)
+  const currentRect = finishedRect || (drawingMode && rectStart && rectEnd ? [rectStart, rectEnd] : null)
 
   const visible = detections.filter(d => {
     if (!activeClasses.has(d.damage_type)) return false
-    if (currentPolygon) {
-      return isPointInPolygon([d.latitude, d.longitude], currentPolygon)
+    if (currentRect) {
+      return isPointInRect([d.latitude, d.longitude], currentRect)
     }
     return true
   })
 
-  const displayStats = currentPolygon ? {
+  const displayStats = currentRect ? {
     total_detections: visible.length,
     critical_count: visible.filter(d => d.severity >= 4).length,
     avg_severity: visible.length ? (visible.reduce((acc, d) => acc + d.severity, 0) / visible.length) : 0,
@@ -303,18 +302,17 @@ export default function MapPage() {
   } : stats;
 
   const confidenceData = useMemo(() => {
-    if (!finishedPolygon) return []
-    const bins = { '0-20%':0, '20-40%':0, '40-60%':0, '60-80%':0, '80-100%':0 }
+    if (!finishedRect) return []
+    const bins = { '20-40%':0, '40-60%':0, '60-80%':0, '80-100%':0 }
     visible.forEach(d => {
       const c = d.confidence
-      if (c < 0.2) bins['0-20%']++
-      else if (c < 0.4) bins['20-40%']++
+      if (c < 0.4) bins['20-40%']++
       else if (c < 0.6) bins['40-60%']++
       else if (c < 0.8) bins['60-80%']++
       else bins['80-100%']++
     })
     return Object.entries(bins).map(([name, count]) => ({ name, count }))
-  }, [finishedPolygon, visible])
+  }, [finishedRect, visible])
 
   return (
     <div style={styles.page}>
@@ -332,25 +330,23 @@ export default function MapPage() {
         <FitBounds detections={detections} />
         <MapClickHandler 
           drawingMode={drawingMode} 
-          addPoint={(p, reset) => setPolygonPoints(prev => reset ? [p] : [...prev, p])}
+          setStart={setRectStart}
+          setEnd={setRectEnd}
           finishDrawing={() => {
-            setPolygonPoints(prev => {
-              if (prev.length > 2) {
-                setFinishedPolygon(prev)
-                setDrawingMode(false)
-              } else {
-                setDrawingMode(false)
-              }
-              return prev
-            })
+            if (rectStart && rectEnd && rectStart[0] !== rectEnd[0]) {
+              setFinishedRect([rectStart, rectEnd])
+              setDrawingMode(false)
+            } else {
+              setDrawingMode(false)
+            }
           }}
         />
 
-        {finishedPolygon && (
-          <Polygon positions={finishedPolygon} pathOptions={{ color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.1, weight: 2 }} />
+        {finishedRect && (
+          <Rectangle bounds={finishedRect} pathOptions={{ color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.1, weight: 2 }} />
         )}
-        {!finishedPolygon && polygonPoints.length > 0 && (
-          <Polygon positions={polygonPoints} pathOptions={{ color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.1, weight: 2, dashArray: '4' }} />
+        {!finishedRect && rectStart && rectEnd && (
+          <Rectangle bounds={[rectStart, rectEnd]} pathOptions={{ color: 'var(--accent)', fillColor: 'var(--accent)', fillOpacity: 0.1, weight: 2, dashArray: '4' }} />
         )}
 
         {visible.map(d => {
@@ -409,7 +405,7 @@ export default function MapPage() {
 
       {/* ── Top-right action buttons ─────────────────────────────────── */}
       <div style={styles.actions}>
-        {!drawingMode && !finishedPolygon && (
+        {!drawingMode && !finishedRect && (
           <button style={styles.actionBtn} onClick={() => setDrawingMode(true)}>
             <PenTool size={14} /> Draw Zone
           </button>
@@ -417,32 +413,22 @@ export default function MapPage() {
         {drawingMode && (
           <>
             <button 
-              style={{ ...styles.actionBtn, ...styles.actionBtnAccent }}
-              onClick={() => {
-                if (polygonPoints.length > 2) {
-                  setFinishedPolygon(polygonPoints)
-                  setDrawingMode(false)
-                }
-              }}
-              disabled={polygonPoints.length < 3}
-            >
-              <Check size={14} /> Finish Zone
-            </button>
-            <button 
               style={{ ...styles.actionBtn, color: 'var(--red)' }}
               onClick={() => {
                 setDrawingMode(false)
-                setPolygonPoints([])
+                setRectStart(null)
+                setRectEnd(null)
               }}
             >
               <XCircle size={14} /> Cancel
             </button>
           </>
         )}
-        {finishedPolygon && (
+        {finishedRect && (
           <button style={{ ...styles.actionBtn, color: 'var(--red)' }} onClick={() => {
-            setFinishedPolygon(null)
-            setPolygonPoints([])
+            setFinishedRect(null)
+            setRectStart(null)
+            setRectEnd(null)
           }}>
             <XCircle size={14} /> Clear Zone
           </button>
@@ -472,7 +458,7 @@ export default function MapPage() {
       {/* ── Bottom stat strip ────────────────────────────────────────── */}
       {displayStats && (
         <div style={styles.statStrip}>
-          <StatChip label={currentPolygon ? "Zone Total" : "Total"} value={displayStats.total_detections} color="var(--accent)" />
+          <StatChip label={currentRect ? "Zone Total" : "Total"} value={displayStats.total_detections} color="var(--accent)" />
           <div style={styles.stripDivider} />
           <StatChip label="Critical" value={displayStats.critical_count} color="var(--red)" />
           <div style={styles.stripDivider} />
@@ -480,7 +466,7 @@ export default function MapPage() {
           <div style={styles.stripDivider} />
           <StatChip label="Avg Conf" value={typeof displayStats.avg_confidence === 'number' ? `${(displayStats.avg_confidence * 100).toFixed(0)}%` : '—'} color="var(--blue)" />
           <div style={styles.stripDivider} />
-          <StatChip label="Visible" value={visible.length} color="var(--text)" />
+          <StatChip label="Visible" value={visible.length} color="#ffffff" />
           {displayStats.last_survey_date && (
             <>
               <div style={styles.stripDivider} />
@@ -524,7 +510,7 @@ export default function MapPage() {
               ))}
           </div>
         )}
-        {finishedPolygon && showLegend && (
+        {finishedRect && showLegend && (
           <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
             <span style={{ ...styles.filterTitle, display: 'block', marginBottom: 8 }}>ZONE CONFIDENCE</span>
             <div style={{ height: 100, width: '100%' }}>
