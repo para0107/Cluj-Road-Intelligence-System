@@ -526,7 +526,12 @@ def _run_segment(
         / f"{segment_dir.parent.name}_{seg_name}.gpx"
     )
     has_gps = _write_gpx_from_global_pos(pose_dir, tmp_gpx)
-    gps_arg = str(tmp_gpx) if has_gps else None
+
+    # Pass empty string (not None) when no GPS — OrchestratorConfig
+    # coerces None to "" internally which then fails the format check.
+    # Passing "" directly triggers the "GPS file not found" branch which
+    # is handled gracefully (DBSCAN + DB write skipped, pipeline continues).
+    gps_arg = str(tmp_gpx) if has_gps else ""
 
     if not has_gps:
         logger.warning(
