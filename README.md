@@ -147,6 +147,7 @@ The system has four distinct layers:
 
 The frontend application (`http://localhost:3000`) provides several advanced visualization tools for exploring the pipeline's detection data:
 
+- **Interactive Zone Analytics:** A "Draw Zone" bounding box (rectangle) tool on the Map Page allows users to click-and-drag to filter detections by a specific geographic area. Real-time statistics (including Total Detections, Critical count, Average Severity, and the newly tracked Average Confidence metric) dynamically update as the zone is drawn. A dynamic Recharts-based bar chart also appears, visualizing the confidence distribution (from `20%` to `100%`) of the detections strictly within the selected area.
 - **Dynamic Heatmap Overlay:** A toggle on the Map Page that instantly switches standard detection point markers to a density-based heatmap. It uses mathematically driven CSS blending filters (`mix-blend-mode: screen/multiply` and `blur`) to visually highlight "Critical Zones"—dense clusters of severe detections (S4/S5)—without requiring expensive client-side charting libraries.
 - **Light/Dark Mode:** A unified, dynamic theme system. Toggling the theme instantly recolors all UI components and mathematically inverts the CartoDB base map tiles using a CSS hue-rotation, guaranteeing an instant visual swap without reloading heavy map tiles.
 - **Server-Side Sorting & Export:** The Explorer Page table performs full-database sorting directly on PostgreSQL (via the API) before paginating, ensuring you always see the absolute most critical detections first. The data can also be downloaded locally via the **Export CSV** backend endpoint.
@@ -582,6 +583,7 @@ All secrets and paths live in `.env`. Never committed to git.
 - [x] FastAPI backend — all routes tested on Swagger
 - [x] React frontend — interactive map (Leaflet), filters, explorer and stats pages
 - [x] Advanced UI features — CSS-blended Heatmap Mode, Light/Dark toggle, Server-side sorting, CSV Export
+- [x] Interactive Zone Analytics — click-and-drag bounding box map filtering with real-time stats and confidence plots
 - [x] APScheduler daily job (02:00 Europe/Bucharest)
 - [x] Docker Compose — PostgreSQL 15 + PostGIS + pgAdmin
 - [x] preprocessor.py — frame extraction, GPS sync, lighting, shadow, sun angle
