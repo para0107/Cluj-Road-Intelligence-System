@@ -253,10 +253,10 @@ export default function MapPage() {
   const [rectEnd, setRectEnd] = useState(null)
   const [finishedRect, setFinishedRect] = useState(null)
 
-  // Load all detections (up to 500 for the map)
+  // Load all detections (up to 5000 for the map)
   useEffect(() => {
     Promise.all([
-      fetchDetections({ page: 1, page_size: 500 }),
+      fetchDetections({ page: 1, page_size: 5000 }),
       fetchStats(),
     ])
       .then(([det, st]) => {
