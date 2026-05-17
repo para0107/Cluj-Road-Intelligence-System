@@ -67,6 +67,13 @@ def get_stats(db: Session = Depends(get_db)):
         or 0
     )
 
+    fixed_count = (
+        db.query(func.count(Detection.id))
+        .filter(Detection.is_fixed == True)
+        .scalar()
+        or 0
+    )
+
     return StatsResponse(
         total_detections=total,
         last_survey_date=last_survey,
@@ -76,4 +83,5 @@ def get_stats(db: Session = Depends(get_db)):
         avg_severity=avg_severity,
         avg_confidence=avg_confidence,
         critical_count=critical_count,
+        fixed_count=fixed_count,
     )

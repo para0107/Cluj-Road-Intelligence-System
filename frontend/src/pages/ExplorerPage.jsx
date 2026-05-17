@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Search, Download } from 'lucide-react'
-import { fetchDetections } from '../utils/api'
+import { fetchDetections, updateDetectionStatus } from '../utils/api'
 import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS } from '../utils/constants'
 
 const DAMAGE_TYPES = [
@@ -83,6 +83,18 @@ export default function ExplorerPage() {
       setSortDir(d => d === 'desc' ? 'asc' : 'desc')
     } else { 
       setSortCol(col); setSortDir('desc') 
+    }
+  }
+
+  const handleToggleFixed = async (id, currentFixed) => {
+    try {
+      const updated = await updateDetectionStatus(id, !currentFixed)
+      setData(prev => ({
+        ...prev,
+        items: prev.items.map(item => item.id === id ? { ...item, is_fixed: updated.is_fixed } : item)
+      }))
+    } catch (e) {
+      console.error("Failed to update status:", e)
     }
   }
 
@@ -195,6 +207,7 @@ export default function ExplorerPage() {
                 <SortIcon col={col.key} sortCol={sortCol} sortDir={sortDir} />
               </div>
             ))}
+            <div style={{ ...styles.th, justifyContent: 'center' }}>Fixed</div>
           </div>
 
           {/* Body */}
@@ -282,6 +295,16 @@ export default function ExplorerPage() {
                 <div style={{ ...styles.td, fontSize: 11, color: 'var(--text-dim)' }}>
                   {item.last_detected || '—'}
                 </div>
+
+                {/* Fixed Checkbox */}
+                <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    checked={item.is_fixed}
+                    onChange={() => handleToggleFixed(item.id, item.is_fixed)}
+                    style={{ cursor: 'pointer', width: 16, height: 16 }}
+                  />
+                </div>
               </div>
             )
           })}
@@ -325,7 +348,7 @@ export default function ExplorerPage() {
   )
 }
 
-const COL = '1.8fr 90px 110px 110px 60px 120px 1fr'
+const COL = '1.8fr 90px 110px 110px 60px 120px 1fr 60px'
 
 const styles = {
   page: { paddingTop: 48, minHeight: '100vh', background: 'var(--bg)' },

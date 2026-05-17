@@ -34,7 +34,7 @@ def export_csv(db: Session = Depends(get_db)):
     headers = [
         "id", "damage_type", "confidence", "latitude", "longitude",
         "severity", "depth_estimate_cm", "surface_area_cm2",
-        "detection_count", "first_detected", "last_detected", "priority_score"
+        "detection_count", "first_detected", "last_detected", "priority_score", "is_fixed"
     ]
     writer.writerow(headers)
     
@@ -52,7 +52,8 @@ def export_csv(db: Session = Depends(get_db)):
             det.detection_count,
             det.first_detected,
             det.last_detected,
-            round(det.priority_score, 4) if det.priority_score else ""
+            round(det.priority_score, 4) if det.priority_score else "",
+            det.is_fixed
         ])
     
     # Return as a streaming response with appropriate headers

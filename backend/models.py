@@ -12,7 +12,7 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from sqlalchemy import Column, String, Float, Integer, SmallInteger, Date, DateTime, Text
+from sqlalchemy import Column, String, Float, Integer, SmallInteger, Date, DateTime, Text, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from geoalchemy2 import Geometry
@@ -69,6 +69,9 @@ class Detection(Base):
     # ── Survey metadata ───────────────────────────────────────────────────────
     survey_date = Column(Date, nullable=False)
     survey_video_file = Column(String(255))
+    
+    # ── Status ────────────────────────────────────────────────────────────────
+    is_fixed = Column(Boolean, default=False)
 
     def __repr__(self) -> str:
         return (

@@ -51,6 +51,8 @@ class DetectionBase(BaseModel):
 
     frame_path: Optional[str] = None
     # crop_path: Optional[str] = None
+    
+    is_fixed: bool = False
 
 
 # ─────────────────────────────────────────────
@@ -63,6 +65,14 @@ class DetectionRead(DetectionBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ─────────────────────────────────────────────
+# Update schema
+# ─────────────────────────────────────────────
+
+class DetectionStatusUpdate(BaseModel):
+    is_fixed: bool
 
 
 # ─────────────────────────────────────────────
@@ -99,6 +109,7 @@ class StatsResponse(BaseModel):
     avg_severity: Optional[float]
     avg_confidence: Optional[float]
     critical_count: int  # severity >= 4
+    fixed_count: int
 
 
 # ─────────────────────────────────────────────

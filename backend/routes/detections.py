@@ -21,7 +21,7 @@ from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID
 
 from backend.database import get_db
 from backend.models import Detection
-from backend.schemas import DetectionRead, DetectionListResponse
+from backend.schemas import DetectionRead, DetectionListResponse, DetectionStatusUpdate
 
 router = APIRouter()
 
@@ -117,4 +117,19 @@ def get_detection(detection_id: UUID, db: Session = Depends(get_db)):
     detection = db.query(Detection).filter(Detection.id == detection_id).first()
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found.")
+    return detection
+
+@router.patch("/detections/{detection_id}/status", response_model=DetectionRead)
+def update_detection_status(
+    detection_id: UUID,
+    status_update: DetectionStatusUpdate,
+    db: Session = Depends(get_db)
+):
+    detection = db.query(Detection).filter(Detection.id == detection_id).first()
+    if not detection:
+        raise HTTPException(status_code=404, detail="Detection not found.")
+    
+    detection.is_fixed = status_update.is_fixed
+    db.commit()
+    db.refresh(detection)
     return detection

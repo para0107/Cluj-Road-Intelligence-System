@@ -3,7 +3,7 @@ import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
-import { Activity, AlertTriangle, Map, TrendingUp, ArrowLeft, CheckCircle } from 'lucide-react'
+import { Activity, AlertTriangle, Map, TrendingUp, ArrowLeft, CheckCircle, Wrench } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../hooks/useApi'
 import { fetchStats, fetchPriority } from '../utils/api'
@@ -101,9 +101,10 @@ export default function StatsPage() {
 
       <div style={styles.body}>
         {/* KPI row */}
-        <div style={{ ...styles.kpiRow, gridTemplateColumns: 'repeat(4,1fr)' }}>
+        <div style={{ ...styles.kpiRow, gridTemplateColumns: 'repeat(5,1fr)' }}>
           <StatCard icon={Map}           label="Total Detections" value={stats.total_detections}               color="var(--accent)" />
           <StatCard icon={AlertTriangle} label="Critical (S4–S5)"  value={stats.critical_count}                color="var(--red)"    />
+          <StatCard icon={Wrench}        label="Fixed Damages"     value={stats.fixed_count}                   color="#10b981"       />
           <StatCard icon={TrendingUp}    label="Avg Severity"       value={stats.avg_severity?.toFixed(2) ?? '—'} color="var(--orange)"
             sub={stats.avg_severity ? ['Low','Low-Med','Medium','High','Critical'][Math.round(stats.avg_severity)-1] : null}
           />

@@ -79,6 +79,15 @@ def _drop_removed_columns(cur) -> None:
     )
     logger.info("Dropped deprecated columns (if present).")
 
+    # Add the is_fixed column if it doesn't exist (migration)
+    cur.execute(
+        """
+        ALTER TABLE IF EXISTS detections
+          ADD COLUMN IF NOT EXISTS is_fixed BOOLEAN DEFAULT FALSE;
+        """
+    )
+    logger.info("Added is_fixed column (if missing).")
+
 
 def setup_schema() -> None:
     """
@@ -133,7 +142,9 @@ def setup_schema() -> None:
             priority_score      FLOAT DEFAULT 0.0,
 
             survey_date         DATE NOT NULL,
-            survey_video_file   VARCHAR(255)
+            survey_video_file   VARCHAR(255),
+            
+            is_fixed            BOOLEAN DEFAULT FALSE
         );
         """
     )

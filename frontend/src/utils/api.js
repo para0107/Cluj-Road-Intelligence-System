@@ -13,6 +13,9 @@ export const fetchDetections = (params = {}) =>
 export const fetchDetectionById = (id) =>
   api.get(`/detections/${id}`).then(r => r.data)
 
+export const updateDetectionStatus = (id, isFixed) =>
+  api.patch(`/detections/${id}/status`, { is_fixed: isFixed }).then(r => r.data)
+
 export const fetchNearby = (lat, lon, radius_m = 200, limit = 50) =>
   api.get('/detections/nearby', { params: { latitude: lat, longitude: lon, radius_m, limit } })
      .then(r => r.data)
