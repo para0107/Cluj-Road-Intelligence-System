@@ -7,34 +7,55 @@ services:
     image: postgis/postgis:15-3.3
     container_name: cluj_monitor_db
     restart: unless-stopped
-
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_USER:     ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_DB:       ${POSTGRES_DB}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout:  5s
+      retries:  5
 
   # ── FastAPI backend ─────────────────────────────────────────────────────────
   backend:
     build:
-      context: .
+      context:    .
       dockerfile: backend/Dockerfile
     container_name: cluj_monitor_backend
     restart: unless-stopped
     env_file: .env
     environment:
-      # Override the host so the backend reaches the DB container, not localhost
+      # The backend container reaches the DB container by service name, not localhost.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+
+      # Container-side mount point for the shared data/ directory.
+      # The backend writes job files and reads session.json through this path.
+      # Must match the 'target' of the bind mount below.
+      PROJECT_DATA_DIR: /app/data
+
     ports:
       - "8000:8000"
+    volumes:
+      # ── Shared data volume ───────────────────────────────────────────────
+      # Bind-mount the host data/ directory into the container at /app/data.
+      # This is the ONLY communication channel between the backend container
+      # and the pipeline/job_watcher.py process on the Windows host:
+      #
+      #   Backend writes  → /app/data/jobs/<job_id>.json          (job request)
+      #   Watcher reads   → C:\...\data\jobs\<job_id>.json        (same file)
+      #   Watcher writes  → C:\...\data\processed\sessions\<id>\session.json
+      #   Backend reads   → /app/data/processed/sessions/<id>/session.json
+      #
+      # All paths below are relative to the docker-compose.yml location
+      # (the project root on the host). Docker Desktop on Windows resolves
+      # relative bind-mount paths from the drive letter automatically.
+      - ./data:/app/data
+
     depends_on:
       db:
         condition: service_healthy
@@ -42,7 +63,7 @@ services:
   # ── React / Vite frontend (served by Nginx) ─────────────────────────────────
   frontend:
     build:
-      context: .
+      context:    .
       dockerfile: frontend/Dockerfile
     container_name: cluj_monitor_frontend
     restart: unless-stopped

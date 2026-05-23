@@ -35,4 +35,42 @@ export const fetchHeatmap = () =>
 export const fetchPriority = (limit = 50) =>
   api.get('/priority-list', { params: { limit } }).then(r => r.data)
 
+// ── Ingest ────────────────────────────────────────────────────────────────
+
+/**
+ * Upload a survey video and optional GPS file.
+ * Uses FormData / multipart — no JSON serialization.
+ *
+ * @param {File}      videoFile  - .mp4 dashcam footage
+ * @param {File|null} gpsFile    - .gpx GPS log (optional, pass null to omit)
+ * @param {function}  onProgress - (percent: number) => void  upload progress callback
+ * @returns {Promise<{job_id: string, status: string, message: string}>}
+ */
+export const uploadSurvey = (videoFile, gpsFile, onProgress) => {
+  const form = new FormData()
+  form.append('video', videoFile)
+  if (gpsFile) {
+    form.append('gps', gpsFile)
+  }
+  return api.post('/ingest/upload', form, {
+    // Do NOT set Content-Type manually — axios sets multipart/form-data + boundary
+    timeout: 120_000,   // large files need more time to upload
+    onUploadProgress: (evt) => {
+      if (onProgress && evt.total) {
+        onProgress(Math.round((evt.loaded / evt.total) * 100))
+      }
+    },
+  }).then(r => r.data)
+}
+
+/**
+ * Poll the status of a running or completed pipeline job.
+ * Call this on an interval while status === 'running' | 'initialising'.
+ *
+ * @param {string} jobId
+ * @returns {Promise<{job_id, status, stages, n_frames, n_detections, n_inserted, n_updated, error_message, started_at, finished_at}>}
+ */
+export const fetchJobStatus = (jobId) =>
+  api.get(`/ingest/status/${jobId}`).then(r => r.data)
+
 export default api

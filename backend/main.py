@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from backend.database import check_connection
-from backend.routes import detections, stats, heatmap, priority, export
+from backend.routes import detections, stats, heatmap, priority, export, ingest
 
 load_dotenv()
 
@@ -28,8 +28,11 @@ load_dotenv()
 # ─────────────────────────────────────────────
 
 app = FastAPI(
-    title="Cluj Urban Monitor API",
-    description="Road damage detection and monitoring system for Cluj-Napoca.",
+    title="RIDS — Road Infrastructure Detection System API",
+    description=(
+        "Road damage detection, classification, and prioritization system "
+        "for Cluj-Napoca, Romania. Babeș-Bolyai University, 2026."
+    ),
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -56,6 +59,7 @@ app.include_router(stats.router,      prefix="/api", tags=["Stats"])
 app.include_router(heatmap.router,    prefix="/api", tags=["Heatmap"])
 app.include_router(priority.router,   prefix="/api", tags=["Priority"])
 app.include_router(export.router,     prefix="/api", tags=["Export"])
+app.include_router(ingest.router,     prefix="/api", tags=["Ingest"])
 
 # ─────────────────────────────────────────────
 # Startup event
@@ -63,7 +67,7 @@ app.include_router(export.router,     prefix="/api", tags=["Export"])
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting Cluj Urban Monitor API...")
+    logger.info("Starting RIDS API...")
     ok = check_connection()
     if not ok:
         logger.warning(
@@ -80,7 +84,11 @@ async def startup_event():
 
 @app.get("/", tags=["Health"])
 def root():
-    return {"status": "ok", "service": "Cluj Urban Monitor API", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "service": "RIDS — Road Infrastructure Detection System API",
+        "version": "1.0.0",
+    }
 
 
 @app.get("/health", tags=["Health"])

@@ -4,6 +4,7 @@ import Navbar from './components/Navbar'
 import MapPage from './pages/MapPage'
 import StatsPage from './pages/StatsPage'
 import ExplorerPage from './pages/ExplorerPage'
+import IngestionPage from './pages/IngestionPage'
 
 // Global keyframe animations injected once
 const KEYFRAMES = `
@@ -27,9 +28,10 @@ export default function App() {
       <style>{KEYFRAMES}</style>
       <Navbar />
       <Routes>
-        <Route path="/"         element={<MapPage />}      />
-        <Route path="/stats"    element={<StatsPage />}    />
-        <Route path="/explorer" element={<ExplorerPage />} />
+        <Route path="/"         element={<MapPage />}       />
+        <Route path="/stats"    element={<StatsPage />}     />
+        <Route path="/explorer" element={<ExplorerPage />}  />
+        <Route path="/ingest"   element={<IngestionPage />} />
       </Routes>
     </>
   )

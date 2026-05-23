@@ -1,153 +1,170 @@
-import React, { useState, useEffect } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
-import { Map, BarChart2, Search, Sun, Moon } from 'lucide-react'
+/**
+ * frontend/src/components/Navbar.jsx
+ *
+ * Top navigation bar — fixed, 48 px tall.
+ * Matches the design tokens in index.css exactly:
+ *   --bg-card, --border, --accent, --font-mono, --font-sans, etc.
+ *
+ * Links: MAP · EXPLORER · STATS · UPLOAD
+ * The theme toggle (dark/light) is preserved.
+ */
 
-const NAV = [
-  { to: '/',          label: 'MAP',       Icon: Map        },
-  { to: '/stats',     label: 'STATS',     Icon: BarChart2  },
-  { to: '/explorer',  label: 'EXPLORER',  Icon: Search     },
+import React, { useState, useEffect } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { Map, Table, BarChart2, Upload, Sun, Moon } from 'lucide-react'
+
+const NAV_ITEMS = [
+  { to: '/',         label: 'Map',      icon: Map      },
+  { to: '/explorer', label: 'Explorer', icon: Table    },
+  { to: '/stats',    label: 'Stats',    icon: BarChart2 },
+  { to: '/ingest',   label: 'Upload',   icon: Upload   },
 ]
 
 export default function Navbar() {
-  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark')
+  const [dark, setDark] = useState(true)
 
+  // Sync <html> class on mount and on toggle
   useEffect(() => {
-    if (theme === 'light') {
-      document.documentElement.classList.add('light')
-    } else {
-      document.documentElement.classList.remove('light')
-    }
-    localStorage.setItem('theme', theme)
-  }, [theme])
-
-  const toggleTheme = () => setTheme(t => t === 'light' ? 'dark' : 'light')
+    document.documentElement.classList.toggle('light', !dark)
+  }, [dark])
 
   return (
     <nav style={styles.nav}>
-      {/* Logo */}
-      <div style={styles.logo}>
-        <span style={styles.logoAccent}>RIDS</span>
-        <span style={styles.logoSub}>Road Infrastructure Detection</span>
+      {/* Brand */}
+      <div style={styles.brand}>
+        <span style={styles.brandDot} />
+        <span style={styles.brandName}>RIDS</span>
+        <span style={styles.brandSub}>Road Infrastructure Detection System</span>
       </div>
 
       {/* Links */}
       <div style={styles.links}>
-        {NAV.map(({ to, label, Icon }) => (
+        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
+            end={to === '/'}
             style={({ isActive }) => ({
               ...styles.link,
-              ...(isActive ? styles.linkActive : {}),
+              color:            isActive ? 'var(--accent)' : 'var(--text-muted)',
+              background:       isActive ? 'var(--accent-dim)' : 'transparent',
+              border:           isActive ? '1px solid var(--accent)' : '1px solid transparent',
             })}
           >
-            <Icon size={13} style={{ marginRight: 6 }} />
+            <Icon size={13} />
             {label}
+            {/* Highlight the Upload link with a subtle badge when on /ingest */}
+            {to === '/ingest' && (
+              <span style={styles.uploadBadge}>NEW</span>
+            )}
           </NavLink>
         ))}
       </div>
 
-      <div style={styles.rightSection}>
-        {/* Theme toggle */}
-        <button onClick={toggleTheme} style={styles.themeBtn} title="Toggle light/dark mode">
-          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
-        </button>
-
-        {/* Status dot */}
-        <div style={styles.status}>
-          <span style={styles.dot} />
-          <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>LIVE</span>
-        </div>
-      </div>
+      {/* Theme toggle */}
+      <button
+        style={styles.themeBtn}
+        onClick={() => setDark(v => !v)}
+        title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      >
+        {dark ? <Sun size={14} /> : <Moon size={14} />}
+      </button>
     </nav>
   )
 }
 
 const styles = {
   nav: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    height: 48,
-    padding: '0 20px',
-    background: 'var(--bg-card)',
-    borderBottom: '1px solid var(--border)',
     position: 'fixed',
     top: 0,
     left: 0,
     right: 0,
+    height: 48,
     zIndex: 1000,
-  },
-  logo: {
     display: 'flex',
-    alignItems: 'baseline',
+    alignItems: 'center',
+    padding: '0 20px',
+    background: 'rgba(10,12,16,0.96)',
+    borderBottom: '1px solid var(--border)',
+    backdropFilter: 'blur(12px)',
+    gap: 0,
+  },
+
+  // Brand
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
     gap: 8,
+    marginRight: 28,
+    flexShrink: 0,
   },
-  logoAccent: {
+  brandDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: 'var(--accent)',
+    boxShadow: '0 0 8px var(--accent-glow)',
+  },
+  brandName: {
     fontFamily: 'var(--font-mono)',
+    fontSize: 13,
     fontWeight: 700,
-    fontSize: 15,
-    color: 'var(--accent)',
-    letterSpacing: '0.08em',
+    color: 'var(--text)',
+    letterSpacing: '.1em',
   },
-  logoSub: {
-    fontSize: 11,
+  brandSub: {
+    fontSize: 10,
     color: 'var(--text-muted)',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
+    letterSpacing: '.04em',
+    // hide on very small screens if needed
   },
+
+  // Links
   links: {
     display: 'flex',
+    alignItems: 'center',
     gap: 4,
+    flex: 1,
   },
   link: {
     display: 'flex',
     alignItems: 'center',
+    gap: 6,
     padding: '5px 12px',
     borderRadius: 'var(--radius)',
-    fontFamily: 'var(--font-mono)',
     fontSize: 11,
+    fontFamily: 'var(--font-mono)',
     fontWeight: 700,
-    letterSpacing: '0.1em',
-    color: 'var(--text-muted)',
+    letterSpacing: '.06em',
     textDecoration: 'none',
     transition: 'var(--transition)',
-    border: '1px solid transparent',
   },
-  linkActive: {
-    color: 'var(--accent)',
-    background: 'var(--accent-dim)',
-    border: '1px solid rgba(232,255,71,0.2)',
+  uploadBadge: {
+    fontSize: 8,
+    fontFamily: 'var(--font-mono)',
+    fontWeight: 700,
+    letterSpacing: '.06em',
+    background: 'var(--accent)',
+    color: '#0a0c10',
+    borderRadius: 3,
+    padding: '1px 4px',
+    marginLeft: 2,
   },
-  rightSection: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 16,
-  },
+
+  // Theme toggle
   themeBtn: {
-    background: 'transparent',
-    border: 'none',
-    color: 'var(--text-muted)',
-    cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 4,
+    width: 32,
+    height: 32,
+    background: 'transparent',
+    border: '1px solid var(--border-bright)',
     borderRadius: 'var(--radius)',
+    color: 'var(--text-muted)',
+    cursor: 'pointer',
+    flexShrink: 0,
     transition: 'var(--transition)',
-  },
-  status: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-  },
-  dot: {
-    display: 'inline-block',
-    width: 7,
-    height: 7,
-    borderRadius: '50%',
-    background: 'var(--green)',
-    boxShadow: '0 0 6px var(--green)',
-    animation: 'pulse 2s infinite',
+    marginLeft: 'auto',
   },
 }

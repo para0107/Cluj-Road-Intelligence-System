@@ -2,13 +2,18 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents, Rectangle } from 'react-leaflet'
 import { useNavigate } from 'react-router-dom'
-import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle, Map, PenTool, XCircle, Check } from 'lucide-react'
+import { BarChart2, FileText, RefreshCw, Eye, EyeOff, AlertTriangle, Map, PenTool, XCircle, Check, Radio } from 'lucide-react'
 import {
   CLASS_COLORS, CLASS_LABELS, CLASS_ICONS,
   SEVERITY_COLORS, SEVERITY_LABELS,
   CLUJ_CENTER, CLUJ_ZOOM, TILE_URL, TILE_ATTR,
 } from '../utils/constants'
-import { fetchDetections, fetchStats } from '../utils/api'
+import { fetchDetections, fetchStats, fetchJobStatus } from '../utils/api'
+
+// ─── Live-update polling interval (ms) ────────────────────────────────────
+// Matches the poll interval used on IngestionPage.
+// The map silently refreshes detections from the DB each tick.
+const LIVE_POLL_MS = 10_000
 
 // ── Auto-fit map to data bounds ───────────────────────────────────────────
 function FitBounds({ detections }) {
@@ -26,7 +31,6 @@ function FitBounds({ detections }) {
   return null
 }
 
-// ── Point in Polygon ──────────────────────────────────────────────────────
 // ── Point in Rectangle ──────────────────────────────────────────────────────
 function isPointInRect(point, rect) {
   const [start, end] = rect;
@@ -253,21 +257,106 @@ export default function MapPage() {
   const [rectEnd, setRectEnd] = useState(null)
   const [finishedRect, setFinishedRect] = useState(null)
 
-  // Load all detections (up to 5000 for the map)
-  useEffect(() => {
-    Promise.all([
-      fetchDetections({ page: 1, page_size: 5000 }),
-      fetchStats(),
-    ])
-      .then(([det, st]) => {
-        setDetections(det.items || [])
-        setStats(st)
+  // ── Live update state ──────────────────────────────────────────────────
+  // liveJobId: the currently running pipeline session_id, read from
+  // localStorage. IngestionPage writes this key when a job starts so the
+  // map can begin polling even if the user navigates away from IngestionPage.
+  const [liveJobId,   setLiveJobId]   = useState(() => localStorage.getItem('rids_active_job') || null)
+  const [liveActive,  setLiveActive]  = useState(false)  // true while job is running/initialising
+  const [lastRefresh, setLastRefresh] = useState(null)   // ISO timestamp of last silent refresh
+  const pollRef = useRef(null)
+
+  // ── Data loading helpers ────────────────────────────────────────────────
+
+  /**
+   * Refresh detections + stats from the DB.
+   * Called on initial mount AND silently during live polling.
+   * Silent = does NOT set loading=true so the map doesn't flicker.
+   */
+  const refreshData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
+    try {
+      const [det, st] = await Promise.all([
+        fetchDetections({ page: 1, page_size: 5000 }),
+        fetchStats(),
+      ])
+      setDetections(det.items || [])
+      setStats(st)
+      // On first load, activate all known classes; on silent refresh, preserve user selection
+      if (!silent) {
         const classes = new Set((det.items || []).map(d => d.damage_type))
         setActiveClasses(classes)
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+      }
+      if (silent) setLastRefresh(new Date().toISOString())
+    } catch (e) {
+      if (!silent) setError(e.message)
+      // On silent refresh failures, swallow — the user is not staring at a blank map
+    } finally {
+      if (!silent) setLoading(false)
+    }
   }, [])
+
+  // Initial load on mount
+  useEffect(() => { refreshData(false) }, [refreshData])
+
+  // ── Live polling effect ────────────────────────────────────────────────
+  // Runs whenever liveJobId changes (set to null = stop polling).
+  // Logic:
+  //   1. Read the active job status.
+  //   2. If status is running/initialising → stay active, refresh map data.
+  //   3. If status is complete → do one final map refresh, clear job, stop.
+  //   4. If status is failed/unknown → stop polling, leave data as-is.
+  useEffect(() => {
+    if (!liveJobId) {
+      if (pollRef.current) clearInterval(pollRef.current)
+      setLiveActive(false)
+      return
+    }
+
+    setLiveActive(true)
+    localStorage.setItem('rids_active_job', liveJobId)
+
+    const tick = async () => {
+      try {
+        const jobData = await fetchJobStatus(liveJobId)
+        const s = jobData.status
+
+        if (s === 'running' || s === 'initialising') {
+          // Pipeline still going — refresh map data silently
+          refreshData(true)
+        } else if (s === 'complete') {
+          // Pipeline done — do one final refresh to get all new detections
+          await refreshData(true)
+          setLiveActive(false)
+          setLiveJobId(null)
+          localStorage.removeItem('rids_active_job')
+          if (pollRef.current) clearInterval(pollRef.current)
+        } else {
+          // failed or unknown — stop polling
+          setLiveActive(false)
+          setLiveJobId(null)
+          localStorage.removeItem('rids_active_job')
+          if (pollRef.current) clearInterval(pollRef.current)
+        }
+      } catch (err) {
+        // 404 means job_id is no longer valid — stop quietly
+        if (err?.response?.status === 404) {
+          setLiveActive(false)
+          setLiveJobId(null)
+          localStorage.removeItem('rids_active_job')
+          if (pollRef.current) clearInterval(pollRef.current)
+        }
+        // Network errors: keep trying
+      }
+    }
+
+    tick()  // fire immediately
+    pollRef.current = setInterval(tick, LIVE_POLL_MS)
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [liveJobId, refreshData])
 
   const toggleClass = useCallback((cls) => {
     setActiveClasses(prev => {
@@ -445,6 +534,15 @@ export default function MapPage() {
           <BarChart2 size={14} />
           Stats
         </button>
+        {/* Manual refresh — always available */}
+        <button
+          style={styles.actionBtn}
+          onClick={() => refreshData(true)}
+          title="Refresh map data"
+        >
+          <RefreshCw size={14} />
+          Refresh
+        </button>
         <button
           style={{ ...styles.actionBtn, ...styles.actionBtnAccent }}
           onClick={() => generateReport(detections, stats)}
@@ -454,6 +552,21 @@ export default function MapPage() {
           Report
         </button>
       </div>
+
+      {/* ── Live update indicator ─────────────────────────────────────── */}
+      {/* Shown only while a pipeline job is actively running.
+          Sits top-left, unobtrusive, tells the operator the map is live. */}
+      {liveActive && (
+        <div style={styles.liveBadge}>
+          <Radio size={11} style={{ animation: 'pulse 1.5s ease-in-out infinite' }} />
+          LIVE · updating every {LIVE_POLL_MS / 1000}s
+          {lastRefresh && (
+            <span style={{ marginLeft: 6, opacity: 0.6 }}>
+              · {new Date(lastRefresh).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── Bottom stat strip ────────────────────────────────────────── */}
       {displayStats && (
@@ -612,6 +725,27 @@ const styles = {
     background: 'var(--accent)',
     border: '1px solid var(--accent)',
     color: '#0a0c10',
+  },
+
+  // Live badge
+  liveBadge: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    zIndex: 800,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    background: 'rgba(232,255,71,0.08)',
+    border: '1px solid rgba(232,255,71,0.35)',
+    borderRadius: 20,
+    fontSize: 10,
+    fontFamily: 'var(--font-mono)',
+    fontWeight: 700,
+    color: 'var(--accent)',
+    letterSpacing: '.06em',
+    backdropFilter: 'blur(8px)',
   },
 
   // Bottom stat strip
