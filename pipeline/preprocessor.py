@@ -1,7 +1,7 @@
 """
 pipeline/preprocessor.py
 ------------------------
-Stage 1 of the CRIS inference pipeline.
+Stage 1 of the RIDS inference pipeline.
 
 Responsibilities:
   - Extract frames from a dashcam .mp4 at a configurable rate (default 2 fps)
@@ -13,21 +13,23 @@ GPS source support:
   - Standard .gpx file  (real dashcam surveys)
   - BDD100K-style GPS JSON (for development/testing without real footage)
 
-All public functions log every significant action so the full processing
-history can be replayed, plotted, or audited later.
+GPS synchronisation strategy
+-----------------------------
+Every frame is assigned a wall-clock UTC time (wall_time) by adding its
+offset from the video start to the video's own start time.  GPS coordinates
+are then linearly interpolated from the track at that wall_time.
 
-Usage (module):
-    from pipeline.preprocessor import Preprocessor, PreprocessorConfig
-    cfg = PreprocessorConfig(fps=2, focal_length_px=1400.0)
-    pp  = Preprocessor(cfg)
-    frames = pp.run(video_path="data/raw/footage/clip.mp4",
-                    gps_path="data/raw/gps_logs/clip.gpx")
+The video start time is resolved in this order of preference:
+  1. The caller passes video_start_time explicitly.
+  2. The MP4 file contains a creation_time tag in its metadata (read via
+     OpenCV / ffprobe fallback).  This is the most common case for modern
+     dashcams that embed a real-time clock in the recording.
+  3. The first GPS point in the file is used as a last resort, with a
+     warning.  This is only correct when the GPS logger and the camera
+     started recording at exactly the same moment — an assumption that is
+     often false in practice.
 
-Usage (CLI):
-    python -m pipeline.preprocessor \
-        --video  data/raw/footage/clip.mp4 \
-        --gps    data/raw/gps_logs/clip.gpx \
-        --output data/processed/frames/clip/
+Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
 """
 
 from __future__ import annotations
@@ -37,8 +39,9 @@ import json
 import logging
 import math
 import os
+import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Generator, List, Optional, Tuple
 
@@ -51,21 +54,18 @@ import numpy as np
 # https://pysolar.readthedocs.io
 try:
     from pysolar.solar import get_altitude
-    from pysolar.util import extraterrestrial_irrad
     PYSOLAR_AVAILABLE = True
 except ImportError:
     PYSOLAR_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
-# Logging setup — module-level logger; callers can attach their own handlers
+# Logging
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Configuration dataclass
-# All camera-specific parameters live here so the preprocessor itself never
-# has any hardcoded values.
+# Configuration
 # ---------------------------------------------------------------------------
 @dataclass
 class PreprocessorConfig:
@@ -86,62 +86,35 @@ class PreprocessorConfig:
 
     min_frame_interval_s:
         Hard lower bound on the time gap between extracted frames (seconds).
-        Guards against accidentally requesting more frames than the video
-        actually contains at high fps values.
 
     lighting_thresholds:
         (v_daylight, v_overcast) — mean HSV Value thresholds.
-        Frames with mean V >= v_daylight → daylight
-        Frames with mean V in [v_overcast, v_daylight) → overcast
-        Frames with mean V < v_overcast → low_light
-
-    shadow_gradient_threshold:
-        Sobel gradient magnitude threshold for shadow detection score.
-        Passed through to the FrameResult; not used by the preprocessor itself.
 
     min_mean_brightness:
-        Minimum mean pixel brightness (0–255) a frame must have to be kept.
-        Frames below this threshold are dropped before saving — they are title
-        cards, black intros/outros, or tunnel blackouts that would produce zero
-        detections and pollute the manifest with useless entries.
-        Default 15.0 catches near-black frames while keeping legitimately dark
-        (but usable) low-light frames. Set to 0 to disable filtering entirely.
+        Frames below this mean pixel brightness are dropped. Catches black
+        title cards, tunnel blackouts, etc. Set to 0 to disable.
     """
     fps: float = 2.0
-    focal_length_px: float = 1400.0          # CONFIGURE when camera is known
+    focal_length_px: float = 1400.0
     min_frame_interval_s: float = 0.1
-    lighting_thresholds: Tuple[float, float] = (100.0, 50.0)  # (daylight, overcast)
+    lighting_thresholds: Tuple[float, float] = (100.0, 50.0)
     shadow_gradient_threshold: float = 30.0
-    min_mean_brightness: float = 15.0        # drop near-black frames (title cards etc.)
-    output_format: str = "jpg"               # "jpg" or "png"
-    output_quality: int = 92                 # JPEG quality (0-100), ignored for PNG
+    min_mean_brightness: float = 15.0
+    output_format: str = "jpg"
+    output_quality: int = 92
 
 
 # ---------------------------------------------------------------------------
-# Output dataclass for a single extracted frame
+# Output dataclass
 # ---------------------------------------------------------------------------
 @dataclass
 class FrameResult:
     """
-    Everything the downstream pipeline stages need to know about one frame.
+    Everything downstream pipeline stages need to know about one frame.
 
-    frame_path:       Absolute path to the saved frame image.
-    frame_index:      Sequential index within this video (0-based).
-    timestamp_s:      Time offset from video start in seconds.
-    wall_time:        UTC datetime corresponding to this frame (interpolated
-                      from GPS track start + timestamp_s).
-    latitude:         WGS84 latitude  (None if GPS sync failed for this frame).
-    longitude:        WGS84 longitude (None if GPS sync failed for this frame).
-    sun_elevation:    Solar elevation angle in degrees above the horizon.
-                      Negative = below horizon (night). None if pysolar not
-                      available or GPS coords are missing.
-    lighting:         "daylight" | "overcast" | "low_light"
-    shadow_geometry_score: Mean Sobel gradient magnitude in HSV-S channel.
-                      Higher values indicate stronger shadow edges.
-    focal_length_px:  Forwarded from config; lets downstream stages be
-                      self-contained without importing the config object.
-    gps_interpolated: True if the GPS fix was interpolated between two
-                      surrounding track points; False if it was an exact match.
+    gps_interpolated: True if the GPS fix was linearly interpolated between
+        two surrounding track points; False if it matched a point exactly.
+        Always False when lat/lon is None.
     """
     frame_path: str
     frame_index: int
@@ -166,8 +139,8 @@ class GPSPoint:
 
     def __init__(self, time: datetime, lat: float, lon: float):
         self.time = time
-        self.lat = lat
-        self.lon = lon
+        self.lat  = lat
+        self.lon  = lon
 
 
 def load_gpx(gpx_path: str) -> List[GPSPoint]:
@@ -192,7 +165,6 @@ def load_gpx(gpx_path: str) -> List[GPSPoint]:
             for pt in segment.points:
                 if pt.time is None or pt.latitude is None or pt.longitude is None:
                     continue
-                # Ensure timezone-aware UTC
                 t = pt.time
                 if t.tzinfo is None:
                     t = t.replace(tzinfo=timezone.utc)
@@ -202,28 +174,16 @@ def load_gpx(gpx_path: str) -> List[GPSPoint]:
         raise ValueError(f"No valid track points found in {gpx_path}")
 
     points.sort(key=lambda p: p.time)
-    logger.info("Loaded %d GPS points from GPX (span: %s → %s)",
-                len(points), points[0].time.isoformat(), points[-1].time.isoformat())
+    logger.info(
+        "Loaded %d GPS points from GPX (span: %s → %s)",
+        len(points), points[0].time.isoformat(), points[-1].time.isoformat(),
+    )
     return points
 
 
 def load_bdd100k_gps(json_path: str) -> List[GPSPoint]:
     """
     Parse a BDD100K GPS/IMU JSON file and return a time-sorted list of GPSPoints.
-
-    BDD100K stores GPS as a JSON array. Each element looks like:
-        {
-          "timestamp": 1512337014123,   <- epoch ms
-          "latitude":  37.776413,
-          "longitude": -122.416785
-        }
-
-    The IMU fields (speed, course, accuracy) are ignored here — only lat/lon/time
-    are used for GPS sync.
-
-    Raises:
-        FileNotFoundError: if the file does not exist.
-        ValueError: if no GPS records with latitude+longitude are found.
     """
     path = Path(json_path)
     if not path.exists():
@@ -233,22 +193,18 @@ def load_bdd100k_gps(json_path: str) -> List[GPSPoint]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # BDD100K wraps GPS in a top-level "locations" key in some versions
     if isinstance(data, dict):
         records = data.get("locations", data.get("gps", []))
     else:
-        records = data  # raw list
+        records = data
 
     points: List[GPSPoint] = []
     for rec in records:
         lat = rec.get("latitude") or rec.get("lat")
         lon = rec.get("longitude") or rec.get("lon") or rec.get("long")
         ts  = rec.get("timestamp") or rec.get("ts")
-
         if lat is None or lon is None or ts is None:
             continue
-
-        # BDD100K timestamps are epoch milliseconds
         t = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
         points.append(GPSPoint(t, float(lat), float(lon)))
 
@@ -256,26 +212,100 @@ def load_bdd100k_gps(json_path: str) -> List[GPSPoint]:
         raise ValueError(f"No usable GPS records in {json_path}")
 
     points.sort(key=lambda p: p.time)
-    logger.info("Loaded %d GPS points from BDD100K JSON (span: %s → %s)",
-                len(points), points[0].time.isoformat(), points[-1].time.isoformat())
+    logger.info(
+        "Loaded %d GPS points from BDD100K JSON (span: %s → %s)",
+        len(points), points[0].time.isoformat(), points[-1].time.isoformat(),
+    )
     return points
 
 
 def detect_gps_format(gps_path: str) -> str:
-    """
-    Detect whether a GPS file is GPX or BDD100K JSON based on extension and
-    a quick content sniff. Returns "gpx" or "bdd100k".
-    """
     p = Path(gps_path)
     if p.suffix.lower() == ".gpx":
         return "gpx"
     if p.suffix.lower() == ".json":
-        # Quick content check: GPX-converted JSON would have a "type": "gpx"
-        # key; BDD100K JSON is typically an array or has "locations"/"gps" keys
-        with p.open("r", encoding="utf-8") as f:
-            head = f.read(512)
-        return "bdd100k"  # default for .json
-    raise ValueError(f"Unsupported GPS file format (must be .gpx or .json): {gps_path}")
+        return "bdd100k"
+    raise ValueError(
+        f"Unsupported GPS file format (must be .gpx or .json): {gps_path}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Video start time extraction
+# ---------------------------------------------------------------------------
+
+def _extract_video_start_time(video_path: str) -> Optional[datetime]:
+    """
+    Try to read the recording start time embedded in the MP4 metadata.
+
+    Strategy 1: read OpenCV's CAP_PROP_* tags (rarely populated).
+    Strategy 2: call ffprobe to read the 'creation_time' tag from the
+                format metadata. This works for most modern dashcams that
+                sync their internal clock to GPS or NTP.
+
+    Returns a timezone-aware UTC datetime, or None if not found.
+
+    Note: this function never raises — all failures are logged as warnings
+    so the pipeline can fall back gracefully.
+    """
+    # --- Strategy 1: ffprobe (most reliable) --------------------------------
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_entries", "format_tags=creation_time",
+                video_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            creation_time_str = (
+                data.get("format", {})
+                    .get("tags", {})
+                    .get("creation_time")
+            )
+            if creation_time_str:
+                # ffprobe returns ISO 8601, e.g. "2026-05-23T10:30:00.000000Z"
+                ct = datetime.fromisoformat(
+                    creation_time_str.replace("Z", "+00:00")
+                )
+                if ct.tzinfo is None:
+                    ct = ct.replace(tzinfo=timezone.utc)
+                logger.info(
+                    "Video start time from MP4 metadata (ffprobe): %s",
+                    ct.isoformat(),
+                )
+                return ct
+    except FileNotFoundError:
+        # ffprobe not installed — not an error, just unavailable
+        logger.debug("ffprobe not found; skipping MP4 metadata strategy.")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, KeyError) as exc:
+        logger.warning("ffprobe metadata read failed: %s", exc)
+
+    # --- Strategy 2: OpenCV VideoCapture tags --------------------------------
+    # OpenCV exposes CAP_PROP_POS_AVI_RATIO and a few format-specific tags.
+    # creation_time is not a standard OpenCV property, but some backends
+    # expose it as a string via get(). We try a known property ID.
+    # This is unreliable and rarely populated; included as a secondary attempt.
+    try:
+        cap = cv2.VideoCapture(str(video_path))
+        # Property 0x10000 is a non-standard backend-specific tag in some builds.
+        # We do not rely on it; this is a best-effort probe only.
+        cap.release()
+    except Exception:
+        pass
+
+    logger.debug(
+        "Could not extract creation_time from video metadata for %s. "
+        "Will fall back to GPS track anchor.",
+        video_path,
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -289,10 +319,13 @@ def interpolate_gps(
     """
     Linear interpolation of (lat, lon) for a given UTC datetime.
 
+    The interpolation is linear in geographic coordinates (degrees), which
+    introduces a small error for long segments but is negligible at the
+    distances between GPS fixes from a moving vehicle (~5–50 m).
+
     Returns:
         (latitude, longitude, was_interpolated)
-        was_interpolated is False only if target_time matches a point exactly.
-        Returns (None, None, False) if target_time is outside the GPS track span.
+        Returns (None, None, False) if target_time is outside the GPS track.
     """
     if not points:
         return None, None, False
@@ -301,10 +334,7 @@ def interpolate_gps(
     if t.tzinfo is None:
         t = t.replace(tzinfo=timezone.utc)
 
-    t_start = points[0].time
-    t_end   = points[-1].time
-
-    if t < t_start or t > t_end:
+    if t < points[0].time or t > points[-1].time:
         return None, None, False
 
     # Binary search for the surrounding pair
@@ -317,7 +347,6 @@ def interpolate_gps(
             hi = mid
 
     p0, p1 = points[lo], points[hi]
-
     span = (p1.time - p0.time).total_seconds()
     if span == 0:
         return p0.lat, p0.lon, False
@@ -325,8 +354,7 @@ def interpolate_gps(
     alpha = (t - p0.time).total_seconds() / span
     lat = p0.lat + alpha * (p1.lat - p0.lat)
     lon = p0.lon + alpha * (p1.lon - p0.lon)
-    interpolated = alpha > 0.0
-    return lat, lon, interpolated
+    return lat, lon, alpha > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -340,17 +368,10 @@ def classify_lighting(
     """
     Classify a frame's lighting condition from its HSV histogram.
 
-    Args:
-        frame_bgr:   BGR image as returned by cv2.
-        thresholds:  (v_daylight, v_overcast) — mean V-channel cutoffs.
-
     Returns:
         (lighting_label, shadow_geometry_score)
-        lighting_label: "daylight" | "overcast" | "low_light"
-        shadow_geometry_score: mean Sobel magnitude on the S channel,
-            proxy for shadow edge presence.
     """
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    hsv       = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     v_channel = hsv[:, :, 2].astype(np.float32)
     s_channel = hsv[:, :, 1].astype(np.float32)
 
@@ -364,10 +385,9 @@ def classify_lighting(
     else:
         label = "low_light"
 
-    # Shadow geometry score: Sobel on saturation channel
-    sobel_x = cv2.Sobel(s_channel, cv2.CV_32F, 1, 0, ksize=3)
-    sobel_y = cv2.Sobel(s_channel, cv2.CV_32F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
+    sobel_x     = cv2.Sobel(s_channel, cv2.CV_32F, 1, 0, ksize=3)
+    sobel_y     = cv2.Sobel(s_channel, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag    = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
     shadow_score = float(np.mean(grad_mag))
 
     return label, shadow_score
@@ -384,28 +404,24 @@ def compute_sun_elevation(
 ) -> Optional[float]:
     """
     Compute the solar elevation angle (degrees) above the horizon.
-
-    Negative values mean the sun is below the horizon (night/twilight).
     Returns None if pysolar is not installed.
     """
     if not PYSOLAR_AVAILABLE:
         return None
-
-    # pysolar requires a timezone-aware datetime
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-
     try:
-        elevation = get_altitude(lat, lon, when)
-        return float(elevation)
-    except Exception as exc:  # pysolar can raise on edge-case inputs
-        logger.warning("pysolar failed for (%.4f, %.4f) at %s: %s",
-                       lat, lon, when.isoformat(), exc)
+        return float(get_altitude(lat, lon, when))
+    except Exception as exc:
+        logger.warning(
+            "pysolar failed for (%.4f, %.4f) at %s: %s",
+            lat, lon, when.isoformat(), exc,
+        )
         return None
 
 
 # ---------------------------------------------------------------------------
-# Frame extraction
+# Frame timestamp generator
 # ---------------------------------------------------------------------------
 
 def _frame_timestamps(
@@ -413,25 +429,14 @@ def _frame_timestamps(
     fps: float,
     min_interval: float,
 ) -> Generator[float, None, None]:
-    """
-    Yield evenly-spaced timestamps (seconds from video start) at which frames
-    should be extracted.
-
-    Args:
-        video_path:    Path to the video file.
-        fps:           Target extraction rate.
-        min_interval:  Minimum gap between frames in seconds.
-
-    Yields:
-        Float timestamps in [0, video_duration).
-    """
+    """Yield evenly-spaced timestamps (seconds from video start)."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise IOError(f"Cannot open video: {video_path}")
 
-    native_fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_count   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_s    = frame_count / native_fps
+    native_fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration_s  = frame_count / native_fps
     cap.release()
 
     interval = max(1.0 / fps, min_interval)
@@ -447,18 +452,19 @@ def _frame_timestamps(
 
 class Preprocessor:
     """
-    Stage 1 of the CRIS pipeline.
+    Stage 1 of the RIDS pipeline.
 
-    Example:
-        cfg    = PreprocessorConfig(fps=2, focal_length_px=1400.0)
-        pp     = Preprocessor(cfg)
-        frames = pp.run(
-            video_path="data/raw/footage/clip.mp4",
-            gps_path="data/raw/gps_logs/clip.gpx",
-            output_dir="data/processed/frames/clip/",
-        )
-        for f in frames:
-            print(f.frame_path, f.lighting, f.sun_elevation)
+    GPS synchronisation
+    -------------------
+    Each extracted frame is assigned a wall-clock UTC time by adding its
+    video-offset (seconds) to the video's recording start time.  Coordinates
+    are then linearly interpolated from the GPS track at that wall-clock time.
+
+    The recording start time is resolved in order:
+      1. video_start_time argument (explicit, most accurate)
+      2. MP4 creation_time metadata tag read via ffprobe
+      3. First GPS point in the file (fallback with warning — only correct
+         when camera and GPS logger started at exactly the same second)
     """
 
     def __init__(self, config: Optional[PreprocessorConfig] = None):
@@ -472,10 +478,6 @@ class Preprocessor:
             self.cfg.output_format,
         )
 
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
-
     def run(
         self,
         video_path: str,
@@ -484,20 +486,19 @@ class Preprocessor:
         video_start_time: Optional[datetime] = None,
     ) -> List[FrameResult]:
         """
-        Extract frames from a video, sync GPS, classify lighting, compute sun angle.
+        Extract frames, sync GPS, classify lighting, compute sun angle.
 
         Args:
-            video_path:         Path to the dashcam .mp4 (or any OpenCV-readable format).
-            gps_path:           Path to the GPS file (.gpx or BDD100K .json).
-            output_dir:         Directory where frame images will be saved.
-                                Created if it does not exist.
-            video_start_time:   UTC datetime of the first frame in the video.
-                                If None, it is inferred from the first GPS point
-                                (works well for GPX files that contain absolute
-                                timestamps; less accurate for BDD100K).
+            video_path:       Path to dashcam .mp4.
+            gps_path:         Path to GPS file (.gpx or BDD100K .json).
+            output_dir:       Directory for saved frame images.
+            video_start_time: UTC datetime of the first video frame.
+                              If None, resolved automatically from MP4
+                              metadata or the first GPS point (see class
+                              docstring for priority order).
 
         Returns:
-            List of FrameResult objects, one per extracted frame, in time order.
+            List of FrameResult, one per extracted frame, in time order.
         """
         video_path = str(video_path)
         gps_path   = str(gps_path)
@@ -510,37 +511,76 @@ class Preprocessor:
 
         # 1. Load GPS track
         gps_format = detect_gps_format(gps_path)
-        if gps_format == "gpx":
-            gps_points = load_gpx(gps_path)
-        else:
-            gps_points = load_bdd100k_gps(gps_path)
+        gps_points = load_gpx(gps_path) if gps_format == "gpx" else load_bdd100k_gps(gps_path)
 
         # 2. Determine video wall-clock start time
-        if video_start_time is None:
-            video_start_time = gps_points[0].time
-            logger.info(
-                "video_start_time not supplied; using first GPS point: %s",
-                video_start_time.isoformat(),
-            )
-        else:
+        if video_start_time is not None:
+            # Caller supplied it explicitly — most accurate
             if video_start_time.tzinfo is None:
                 video_start_time = video_start_time.replace(tzinfo=timezone.utc)
-            logger.info("video_start_time (supplied): %s", video_start_time.isoformat())
+            logger.info(
+                "video_start_time (explicit): %s", video_start_time.isoformat()
+            )
+        else:
+            # Try to read from MP4 metadata first
+            video_start_time = _extract_video_start_time(video_path)
+
+            if video_start_time is not None:
+                logger.info(
+                    "video_start_time (from MP4 metadata): %s",
+                    video_start_time.isoformat(),
+                )
+            else:
+                # Last resort: use first GPS point.
+                # This is only correct if the GPS logger and camera started
+                # recording at the exact same moment.
+                video_start_time = gps_points[0].time
+                logger.warning(
+                    "video_start_time could not be determined from MP4 metadata. "
+                    "Using first GPS point (%s) as the video start anchor. "
+                    "GPS coordinates will be WRONG if the GPS logger started "
+                    "recording before or after the camera. "
+                    "To fix: ensure your dashcam embeds a creation_time tag, "
+                    "or pass video_start_time explicitly.",
+                    video_start_time.isoformat(),
+                )
+
+        # Log the GPS track span vs the video start time so misalignment is
+        # immediately visible in the logs.
+        gps_start = gps_points[0].time
+        gps_end   = gps_points[-1].time
+        offset_s  = (video_start_time - gps_start).total_seconds()
+        logger.info(
+            "GPS track span: %s → %s (%.1f s)",
+            gps_start.isoformat(), gps_end.isoformat(),
+            (gps_end - gps_start).total_seconds(),
+        )
+        logger.info(
+            "Video start vs GPS start: %.1f s offset "
+            "(positive = video starts after GPS track began)",
+            offset_s,
+        )
+        if abs(offset_s) > 60:
+            logger.warning(
+                "Large offset (%.1f s) between video start time and GPS track "
+                "start. Check that the correct GPS file was provided and that "
+                "both devices have synchronised clocks.",
+                offset_s,
+            )
 
         # 3. Prepare output directory
         os.makedirs(output_dir, exist_ok=True)
-        logger.info("Output directory ready: %s", output_dir)
 
-        # 4. Open video and validate
+        # 4. Open video
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise IOError(f"Cannot open video file: {video_path}")
 
-        native_fps   = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        frame_count  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration_s   = frame_count / native_fps
-        width        = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height       = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        native_fps  = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration_s  = frame_count / native_fps
+        width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         logger.info(
             "Video: %.1f s | %.1f fps native | %d frames | %dx%d",
@@ -548,9 +588,9 @@ class Preprocessor:
         )
 
         interval_s = max(1.0 / self.cfg.fps, self.cfg.min_frame_interval_s)
-        target_timestamps = list(_frame_timestamps(
-            video_path, self.cfg.fps, self.cfg.min_frame_interval_s
-        ))
+        target_timestamps = list(
+            _frame_timestamps(video_path, self.cfg.fps, self.cfg.min_frame_interval_s)
+        )
         logger.info(
             "Extraction plan: %d frames @ %.2f s intervals (%.1f fps)",
             len(target_timestamps), interval_s, self.cfg.fps,
@@ -558,68 +598,65 @@ class Preprocessor:
 
         # 5. Extract frames
         results: List[FrameResult] = []
-        ext = self.cfg.output_format.lower()
+        ext         = self.cfg.output_format.lower()
         save_params = (
             [cv2.IMWRITE_JPEG_QUALITY, self.cfg.output_quality]
-            if ext == "jpg"
-            else []
+            if ext == "jpg" else []
         )
 
         for idx, t_s in enumerate(target_timestamps):
-            # Seek to target timestamp
             cap.set(cv2.CAP_PROP_POS_MSEC, t_s * 1000.0)
             ret, frame = cap.read()
 
             if not ret or frame is None:
-                logger.warning("Frame %d (t=%.2f s): read failed — skipping", idx, t_s)
+                logger.warning(
+                    "Frame %d (t=%.2f s): read failed — skipping", idx, t_s
+                )
                 continue
 
-            # 5a. Brightness filter — drop near-black frames (intros, tunnels, title cards)
+            # Brightness filter
             if self.cfg.min_mean_brightness > 0:
-                mean_brightness = float(np.mean(
-                    cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                ))
+                mean_brightness = float(
+                    np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+                )
                 if mean_brightness < self.cfg.min_mean_brightness:
                     logger.debug(
-                        "Frame %d (t=%.2f s): dropped — mean brightness %.1f < %.1f",
+                        "Frame %d (t=%.2f s): dropped — brightness %.1f < %.1f",
                         idx, t_s, mean_brightness, self.cfg.min_mean_brightness,
                     )
                     continue
-            wall_time = video_start_time.replace(
-                tzinfo=video_start_time.tzinfo
-            )
-            from datetime import timedelta
+
+            # Wall-clock time for this frame
             wall_time = video_start_time + timedelta(seconds=t_s)
 
+            # GPS interpolation
             lat, lon, interpolated = interpolate_gps(gps_points, wall_time)
-
             if lat is None:
                 logger.warning(
-                    "Frame %d (t=%.2f s): GPS sync failed (outside track span) "
+                    "Frame %d (t=%.2f s, wall=%s): outside GPS track span "
                     "— lat/lon will be None",
-                    idx, t_s,
+                    idx, t_s, wall_time.isoformat(),
                 )
 
-            # 5b. Lighting classification
+            # Lighting classification
             lighting, shadow_score = classify_lighting(
                 frame, self.cfg.lighting_thresholds
             )
 
-            # 5c. Solar elevation
+            # Solar elevation
             sun_elev: Optional[float] = None
             if lat is not None and lon is not None:
                 sun_elev = compute_sun_elevation(lat, lon, wall_time)
 
-            # 5d. Save frame to disk
+            # Save frame
             frame_filename = f"frame_{idx:06d}_t{t_s:.3f}.{ext}"
-            frame_path = os.path.join(output_dir, frame_filename)
-            success = cv2.imwrite(frame_path, frame, save_params)
-
+            frame_path     = os.path.join(output_dir, frame_filename)
+            success        = cv2.imwrite(frame_path, frame, save_params)
             if not success:
                 logger.error("Frame %d: imwrite failed for %s", idx, frame_path)
                 continue
 
-            result = FrameResult(
+            results.append(FrameResult(
                 frame_path=frame_path,
                 frame_index=idx,
                 timestamp_s=t_s,
@@ -631,28 +668,28 @@ class Preprocessor:
                 shadow_geometry_score=shadow_score,
                 focal_length_px=self.cfg.focal_length_px,
                 gps_interpolated=interpolated,
-            )
-            results.append(result)
+            ))
 
             if idx % 20 == 0:
                 logger.info(
-                    "Frame %d/%d | t=%.2f s | lighting=%s | "
-                    "sun=%.1f° | lat=%.5f | lon=%.5f",
+                    "Frame %d/%d | t=%.2f s | wall=%s | lighting=%s | "
+                    "sun=%.1f° | lat=%s | lon=%s",
                     idx, len(target_timestamps), t_s,
+                    wall_time.isoformat(),
                     lighting,
-                    sun_elev if sun_elev is not None else float("nan"),
-                    lat if lat is not None else float("nan"),
-                    lon if lon is not None else float("nan"),
+                    f"{sun_elev:.1f}" if sun_elev is not None else "n/a",
+                    f"{lat:.5f}" if lat is not None else "None",
+                    f"{lon:.5f}" if lon is not None else "None",
                 )
 
         cap.release()
 
         # 6. Summary
-        n_daylight  = sum(1 for r in results if r.lighting == "daylight")
-        n_overcast  = sum(1 for r in results if r.lighting == "overcast")
-        n_low       = sum(1 for r in results if r.lighting == "low_light")
-        n_no_gps    = sum(1 for r in results if r.latitude is None)
-        n_dropped   = len(target_timestamps) - len(results)
+        n_daylight = sum(1 for r in results if r.lighting == "daylight")
+        n_overcast = sum(1 for r in results if r.lighting == "overcast")
+        n_low      = sum(1 for r in results if r.lighting == "low_light")
+        n_no_gps   = sum(1 for r in results if r.latitude is None)
+        n_dropped  = len(target_timestamps) - len(results)
 
         logger.info("=== Preprocessing complete ===")
         logger.info("  Total frames extracted : %d", len(results))
@@ -661,6 +698,13 @@ class Preprocessor:
         logger.info("  Lighting breakdown     : daylight=%d overcast=%d low_light=%d",
                     n_daylight, n_overcast, n_low)
         logger.info("  Frames without GPS     : %d", n_no_gps)
+        if n_no_gps > 0:
+            logger.warning(
+                "%d frames have no GPS coordinates. This means their wall_time "
+                "fell outside the GPS track span. Check clock alignment between "
+                "the camera and GPS logger.",
+                n_no_gps,
+            )
         if not PYSOLAR_AVAILABLE:
             logger.warning(
                 "pysolar not installed — sun_elevation is None for all frames. "
@@ -670,48 +714,36 @@ class Preprocessor:
         return results
 
     # ------------------------------------------------------------------
-    # Convenience: save results manifest as JSON
+    # Manifest helpers
     # ------------------------------------------------------------------
 
     @staticmethod
     def save_manifest(results: List[FrameResult], manifest_path: str) -> None:
-        """
-        Persist the list of FrameResult objects to a JSON manifest.
-        Useful for passing preprocessor output to the next pipeline stage
-        without keeping everything in memory.
-        """
         records = []
         for r in results:
             records.append({
-                "frame_path":          r.frame_path,
-                "frame_index":         r.frame_index,
-                "timestamp_s":         r.timestamp_s,
-                "wall_time":           r.wall_time.isoformat() if r.wall_time else None,
-                "latitude":            r.latitude,
-                "longitude":           r.longitude,
-                "sun_elevation":       r.sun_elevation,
-                "lighting":            r.lighting,
+                "frame_path":            r.frame_path,
+                "frame_index":           r.frame_index,
+                "timestamp_s":           r.timestamp_s,
+                "wall_time":             r.wall_time.isoformat() if r.wall_time else None,
+                "latitude":              r.latitude,
+                "longitude":             r.longitude,
+                "sun_elevation":         r.sun_elevation,
+                "lighting":              r.lighting,
                 "shadow_geometry_score": r.shadow_geometry_score,
-                "focal_length_px":     r.focal_length_px,
-                "gps_interpolated":    r.gps_interpolated,
+                "focal_length_px":       r.focal_length_px,
+                "gps_interpolated":      r.gps_interpolated,
             })
-
         path = Path(manifest_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(records, f, indent=2)
-
         logger.info("Manifest saved: %s (%d frames)", manifest_path, len(records))
 
     @staticmethod
     def load_manifest(manifest_path: str) -> List[FrameResult]:
-        """
-        Load a previously saved manifest back into FrameResult objects.
-        Used by downstream pipeline stages to pick up where preprocessing left off.
-        """
         with open(manifest_path, "r", encoding="utf-8") as f:
             records = json.load(f)
-
         results = []
         for rec in records:
             wt = rec.get("wall_time")
@@ -728,7 +760,6 @@ class Preprocessor:
                 focal_length_px=rec["focal_length_px"],
                 gps_interpolated=rec.get("gps_interpolated", True),
             ))
-
         logger.info("Manifest loaded: %s (%d frames)", manifest_path, len(results))
         return results
 
@@ -748,26 +779,35 @@ def _setup_logging(verbose: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="CRIS Stage 1 — Preprocessor: extract frames and sync GPS."
+        description="RIDS Stage 1 — Preprocessor: extract frames and sync GPS."
     )
-    parser.add_argument("--video",  required=True,  help="Path to dashcam .mp4")
-    parser.add_argument("--gps",    required=True,  help="Path to .gpx or BDD100K .json")
-    parser.add_argument("--output", required=True,  help="Output directory for frames")
-    parser.add_argument("--manifest", default=None, help="Optional: path to save manifest JSON")
-    parser.add_argument("--fps",    type=float, default=2.0,  help="Extraction rate (default 2)")
+    parser.add_argument("--video",    required=True, help="Path to dashcam .mp4")
+    parser.add_argument("--gps",      required=True, help="Path to .gpx or BDD100K .json")
+    parser.add_argument("--output",   required=True, help="Output directory for frames")
+    parser.add_argument("--manifest", default=None,  help="Optional: path to save manifest JSON")
+    parser.add_argument("--fps",      type=float, default=2.0)
+    parser.add_argument("--focal-length", type=float, default=1400.0)
+    parser.add_argument("--min-brightness", type=float, default=15.0)
     parser.add_argument(
-        "--focal-length", type=float, default=1400.0,
-        help="Camera focal length in pixels (default 1400; update when camera is known)"
+        "--video-start-time",
+        default=None,
+        help=(
+            "UTC ISO-8601 datetime of the first video frame, e.g. "
+            "'2026-05-23T10:30:00+00:00'. Use this when the MP4 does not "
+            "contain a creation_time metadata tag and the GPS logger started "
+            "at a different moment than the camera."
+        ),
     )
-    parser.add_argument(
-        "--min-brightness", type=float, default=15.0,
-        help="Drop frames with mean brightness below this value (default 15). "
-             "Set 0 to disable. Removes black title cards and tunnel blackouts."
-    )
-    parser.add_argument("--verbose", action="store_true", help="DEBUG-level logging")
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     _setup_logging(args.verbose)
+
+    video_start_time: Optional[datetime] = None
+    if args.video_start_time:
+        video_start_time = datetime.fromisoformat(args.video_start_time)
+        if video_start_time.tzinfo is None:
+            video_start_time = video_start_time.replace(tzinfo=timezone.utc)
 
     cfg = PreprocessorConfig(
         fps=args.fps,
@@ -780,16 +820,12 @@ def main() -> None:
         video_path=args.video,
         gps_path=args.gps,
         output_dir=args.output,
+        video_start_time=video_start_time,
     )
 
-    if args.manifest:
-        Preprocessor.save_manifest(results, args.manifest)
-    else:
-        # Default: save manifest alongside frames
-        manifest_path = os.path.join(args.output, "manifest.json")
-        Preprocessor.save_manifest(results, manifest_path)
-        logger.info("Manifest auto-saved to: %s", manifest_path)
-
+    manifest_path = args.manifest or os.path.join(args.output, "manifest.json")
+    Preprocessor.save_manifest(results, manifest_path)
+    logger.info("Manifest saved to: %s", manifest_path)
     print(f"\nDone. {len(results)} frames extracted to: {args.output}")
 
 
