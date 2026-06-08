@@ -1,16 +1,20 @@
 # ── backend/Dockerfile ────────────────────────────────────────────────────────
 # Builds a lean FastAPI + Uvicorn image.
-# Heavy ML / pipeline dependencies (torch, ultralytics, etc.) are intentionally
-# excluded — the API only needs the database / web stack.
+# Includes system tools (exiftool, ffmpeg) for portable telemetry processing.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.11-slim
 
-# System deps needed by psycopg2-binary, shapely, etc.
+# Install system dependencies for database, GIS, ExifTool, FFmpeg, and OpenCV
+# Note: libgl1 is used as libgl1-mesa-glx is obsolete in newer Debian versions (Trixie)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         gcc \
         libgeos-dev \
+        exiftool \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
