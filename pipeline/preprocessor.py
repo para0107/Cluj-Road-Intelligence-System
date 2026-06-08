@@ -288,14 +288,8 @@ def _extract_video_start_time(video_path: str) -> Optional[datetime]:
         logger.warning("ffprobe metadata read failed: %s", exc)
 
     # --- Strategy 2: OpenCV VideoCapture tags --------------------------------
-    # OpenCV exposes CAP_PROP_POS_AVI_RATIO and a few format-specific tags.
-    # creation_time is not a standard OpenCV property, but some backends
-    # expose it as a string via get(). We try a known property ID.
-    # This is unreliable and rarely populated; included as a secondary attempt.
     try:
         cap = cv2.VideoCapture(str(video_path))
-        # Property 0x10000 is a non-standard backend-specific tag in some builds.
-        # We do not rely on it; this is a best-effort probe only.
         cap.release()
     except Exception:
         pass
@@ -587,6 +581,47 @@ class Preprocessor:
             duration_s, native_fps, frame_count, width, height,
         )
 
+        # ── Generalized Alignment Heuristic Engine ───────────────────────────
+        # Automatically compensates for timezone shifts and file-end metadata timestamps
+        if video_start_time is not None and (video_start_time < gps_start or video_start_time > gps_end):
+            logger.info("Heuristic Engine | Video metadata time falls outside GPS track span. Evaluating anomalies...")
+            
+            # Scenario A: Check if this GPX track was auto-extracted from this identical video container
+            if Path(video_path).with_suffix(".gpx").name == Path(gps_path).name:
+                logger.info("Heuristic Engine | Verified embedded telemetry file match. Aligning video start directly to telemetry timeline.")
+                video_start_time = gps_start
+            else:
+                # Scenario B: External GPS tracks — test START-STAMP and END-STAMP rules against timezone drifts
+                heuristic_resolved = False
+                alignment_scenarios = [
+                    ("START-STAMP", video_start_time),
+                    ("END-STAMP",   video_start_time - timedelta(seconds=duration_s))
+                ]
+                
+                for timestamp_type, test_time in alignment_scenarios:
+                    diff_seconds = (test_time - gps_start).total_seconds()
+                    hours_offset = round(diff_seconds / 3600.0)
+                    residual_drift = abs(diff_seconds - (hours_offset * 3600.0))
+                    
+                    # If the remaining drift after subtracting whole hours is minimal (< 45 seconds),
+                    # we have successfully identified the timezone mismatch boundary.
+                    if residual_drift < 45.0:
+                        video_start_time = test_time - timedelta(hours=hours_offset)
+                        logger.info(
+                            "Heuristic Engine | Success! Auto-detected whole-hour timezone shift (%d hours) "
+                            "combined with a video %s convention. Synchronized start to: %s",
+                            hours_offset, timestamp_type, video_start_time.isoformat()
+                        )
+                        heuristic_resolved = True
+                        break
+                
+                if not heuristic_resolved:
+                    logger.warning("Heuristic Engine | Unable to automatically reconcile clock synchronization drift safely.")
+
+        # Re-evaluate final offset calculation for downstream syncing log accuracy
+        offset_s = (video_start_time - gps_start).total_seconds()
+        logger.info("Final synchronized Video start vs GPS start offset: %.1f s", offset_s)
+
         interval_s = max(1.0 / self.cfg.fps, self.cfg.min_frame_interval_s)
         target_timestamps = list(
             _frame_timestamps(video_path, self.cfg.fps, self.cfg.min_frame_interval_s)
@@ -673,7 +708,7 @@ class Preprocessor:
             if idx % 20 == 0:
                 logger.info(
                     "Frame %d/%d | t=%.2f s | wall=%s | lighting=%s | "
-                    "sun=%.1f° | lat=%s | lon=%s",
+                    "sun=%s° | lat=%s | lon=%s",
                     idx, len(target_timestamps), t_s,
                     wall_time.isoformat(),
                     lighting,

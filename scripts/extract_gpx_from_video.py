@@ -546,7 +546,6 @@ def _extract_novatek(mp4_path: Path) -> List[GPSPoint]:
 # ---------------------------------------------------------------------------
 # Strategy 3: exiftool (generic fallback)
 # ---------------------------------------------------------------------------
-
 _EXIFTOOL_GPX_FMT = """\
 #------------------------------------------------------------------------------
 # File:         gpx.fmt
@@ -556,12 +555,11 @@ _EXIFTOOL_GPX_FMT = """\
 #[HEAD]<gpx version="1.1" creator="ExifTool" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.topografix.com/GPX/1/1" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
 #[HEAD]<trk>
 #[HEAD]<trkseg>
-#[BODY]<trkpt lat="$gpslatitude#" lon="$gpslongitude#"><time>$gpsdatetime</time></trkpt>
+#[BODY]<trkpt lat="${GPSLatitude#}" lon="${GPSLongitude#}"><time>${GPSDateTime;s/^(\d+):(\d+):(\d+) /$1-$2-$3T/}</time></trkpt>
 #[TAIL]</trkseg>
 #[TAIL]</trk>
 #[TAIL]</gpx>
 """
-
 
 def _extract_exiftool(mp4_path: Path) -> List[GPSPoint]:
     """
