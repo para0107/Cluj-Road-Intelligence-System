@@ -212,8 +212,10 @@ class Orchestrator:
             status      = "running",
         )
         log_id = self._survey_log_start(started_at)
+        
 
         try:
+            self._try_extract_gps()
             frames = self._run_stage1(
                 result,
                 self.session_dir / "01_manifest" / "manifest.json",
@@ -353,6 +355,49 @@ class Orchestrator:
                 output=None, error=str(exc),
             ))
             raise
+
+
+    # In Orchestrator.__init__ or run() — NO change needed to existing code.
+# Add this ONE method to the class:
+
+def _try_extract_gps(self) -> None:
+    """
+    If no GPX was provided, attempt to extract one from the MP4.
+    On success:  self.cfg.gps_path is updated to the extracted .gpx path.
+    On failure:  self.cfg.gps_path stays None — stages 6/7 will be skipped
+                 by the existing GPS-guard already in _run_stage1().
+    This method never raises — all errors are logged as warnings.
+    """
+    if self.cfg.gps_path and Path(self.cfg.gps_path).exists():
+        return  # GPX already provided — nothing to do
+
+    logger.info(
+        "No GPX provided — attempting embedded GPS extraction from %s",
+        self.cfg.video_path,
+    )
+    try:
+        from extract_gpx_from_video import extract
+        mp4_path = Path(self.cfg.video_path)
+        points, strategy = extract(mp4_path)
+
+        # Write the .gpx alongside the video file
+        gpx_path = mp4_path.with_suffix(".gpx")
+        from scripts.extract_gpx_from_video import _build_gpx_xml
+        gpx_xml = _build_gpx_xml(points, source_name=mp4_path.stem)
+        gpx_path.write_text(gpx_xml, encoding="utf-8")
+
+        self.cfg.gps_path = str(gpx_path)
+        logger.info(
+            "Embedded GPS extracted via [%s] — %d points → %s",
+            strategy, len(points), gpx_path,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Embedded GPS extraction failed (%s). "
+            "Stages 6 and 7 will be skipped.",
+            exc,
+        )
+        self.cfg.gps_path = None        
 
     def _run_stage3(self, result: SessionResult, det_results: list, seg_path: Path):
         from pipeline.segmentor import Segmentor, SegmentorConfig
