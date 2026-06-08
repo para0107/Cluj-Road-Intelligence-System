@@ -551,26 +551,16 @@ _EXIFTOOL_GPX_FMT = """\
 #------------------------------------------------------------------------------
 # File:         gpx.fmt
 # Description:  Print GPX (GPS eXchange) data from geotagged file
-# Revisions:    2010/02/05 - P. Harvey created
-#               2013/01/09 - PH Took new formatting approach
 #------------------------------------------------------------------------------
 #[HEAD]<?xml version="1.0" encoding="utf-8"?>
-#[HEAD]<gpx version="1.1"
-#[HEAD] creator="ExifTool"
-#[HEAD] xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-#[HEAD] xmlns="http://www.topografix.com/GPX/1/1"
-#[HEAD] xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+#[HEAD]<gpx version="1.1" creator="ExifTool" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.topografix.com/GPX/1/1" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
 #[HEAD]<trk>
 #[HEAD]<trkseg>
-#[BODY]<trkpt lat="${GPSLatitude#}" lon="${GPSLongitude#}">
-#[BODY]  <ele>${GPSAltitude#}</ele>
-#[BODY]  <time>${GPSDateTime}</time>
-#[BODY]</trkpt>
+#[BODY]<trkpt lat="$gpslatitude#" lon="$gpslongitude#"><time>$gpsdatetime</time></trkpt>
 #[TAIL]</trkseg>
 #[TAIL]</trk>
 #[TAIL]</gpx>
 """
-
 
 def _extract_exiftool(mp4_path: Path) -> List[GPSPoint]:
     """
