@@ -82,6 +82,23 @@ _SESSIONS_DIR = _DATA_DIR_HOST / "processed" / "sessions"
 # The env var is read as a fallback, but we override to "cuda" by default.
 _DEVICE = os.getenv("PIPELINE_DEVICE", "cuda")
 
+# ===========================================================================
+# DEBUG IMAGE TOGGLE (hardcoded)  --  search for SAVE_DEBUG to find this
+# ---------------------------------------------------------------------------
+# When True, every frontend-triggered run passes --save_debug to the
+# orchestrator, so each run writes debug folders + images:
+#     <session>/02_detections/debug/<frame>.jpg
+#     <session>/03_segmentations/debug/<frame>.jpg
+#     <session>/04_depth/debug/<frame>.jpg
+# (only for frames that have detections; depth is skipped on low-light frames).
+#
+# TO DISABLE for frontend runs in the future: set this to False (or delete the
+# "--save_debug" line marked SAVE_DEBUG in _run_job below). No other change
+# needed. CLI runs of orchestrator.py are unaffected — they only get debug
+# images when you pass --save_debug yourself.
+# ===========================================================================
+_SAVE_DEBUG = True
+
 _FPS          = float(os.getenv("PIPELINE_FPS", "2.0"))
 _POLL_S       = float(os.getenv("WATCHER_POLL_S", "5"))
 _LOG_LEVEL    = os.getenv("LOG_LEVEL", "INFO")
@@ -212,9 +229,19 @@ def _run_job(job_file: Path, job: dict) -> None:
     if gps_host is not None:
         cmd += ["--gps", str(gps_host)]
 
+    # --- SAVE_DEBUG (hardcoded) -------------------------------------------
+    # Adds --save_debug so every frontend run writes the per-stage debug
+    # folders/images. Controlled by the _SAVE_DEBUG constant at the top of
+    # this file. Set _SAVE_DEBUG = False (or remove these two lines) to turn
+    # debug image saving off for frontend-triggered runs.
+    if _SAVE_DEBUG:
+        cmd += ["--save_debug"]
+    # ----------------------------------------------------------------------
+
     logger.info(
-        "Starting orchestrator | job_id=%s | device=cuda | video=%s | gps=%s",
-        job_id, video_host.name, gps_host.name if gps_host else "none",
+        "Starting orchestrator | job_id=%s | device=cuda | save_debug=%s | "
+        "video=%s | gps=%s",
+        job_id, _SAVE_DEBUG, video_host.name, gps_host.name if gps_host else "none",
     )
     logger.debug("Command: %s", " ".join(cmd))
 
@@ -284,6 +311,7 @@ def main() -> None:
     logger.info("  Jobs dir     : %s", _JOBS_DIR)
     logger.info("  Orchestrator : %s", _ORCHESTRATOR)
     logger.info("  Device       : cuda (forced)")
+    logger.info("  Save debug   : %s", _SAVE_DEBUG)
     logger.info("  Poll interval: %.1f s", _POLL_S)
     logger.info("=" * 60)
 
