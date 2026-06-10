@@ -291,7 +291,7 @@ export default function ExplorerPage() {
             ].map(col => (
               <div
                 key={col.key}
-                style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }}
+                style={{ ...styles.th, cursor: 'pointer', userSelect: 'none', paddingLeft: 48 }}
                 onClick={() => toggleSort(col.key)}
               >
                 {col.label}
@@ -339,7 +339,7 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Class */}
-                <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 7 }}>
+                <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 7, paddingLeft: 48 }}>
                   <span style={{
                     width: 8, height: 8, borderRadius: '50%',
                     background: clsColor, flexShrink: 0,
@@ -350,7 +350,7 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Severity */}
-                <div style={styles.td}>
+                <div style={{ ...styles.td, paddingLeft: 48 }}>
                   <span style={{
                     background: `${sevColor}20`, color: sevColor,
                     border: `1px solid ${sevColor}45`,
@@ -362,7 +362,7 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Confidence */}
-                <div style={styles.td}>
+                <div style={{ ...styles.td, paddingLeft: 48 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{
                       width: 48, height: 4, borderRadius: 2,
@@ -380,12 +380,12 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Priority */}
-                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 12 }}>
+                <div style={{ ...styles.td, paddingLeft: 48, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 12 }}>
                   {(item.priority_score || 0).toFixed(4)}
                 </div>
 
                 {/* Seen */}
-                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                <div style={{ ...styles.td, paddingLeft: 48, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                   {item.detection_count}×
                 </div>
 
