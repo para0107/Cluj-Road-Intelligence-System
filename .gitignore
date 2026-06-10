@@ -9,7 +9,7 @@ ml/weights
 frontend/node_modules
 # 1. Ignore everything in runs
 runs/*
-
+scripts/*
 # 2. Un-ignore the specific parent folder `detect` so git can look inside
 !runs/detect/
 
