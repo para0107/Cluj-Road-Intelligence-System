@@ -241,7 +241,7 @@ export default function ExplorerPage() {
                     onChange={e => setDeleteSurveyLog(e.target.checked)}
                     style={styles.bulkCheckbox}
                   />
-                  Also delete survey_log
+                  Delete survey_log too
                 </label>
                 <button style={styles.deleteBtn} onClick={handleBulkDelete}>
                   Delete selected
@@ -457,7 +457,14 @@ const styles = {
     fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em',
   },
   headerRight: { display: 'flex', alignItems: 'center' },
-  filterActions: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  filterActions: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginLeft: 'auto',
+  },
   exportBtn: {
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '6px 14px', background: 'var(--accent-dim)',
@@ -493,38 +500,46 @@ const styles = {
   searchWrap: { position: 'relative', display: 'flex', alignItems: 'center' },
   clearBtn: {
     display: 'flex', alignItems: 'center', gap: 5,
-    padding: '5px 10px', background: 'rgba(255,68,68,0.1)',
-    border: '1px solid rgba(255,68,68,0.3)', borderRadius: 'var(--radius)',
-    color: 'var(--red)', fontSize: 11, cursor: 'pointer',
+    padding: '4px 9px', background: 'rgba(255,68,68,0.08)',
+    border: '1px solid rgba(255,68,68,0.24)', borderRadius: 'var(--radius)',
+    color: 'var(--text)', fontSize: 10, cursor: 'pointer',
     fontFamily: 'var(--font-mono)', fontWeight: 700,
   },
   bulkActions: {
-    display: 'flex', alignItems: 'center', gap: 10,
-    padding: '6px 10px', borderRadius: 'var(--radius)',
-    background: 'rgba(255,68,68,0.06)', border: '1px solid rgba(255,68,68,0.2)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '5px 8px',
+    borderRadius: 'var(--radius)',
+    background: 'rgba(255,68,68,0.05)',
+    border: '1px solid rgba(255,68,68,0.16)',
     flexWrap: 'wrap',
+    maxWidth: '100%',
   },
   bulkCount: {
     fontFamily: 'var(--font-mono)',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: 700,
-    color: 'var(--text)',
+    color: 'var(--text-muted)',
+    whiteSpace: 'nowrap',
   },
   bulkCheckLabel: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    fontSize: 11, color: 'var(--text-muted)',
+    display: 'flex', alignItems: 'center', gap: 5,
+    fontSize: 10, color: 'var(--text-muted)',
     cursor: 'pointer', userSelect: 'none',
+    whiteSpace: 'nowrap',
   },
   bulkCheckbox: {
-    width: 14, height: 14,
+    width: 13, height: 13,
     cursor: 'pointer', accentColor: 'var(--accent)',
   },
   deleteBtn: {
     display: 'flex', alignItems: 'center', gap: 5,
-    padding: '5px 10px', background: 'rgba(255,68,68,0.14)',
-    border: '1px solid rgba(255,68,68,0.35)', borderRadius: 'var(--radius)',
-    color: 'var(--red)', fontSize: 11, cursor: 'pointer',
+    padding: '4px 9px', background: 'rgba(255,68,68,0.1)',
+    border: '1px solid rgba(255,68,68,0.28)', borderRadius: 'var(--radius)',
+    color: 'var(--text)', fontSize: 10, cursor: 'pointer',
     fontFamily: 'var(--font-mono)', fontWeight: 700,
+    whiteSpace: 'nowrap',
   },
 
   tableWrap: {
