@@ -281,15 +281,7 @@ export default function ExplorerPage() {
         <div style={styles.tableWrap}>
           {/* Head */}
           <div style={styles.tableHead}>
-            <div style={{ ...styles.th, justifyContent: 'center' }}>
-              <input
-                type="checkbox"
-                checked={allVisibleSelected}
-                onChange={selectAllVisible}
-                style={styles.rowCheckbox}
-                aria-label="Select all detections on this page"
-              />
-            </div>
+            <div style={{ ...styles.th, justifyContent: 'center' }}>Delete</div>
             {[
               { key: 'damage_type',    label: 'Class'       },
               { key: 'severity',       label: 'Severity'    },
