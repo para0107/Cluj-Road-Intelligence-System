@@ -243,16 +243,42 @@ class Orchestrator:
                 result, dep_results,
                 self.session_dir / "05_severity" / "severity_estimates.json",
             )
-            dedup_frames = self._run_stage6(
-                result, sev_results,
-                self.session_dir / "06_deduplicated" / "deduplicated.json",
+
+            # Stages 6 and 7 need GPS coordinates (DBSCAN clustering + PostGIS
+            # upsert). If no frame has a coordinate — no .gpx supplied and no
+            # embedded GPS could be extracted — skip them and finish cleanly
+            # rather than failing. Detection / segmentation / depth / severity
+            # outputs (and their debug images) are still produced.
+            gps_available = any(
+                getattr(f, "latitude", None) is not None for f in frames
             )
-            db_result = self._run_stage7(
-                result, dedup_frames,
-                self.session_dir / "07_db_write" / "db_write_summary.json",
-            )
-            result.n_inserted = db_result.n_inserted
-            result.n_updated  = db_result.n_updated
+            if gps_available:
+                dedup_frames = self._run_stage6(
+                    result, sev_results,
+                    self.session_dir / "06_deduplicated" / "deduplicated.json",
+                )
+                db_result = self._run_stage7(
+                    result, dedup_frames,
+                    self.session_dir / "07_db_write" / "db_write_summary.json",
+                )
+                result.n_inserted = db_result.n_inserted
+                result.n_updated  = db_result.n_updated
+            else:
+                logger.warning(
+                    "No GPS coordinates in this run — skipping Stage 6 "
+                    "(Deduplicator) and Stage 7 (DbWriter). Nothing is written "
+                    "to the database."
+                )
+                result.stages.append(StageResult(
+                    name="deduplicator", skipped=True, elapsed_s=0.0,
+                    output=None, error=None,
+                ))
+                result.stages.append(StageResult(
+                    name="db_writer", skipped=True, elapsed_s=0.0,
+                    output=None, error=None,
+                ))
+                result.n_inserted = 0
+                result.n_updated  = 0
             result.status     = "complete"
 
         except Exception as exc:

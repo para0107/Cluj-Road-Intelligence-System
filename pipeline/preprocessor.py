@@ -503,9 +503,36 @@ class Preprocessor:
         logger.info("  gps   : %s", gps_path)
         logger.info("  output: %s", output_dir)
 
-        # 1. Load GPS track
-        gps_format = detect_gps_format(gps_path)
-        gps_points = load_gpx(gps_path) if gps_format == "gpx" else load_bdd100k_gps(gps_path)
+        # 1. Load GPS track (optional).
+        # If no GPS file is provided, or it does not exist, the pipeline
+        # continues without coordinates: every frame gets latitude/longitude
+        # = None, and the orchestrator skips Stage 6 (Deduplicator) and
+        # Stage 7 (DbWriter). The orchestrator passes "" when neither a .gpx
+        # was supplied nor embedded GPS could be extracted from the video.
+        has_gps = (
+            bool(gps_path)
+            and gps_path.strip().lower() != "none"
+            and Path(gps_path).exists()
+        )
+        if has_gps:
+            gps_format = detect_gps_format(gps_path)
+            gps_points = (
+                load_gpx(gps_path) if gps_format == "gpx"
+                else load_bdd100k_gps(gps_path)
+            )
+        else:
+            gps_points = None
+            if gps_path and gps_path.strip().lower() != "none":
+                logger.warning(
+                    "GPS file not found: %s — continuing without GPS. Frames "
+                    "will have no coordinates; Stages 6 and 7 will be skipped.",
+                    gps_path,
+                )
+            else:
+                logger.warning(
+                    "No GPS file provided — continuing without GPS. Frames will "
+                    "have no coordinates; Stages 6 and 7 will be skipped."
+                )
 
         # 2. Determine video wall-clock start time
         if video_start_time is not None:
@@ -525,42 +552,58 @@ class Preprocessor:
                     video_start_time.isoformat(),
                 )
             else:
-                # Last resort: use first GPS point.
-                # This is only correct if the GPS logger and camera started
-                # recording at the exact same moment.
-                video_start_time = gps_points[0].time
-                logger.warning(
-                    "video_start_time could not be determined from MP4 metadata. "
-                    "Using first GPS point (%s) as the video start anchor. "
-                    "GPS coordinates will be WRONG if the GPS logger started "
-                    "recording before or after the camera. "
-                    "To fix: ensure your dashcam embeds a creation_time tag, "
-                    "or pass video_start_time explicitly.",
-                    video_start_time.isoformat(),
-                )
+                # Last resort for video start time.
+                if gps_points:
+                    # Use first GPS point. Only correct if the GPS logger and
+                    # camera started recording at the exact same moment.
+                    video_start_time = gps_points[0].time
+                    logger.warning(
+                        "video_start_time could not be determined from MP4 metadata. "
+                        "Using first GPS point (%s) as the video start anchor. "
+                        "GPS coordinates will be WRONG if the GPS logger started "
+                        "recording before or after the camera. "
+                        "To fix: ensure your dashcam embeds a creation_time tag, "
+                        "or pass video_start_time explicitly.",
+                        video_start_time.isoformat(),
+                    )
+                else:
+                    # No GPS and no metadata: synthetic anchor. wall_time is
+                    # only used for sun elevation (which needs the coordinates
+                    # we do not have) and as a per-frame timestamp, so the
+                    # absolute value does not affect detection, segmentation,
+                    # or depth.
+                    video_start_time = datetime.now(tz=timezone.utc)
+                    logger.warning(
+                        "video_start_time could not be determined and no GPS is "
+                        "available. Using current UTC time as a synthetic anchor."
+                    )
 
         # Log the GPS track span vs the video start time so misalignment is
-        # immediately visible in the logs.
-        gps_start = gps_points[0].time
-        gps_end   = gps_points[-1].time
-        offset_s  = (video_start_time - gps_start).total_seconds()
-        logger.info(
-            "GPS track span: %s → %s (%.1f s)",
-            gps_start.isoformat(), gps_end.isoformat(),
-            (gps_end - gps_start).total_seconds(),
-        )
-        logger.info(
-            "Video start vs GPS start: %.1f s offset "
-            "(positive = video starts after GPS track began)",
-            offset_s,
-        )
-        if abs(offset_s) > 60:
-            logger.warning(
-                "Large offset (%.1f s) between video start time and GPS track "
-                "start. Check that the correct GPS file was provided and that "
-                "both devices have synchronised clocks.",
+        # immediately visible in the logs. Skipped entirely when no GPS.
+        if gps_points is not None:
+            gps_start = gps_points[0].time
+            gps_end   = gps_points[-1].time
+            offset_s  = (video_start_time - gps_start).total_seconds()
+            logger.info(
+                "GPS track span: %s → %s (%.1f s)",
+                gps_start.isoformat(), gps_end.isoformat(),
+                (gps_end - gps_start).total_seconds(),
+            )
+            logger.info(
+                "Video start vs GPS start: %.1f s offset "
+                "(positive = video starts after GPS track began)",
                 offset_s,
             )
+            if abs(offset_s) > 60:
+                logger.warning(
+                    "Large offset (%.1f s) between video start time and GPS track "
+                    "start. Check that the correct GPS file was provided and that "
+                    "both devices have synchronised clocks.",
+                    offset_s,
+                )
+        else:
+            gps_start = None
+            gps_end   = None
 
         # 3. Prepare output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -583,7 +626,7 @@ class Preprocessor:
 
         # ── Generalized Alignment Heuristic Engine ───────────────────────────
         # Automatically compensates for timezone shifts and file-end metadata timestamps
-        if video_start_time is not None and (video_start_time < gps_start or video_start_time > gps_end):
+        if gps_points is not None and video_start_time is not None and (video_start_time < gps_start or video_start_time > gps_end):
             logger.info("Heuristic Engine | Video metadata time falls outside GPS track span. Evaluating anomalies...")
             
             # Scenario A: Check if this GPX track was auto-extracted from this identical video container
@@ -619,8 +662,9 @@ class Preprocessor:
                     logger.warning("Heuristic Engine | Unable to automatically reconcile clock synchronization drift safely.")
 
         # Re-evaluate final offset calculation for downstream syncing log accuracy
-        offset_s = (video_start_time - gps_start).total_seconds()
-        logger.info("Final synchronized Video start vs GPS start offset: %.1f s", offset_s)
+        if gps_points is not None:
+            offset_s = (video_start_time - gps_start).total_seconds()
+            logger.info("Final synchronized Video start vs GPS start offset: %.1f s", offset_s)
 
         interval_s = max(1.0 / self.cfg.fps, self.cfg.min_frame_interval_s)
         target_timestamps = list(
@@ -664,14 +708,17 @@ class Preprocessor:
             # Wall-clock time for this frame
             wall_time = video_start_time + timedelta(seconds=t_s)
 
-            # GPS interpolation
-            lat, lon, interpolated = interpolate_gps(gps_points, wall_time)
-            if lat is None:
-                logger.warning(
-                    "Frame %d (t=%.2f s, wall=%s): outside GPS track span "
-                    "— lat/lon will be None",
-                    idx, t_s, wall_time.isoformat(),
-                )
+            # GPS interpolation (skipped entirely when no GPS is available)
+            if gps_points is not None:
+                lat, lon, interpolated = interpolate_gps(gps_points, wall_time)
+                if lat is None:
+                    logger.warning(
+                        "Frame %d (t=%.2f s, wall=%s): outside GPS track span "
+                        "— lat/lon will be None",
+                        idx, t_s, wall_time.isoformat(),
+                    )
+            else:
+                lat, lon, interpolated = None, None, False
 
             # Lighting classification
             lighting, shadow_score = classify_lighting(
@@ -734,12 +781,19 @@ class Preprocessor:
                     n_daylight, n_overcast, n_low)
         logger.info("  Frames without GPS     : %d", n_no_gps)
         if n_no_gps > 0:
-            logger.warning(
-                "%d frames have no GPS coordinates. This means their wall_time "
-                "fell outside the GPS track span. Check clock alignment between "
-                "the camera and GPS logger.",
-                n_no_gps,
-            )
+            if gps_points is None:
+                logger.info(
+                    "Run had no GPS source, so all %d frames have no "
+                    "coordinates. Stages 6 and 7 will be skipped.",
+                    n_no_gps,
+                )
+            else:
+                logger.warning(
+                    "%d frames have no GPS coordinates. This means their wall_time "
+                    "fell outside the GPS track span. Check clock alignment between "
+                    "the camera and GPS logger.",
+                    n_no_gps,
+                )
         if not PYSOLAR_AVAILABLE:
             logger.warning(
                 "pysolar not installed — sun_elevation is None for all frames. "
