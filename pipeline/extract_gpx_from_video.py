@@ -661,6 +661,422 @@ def _parse_gpx_xml(gpx_xml: str) -> List[GPSPoint]:
 
 
 # ---------------------------------------------------------------------------
+# Strategy 4: OCR overlay (Vidometer / burned-in GPS text)
+# ---------------------------------------------------------------------------
+#
+# Some dashcam apps (Vidometer, DashCam, AutoBoy, etc.) do NOT embed GPS as
+# a metadata track.  Instead they burn the coordinates directly onto every
+# video frame as a text overlay, typically at the bottom of the frame in the
+# format:
+#
+#     LAT: 47.048          (or  LAT 47.048 / Lat: 47.048 / N 47.048 …)
+#     LONG: 21.955         (or  LON / LNG / E 21.955 …)
+#
+# This strategy:
+#   1. Samples N evenly-spaced frames from the video with OpenCV.
+#   2. Crops the bottom strip (configurable; default 20 % of frame height)
+#      where overlays live, and optionally the top strip too.
+#   3. Runs EasyOCR (preferred) or Tesseract (fallback) on each crop.
+#   4. Parses the resulting text with a tolerant regex that handles common
+#      label variants and decimal / DMS coordinate formats.
+#   5. Recovers the wall-clock timestamp from the overlay when present
+#      (Vidometer format: "YYYY-MM-DD HH:MM:SS") or falls back to computing
+#      it from the frame index and video FPS.
+#
+# Requirements
+# ────────────
+#   easyocr   — pip install easyocr          (preferred; GPU-accelerated)
+#   OR
+#   pytesseract + Tesseract binary            (fallback; usually slower)
+#   opencv-python — pip install opencv-python (always required for this strategy)
+#
+# Tuning knobs (passed via CLI or programmatically)
+# ────────────────────────────────────────────────
+#   --ocr_samples     N frames to sample  (default 120)
+#   --ocr_strip_frac  fraction of height to crop as overlay strip (default 0.20)
+#   --ocr_backend     "easyocr" | "tesseract" | "auto"  (default "auto")
+
+import re as _re
+
+# ── Regex patterns for coordinate parsing ────────────────────────────────────
+
+# Matches a bare coordinate value (decimal or DMS), NO trailing hemisphere.
+# Hemisphere handling is done in the caller to avoid ambiguous greedy matches
+# (e.g. a standalone compass-bearing "W" between LAT and LONG values).
+_DEG_DEC  = r"\d{1,3}(?:[.,]\d+)?"           # decimal degrees, e.g. 47.048
+_DEG_DMS  = r"\d{1,3}[°d]\s*\d{1,2}[\'′]\s*\d{1,2}(?:[.,]\d+)?[\"″]?"
+
+_COORD_RE = _re.compile(rf"[+-]?(?:{_DEG_DMS}|{_DEG_DEC})")
+
+# Label prefixes — deliberately loose to handle OCR noise.
+# Capture group 1 = hemisphere letter embedded in the label (e.g. "LAT N:").
+_LAT_PREFIX = _re.compile(
+    r"(?:lat(?:itude)?|lt)\s*[:\-=]?\s*([NnSs]?)\s*",
+    _re.IGNORECASE,
+)
+_LON_PREFIX = _re.compile(
+    r"(?:lon(?:g(?:itude)?)?|lng|lo)\s*[:\-=]?\s*([EeWw]?)\s*",
+    _re.IGNORECASE,
+)
+
+# Vidometer timestamp: "2026-06-10 16:41:05" or "2026-06-10T16:41:05"
+_TS_RE = _re.compile(
+    r"(\d{4})[/-](\d{2})[/-](\d{2})[T\s](\d{2}):(\d{2}):(\d{2})"
+)
+
+
+def _dms_to_decimal(text: str) -> Optional[float]:
+    """Convert a DMS string like '47°02′53.1″' to decimal degrees."""
+    m = _re.match(
+        r"(\d{1,3})[°d]\s*(\d{1,2})[\'′]\s*(\d{1,2}(?:[.,]\d+)?)[\"″]?",
+        text.strip(),
+    )
+    if not m:
+        return None
+    d, mn, s = int(m.group(1)), int(m.group(2)), float(m.group(3).replace(",", "."))
+    return d + mn / 60.0 + s / 3600.0
+
+
+def _parse_coord_value(raw: str, hemisphere: str) -> Optional[float]:
+    """
+    Parse a raw coordinate string (decimal or DMS) and apply hemisphere sign.
+    Returns None if parsing fails.
+    """
+    raw = raw.strip().replace(",", ".")
+    # Try DMS first
+    val = _dms_to_decimal(raw)
+    if val is None:
+        try:
+            val = float(raw)
+        except ValueError:
+            return None
+    if hemisphere.upper() in ("S", "W"):
+        val = -val
+    return val
+
+
+def _parse_ocr_text(text: str) -> tuple[Optional[float], Optional[float], Optional[datetime]]:
+    """
+    Parse a block of OCR text to extract (lat, lon, timestamp).
+    All three fields are optional — returns None for any that are absent.
+
+    Handles:
+      - "LAT: 47.048  LONG: 21.955"
+      - "Lat 47°02'53\" N  Lon 021°57'18\" E"
+      - "N47.048 E21.955"  (prefix-only format)
+    """
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    ts:  Optional[datetime] = None
+
+    # ── Timestamp ────────────────────────────────────────────────────────────
+    ts_m = _TS_RE.search(text)
+    if ts_m:
+        try:
+            ts = datetime(
+                int(ts_m.group(1)), int(ts_m.group(2)), int(ts_m.group(3)),
+                int(ts_m.group(4)), int(ts_m.group(5)), int(ts_m.group(6)),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            pass
+
+    # ── Latitude ─────────────────────────────────────────────────────────────
+    lat_m = _LAT_PREFIX.search(text)
+    if lat_m:
+        remainder = text[lat_m.end():]
+        coord_m = _COORD_RE.match(remainder)
+        if coord_m:
+            hemi = lat_m.group(1)
+            # Hemisphere may trail the number, but only accept it when it is
+            # immediately adjacent AND not followed by ':' or '=' (which would
+            # indicate the start of a new label such as "LONG:").
+            tail = remainder[coord_m.end():].lstrip()
+            if not hemi and tail and tail[0].upper() in ("N", "S"):
+                next_ch = tail[1:2]
+                if next_ch not in (":", "=") and not next_ch.isalpha():
+                    hemi = tail[0]
+            lat = _parse_coord_value(coord_m.group(), hemi)
+
+    # ── Longitude ────────────────────────────────────────────────────────────
+    lon_m = _LON_PREFIX.search(text)
+    if lon_m:
+        remainder = text[lon_m.end():]
+        coord_m = _COORD_RE.match(remainder)
+        if coord_m:
+            hemi = lon_m.group(1)
+            # Same guard as latitude: only accept trailing hemisphere when the
+            # character immediately after is not alphabetic (avoids consuming
+            # unrelated words like "VIDOMETER").
+            tail = remainder[coord_m.end():].lstrip()
+            if not hemi and tail and tail[0].upper() in ("E", "W"):
+                next_ch = tail[1:2]
+                if next_ch not in (":", "=") and not next_ch.isalpha():
+                    hemi = tail[0]
+            lon = _parse_coord_value(coord_m.group(), hemi)
+
+    # ── Prefix-only format: N47.048 E21.955 ─────────────────────────────────
+    if lat is None or lon is None:
+        prefix_re = _re.compile(
+            r"([NnSs])\s*(\d{1,3}(?:[.,]\d+)?)"
+            r".*?"
+            r"([EeWw])\s*(\d{1,3}(?:[.,]\d+)?)",
+            _re.DOTALL,
+        )
+        pm = prefix_re.search(text)
+        if pm:
+            if lat is None:
+                lat = _parse_coord_value(pm.group(2), pm.group(1))
+            if lon is None:
+                lon = _parse_coord_value(pm.group(4), pm.group(3))
+
+    return lat, lon, ts
+
+
+def _ocr_frame_easyocr(
+    reader,   # easyocr.Reader instance
+    crop: "np.ndarray",
+) -> str:
+    """Run EasyOCR on a single crop, return concatenated text."""
+    results = reader.readtext(crop, detail=0, paragraph=False)
+    return "  ".join(results)
+
+
+def _ocr_frame_tesseract(crop: "np.ndarray") -> str:
+    """Run pytesseract on a single crop, return text."""
+    import pytesseract  # type: ignore
+    import PIL.Image    # type: ignore
+    import numpy as _np
+    rgb = crop[..., ::-1] if crop.ndim == 3 else crop   # BGR → RGB
+    pil_img = PIL.Image.fromarray(rgb.astype(_np.uint8))
+    return pytesseract.image_to_string(pil_img, config="--psm 6")
+
+
+def _preprocess_crop(crop: "np.ndarray") -> "np.ndarray":
+    """
+    Light preprocessing to improve OCR accuracy on dashcam overlays.
+    Converts to grayscale, applies adaptive threshold to handle varying
+    background brightness (road, sky, etc.).
+    """
+    import cv2 as _cv2
+    import numpy as _np
+    gray = _cv2.cvtColor(crop, _cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    # Upscale small crops — OCR engines struggle below ~30px font height
+    h, w = gray.shape[:2]
+    if h < 80:
+        scale = max(2, 80 // h)
+        gray = _cv2.resize(gray, (w * scale, h * scale), interpolation=_cv2.INTER_CUBIC)
+    # Adaptive threshold: white text on dark background and vice-versa
+    binary = _cv2.adaptiveThreshold(
+        gray, 255,
+        _cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        _cv2.THRESH_BINARY, 31, 10,
+    )
+    # Return both original and inverted — caller concatenates horizontally
+    # so the OCR engine sees both polarities in one pass
+    combined = _np.hstack([gray, _cv2.bitwise_not(gray)])
+    return combined
+
+
+def _extract_ocr(
+    mp4_path: Path,
+    n_samples: int = 120,
+    strip_frac: float = 0.20,
+    backend: str = "auto",
+) -> List[GPSPoint]:
+    """
+    Extract GPS by running OCR on the burned-in overlay of dashcam frames.
+
+    Parameters
+    ──────────
+    mp4_path   : path to the MP4 file
+    n_samples  : number of evenly-spaced frames to sample (default 120)
+    strip_frac : fraction of frame height to use as the overlay crop zone,
+                 measured from the bottom (default 0.20 = bottom 20 %)
+    backend    : "easyocr" | "tesseract" | "auto"
+                 "auto" tries easyocr first, falls back to tesseract.
+
+    Returns
+    ───────
+    List[GPSPoint] with at least one entry, or raises ExtractorError.
+    """
+    log.info(
+        "[OCR] Starting overlay OCR extraction | samples=%d strip=%.0f%% backend=%s",
+        n_samples, strip_frac * 100, backend,
+    )
+
+    # ── Import OpenCV ────────────────────────────────────────────────────────
+    try:
+        import cv2  # type: ignore
+    except ImportError:
+        raise ExtractorError(
+            "[OCR] opencv-python is required for the OCR strategy. "
+            "Install with: pip install opencv-python"
+        )
+
+    # ── Resolve OCR backend ──────────────────────────────────────────────────
+    use_easyocr    = False
+    use_tesseract  = False
+    easyocr_reader = None
+
+    if backend in ("easyocr", "auto"):
+        try:
+            import easyocr  # type: ignore
+            log.info("[OCR] Loading EasyOCR model (first run may download weights)…")
+            easyocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+            use_easyocr = True
+            log.info("[OCR] EasyOCR ready")
+        except ImportError:
+            if backend == "easyocr":
+                raise ExtractorError(
+                    "[OCR] easyocr not installed. Run: pip install easyocr"
+                )
+            log.debug("[OCR] easyocr not installed; trying tesseract fallback")
+
+    if not use_easyocr and backend in ("tesseract", "auto"):
+        try:
+            import pytesseract  # type: ignore  # noqa: F401
+            pytesseract.get_tesseract_version()   # raises if binary missing
+            use_tesseract = True
+            log.info("[OCR] Tesseract backend ready")
+        except Exception as exc:  # noqa: BLE001
+            if backend == "tesseract":
+                raise ExtractorError(
+                    f"[OCR] Tesseract not available: {exc}. "
+                    "Install from https://github.com/tesseract-ocr/tesseract"
+                )
+            log.debug("[OCR] Tesseract not available: %s", exc)
+
+    if not use_easyocr and not use_tesseract:
+        raise ExtractorError(
+            "[OCR] No OCR backend available. Install at least one of:\n"
+            "  pip install easyocr          # preferred\n"
+            "  pip install pytesseract      # + Tesseract binary from https://github.com/tesseract-ocr/tesseract"
+        )
+
+    # ── Open video ───────────────────────────────────────────────────────────
+    cap = cv2.VideoCapture(str(mp4_path))
+    if not cap.isOpened():
+        raise ExtractorError(f"[OCR] Cannot open video file: {mp4_path}")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps          = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_h      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if total_frames <= 0:
+        cap.release()
+        raise ExtractorError(
+            f"[OCR] Could not determine frame count for {mp4_path.name}. "
+            "The file may be corrupt or use an unsupported container."
+        )
+
+    log.info(
+        "[OCR] Video: %d frames, %.2f fps, height=%d px",
+        total_frames, fps, frame_h,
+    )
+
+    # Sample indices: evenly spaced across the full duration, avoiding the
+    # very first and last frames which may be black/transition frames.
+    margin   = max(1, total_frames // 50)
+    indices  = [
+        int(i)
+        for i in _np.linspace(margin, total_frames - margin - 1, n_samples)
+    ]
+
+    # Strip height in pixels
+    strip_px = max(40, int(frame_h * strip_frac))
+
+    # ── Per-frame OCR loop ───────────────────────────────────────────────────
+    points:    List[GPSPoint] = []
+    n_parsed   = 0
+    n_failed   = 0
+
+    for frame_idx in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            n_failed += 1
+            continue
+
+        # Crop bottom strip (primary overlay location for Vidometer et al.)
+        crop = frame[frame_h - strip_px:, :]
+        processed = _preprocess_crop(crop)
+
+        # OCR
+        try:
+            if use_easyocr:
+                text = _ocr_frame_easyocr(easyocr_reader, processed)
+            else:
+                text = _ocr_frame_tesseract(processed)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("[OCR] frame %d OCR error: %s", frame_idx, exc)
+            n_failed += 1
+            continue
+
+        lat, lon, ts = _parse_ocr_text(text)
+
+        if lat is None or lon is None:
+            # Try the top strip too — some apps put overlay at top
+            top_crop = frame[:strip_px, :]
+            top_processed = _preprocess_crop(top_crop)
+            try:
+                if use_easyocr:
+                    top_text = _ocr_frame_easyocr(easyocr_reader, top_processed)
+                else:
+                    top_text = _ocr_frame_tesseract(top_processed)
+                lat, lon, ts = _parse_ocr_text(top_text)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if lat is None or lon is None:
+            n_failed += 1
+            continue
+
+        # Derive timestamp from frame index + fps if overlay had none
+        if ts is None:
+            ts = datetime.fromtimestamp(frame_idx / fps, tz=timezone.utc)
+
+        p = GPSPoint(lat=lat, lon=lon, timestamp=ts)
+        if p.is_valid():
+            points.append(p)
+            n_parsed += 1
+
+    cap.release()
+
+    log.info(
+        "[OCR] Processed %d frames → %d valid points, %d failed/unparsed",
+        len(indices), n_parsed, n_failed,
+    )
+
+    if not points:
+        raise ExtractorError(
+            f"[OCR] Could not extract any GPS coordinates from {mp4_path.name} "
+            "via OCR. Possible causes:\n"
+            "  • The video has no burned-in GPS overlay.\n"
+            "  • The overlay uses an unrecognised format (check --verbose output).\n"
+            "  • Poor OCR quality — try adjusting --ocr_strip_frac or --ocr_backend."
+        )
+
+    # Deduplicate: consecutive identical fixes (static vehicle) collapse to one
+    deduped: List[GPSPoint] = [points[0]]
+    for p in points[1:]:
+        prev = deduped[-1]
+        if p.lat != prev.lat or p.lon != prev.lon:
+            deduped.append(p)
+
+    log.info("[OCR] After deduplication: %d unique GPS points", len(deduped))
+    return deduped
+
+
+# numpy is needed by _extract_ocr; import lazily to avoid hard dependency
+# for users who only use the non-OCR strategies.
+try:
+    import numpy as _np  # type: ignore
+except ImportError:
+    _np = None  # type: ignore  # _extract_ocr will fail with a clear error if called
+
+
+# ---------------------------------------------------------------------------
 # GPX writer
 # ---------------------------------------------------------------------------
 
@@ -726,12 +1142,15 @@ def _build_gpx_xml(points: List[GPSPoint], source_name: str) -> str:
 # Orchestrator: try strategies in order
 # ---------------------------------------------------------------------------
 
-STRATEGIES = ("gpmf", "novatek", "exiftool")
+STRATEGIES = ("gpmf", "novatek", "exiftool", "ocr")
 
 
 def extract(
     mp4_path: Path,
     strategy: Optional[str] = None,
+    ocr_samples: int = 120,
+    ocr_strip_frac: float = 0.20,
+    ocr_backend: str = "auto",
 ) -> tuple[List[GPSPoint], str]:
     """
     Try extraction strategies in order until one succeeds.
@@ -744,10 +1163,15 @@ def extract(
         strategies = list(STRATEGIES)
 
     errors: list[str] = []
+
+    def _ocr_bound(p: Path) -> List[GPSPoint]:
+        return _extract_ocr(p, n_samples=ocr_samples, strip_frac=ocr_strip_frac, backend=ocr_backend)
+
     dispatch = {
         "gpmf":      _extract_gpmf,
         "novatek":   _extract_novatek,
         "exiftool":  _extract_exiftool,
+        "ocr":       _ocr_bound,
     }
 
     for s in strategies:
@@ -812,6 +1236,43 @@ def main() -> None:
         action="store_true",
         help="Set log level to DEBUG.",
     )
+    # ── OCR-specific options ──────────────────────────────────────────────────
+    ocr_group = parser.add_argument_group(
+        "OCR strategy options",
+        "Only relevant when --strategy ocr is used (or when all other strategies "
+        "fail and ocr is reached in the fallback chain).",
+    )
+    ocr_group.add_argument(
+        "--ocr_samples",
+        type=int,
+        default=120,
+        metavar="N",
+        help=(
+            "Number of evenly-spaced frames to sample for OCR. "
+            "Higher values give denser GPS tracks at the cost of runtime. "
+            "Default: 120."
+        ),
+    )
+    ocr_group.add_argument(
+        "--ocr_strip_frac",
+        type=float,
+        default=0.20,
+        metavar="F",
+        help=(
+            "Fraction of frame height to crop as the overlay strip, "
+            "measured from the bottom (and top) of the frame. "
+            "E.g. 0.20 = bottom 20%%. Default: 0.20."
+        ),
+    )
+    ocr_group.add_argument(
+        "--ocr_backend",
+        choices=("auto", "easyocr", "tesseract"),
+        default="auto",
+        help=(
+            "OCR engine to use. 'auto' tries easyocr first, then tesseract. "
+            "Default: auto."
+        ),
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -829,7 +1290,13 @@ def main() -> None:
 
     # Run extraction
     try:
-        points, used_strategy = extract(mp4_path, strategy=args.strategy)
+        points, used_strategy = extract(
+            mp4_path,
+            strategy=args.strategy,
+            ocr_samples=args.ocr_samples,
+            ocr_strip_frac=args.ocr_strip_frac,
+            ocr_backend=args.ocr_backend,
+        )
     except ExtractorError as exc:
         log.error("Extraction failed:\n%s", exc)
         sys.exit(1)

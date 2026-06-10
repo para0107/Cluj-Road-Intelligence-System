@@ -338,7 +338,18 @@ export default function IngestionPage() {
           pollRef.current = null
         }
       } catch (err) {
-        // Network blip — keep polling, don't clear interval
+        // A 404 means the job_id no longer exists on the backend (e.g. a stale
+        // id rehydrated from localStorage after the session was cleaned up).
+        // Stop polling and drop the saved id so we don't spin forever.
+        if (err?.response?.status === 404) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+          localStorage.removeItem('rids_active_job')
+          setJobId(null)
+          setJobStatus(null)
+          return
+        }
+        // Otherwise it's a transient network blip — keep polling.
         console.warn('[RIDS] Status poll error:', err.message)
       }
     }
@@ -354,6 +365,26 @@ export default function IngestionPage() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [])
+
+  // ── Rehydrate an in-flight job after navigation / refresh ─────────────────
+  // The pipeline runs on the host and keeps writing session.json regardless of
+  // whether this page is mounted. handleSubmit persists the job_id to
+  // localStorage, so on mount we reconnect to that job and resume polling —
+  // otherwise leaving and returning to the page would lose the live tracker
+  // even though the pipeline is still running.
+  useEffect(() => {
+    const savedJobId = localStorage.getItem('rids_active_job')
+    if (!savedJobId) return
+    setJobId(savedJobId)
+    // Optimistic placeholder until the first poll returns; the 404 guard in
+    // startPolling clears it if the job no longer exists on the backend.
+    setJobStatus({
+      job_id: savedJobId, status: 'running', stages: [],
+      n_frames: 0, n_detections: 0, n_inserted: 0, n_updated: 0,
+      error_message: null, started_at: null, finished_at: null,
+    })
+    startPolling(savedJobId)
+  }, [startPolling])
 
   // ── Submit handler ──────────────────────────────────────────────────────
 

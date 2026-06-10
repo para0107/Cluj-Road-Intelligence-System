@@ -215,7 +215,11 @@ class Orchestrator:
             status      = "running",
         )
         log_id = self._survey_log_start(started_at)
-        
+
+        # Write session.json immediately (status="running", stages=[]) so the
+        # status endpoint stops reporting "initialising" the moment the
+        # orchestrator starts, and the frontend tracker shows Stage 1 running.
+        self._flush_session(result)
 
         try:
             self._try_extract_gps()
@@ -223,10 +227,12 @@ class Orchestrator:
                 result,
                 self.session_dir / "01_manifest" / "manifest.json",
             )
+            self._flush_session(result)
             det_results = self._run_stage2(
                 result, frames,
                 self.session_dir / "02_detections" / "detections.json",
             )
+            self._flush_session(result)
             # Remove frames with no detections from disk (Stage 1 extracted all
             # of them; nothing downstream re-reads the non-detection frames).
             # Runs only after Stage 2 has fully completed.
@@ -235,14 +241,17 @@ class Orchestrator:
                 result, det_results,
                 self.session_dir / "03_segmentations" / "segmentations.json",
             )
+            self._flush_session(result)
             dep_results = self._run_stage4(
                 result, seg_results,
                 self.session_dir / "04_depth" / "depth_estimates.json",
             )
+            self._flush_session(result)
             sev_results = self._run_stage5(
                 result, dep_results,
                 self.session_dir / "05_severity" / "severity_estimates.json",
             )
+            self._flush_session(result)
 
             # Stages 6 and 7 need GPS coordinates (DBSCAN clustering + PostGIS
             # upsert). If no frame has a coordinate — no .gpx supplied and no
@@ -257,12 +266,14 @@ class Orchestrator:
                     result, sev_results,
                     self.session_dir / "06_deduplicated" / "deduplicated.json",
                 )
+                self._flush_session(result)
                 db_result = self._run_stage7(
                     result, dedup_frames,
                     self.session_dir / "07_db_write" / "db_write_summary.json",
                 )
                 result.n_inserted = db_result.n_inserted
                 result.n_updated  = db_result.n_updated
+                self._flush_session(result)
             else:
                 logger.warning(
                     "No GPS coordinates in this run — skipping Stage 6 "
@@ -297,13 +308,39 @@ class Orchestrator:
                 result.n_frames, result.n_detections,
                 result.n_inserted, result.n_updated,
             )
-            session_json = self.session_dir / "session.json"
-            with session_json.open("w", encoding="utf-8") as f:
-                json.dump(result.to_dict(), f, indent=2)
+            session_json = self._flush_session(result)
             logger.info("Session summary: %s", session_json)
             self._survey_log_finish(log_id, result)
 
         return result
+
+    # ------------------------------------------------------------------
+    # Incremental progress write
+    # ------------------------------------------------------------------
+
+    def _flush_session(self, result: SessionResult) -> Path:
+        """
+        Write the current SessionResult snapshot to <session>/session.json.
+
+        Called after every stage so the backend status endpoint (which reads
+        this file) can report live, stage-by-stage progress to the frontend
+        poller — not just the final state.
+
+        The write is atomic: dump to a temporary file in the same directory,
+        then os.replace() it over session.json. A concurrent reader therefore
+        always sees either the previous complete document or the new complete
+        document, never a half-written one.
+        """
+        session_json = self.session_dir / "session.json"
+        tmp = session_json.with_suffix(".json.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(result.to_dict(), f, indent=2)
+            os.replace(tmp, session_json)   # atomic on Windows and POSIX
+        except OSError as exc:
+            logger.warning("Could not flush session.json: %s", exc)
+            tmp.unlink(missing_ok=True)
+        return session_json
 
     # ------------------------------------------------------------------
     # Stage implementations

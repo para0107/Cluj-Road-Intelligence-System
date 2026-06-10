@@ -72,3 +72,6 @@ pytest-asyncio==0.23.6
 
 # ─── Compatibility ───────────────────────────────────────────────────────────
 typing-extensions==4.11.0      # Backports for type checking definitions
+
+pytesseract==0.3.10              # OCR for debugging (optional, not used in main pipeline)
+easyocr==1.7.0                   # OCR for debugging (optional, not used in main pipeline)
