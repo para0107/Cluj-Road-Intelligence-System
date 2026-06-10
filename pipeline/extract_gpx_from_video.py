@@ -3,22 +3,36 @@ scripts/extract_gpx_from_video.py
 ──────────────────────────────────────────────────────────────────────────────
 Extract a .gpx file from a GPS-embedded dashcam MP4.
 
-Supports three extraction strategies, tried in priority order:
+Supports seven extraction strategies, tried in priority order
+(``STRATEGIES`` below). The first that yields ≥1 valid GPS point wins; each
+strategy fails soft (raises ExtractorError, caught by ``extract``) so a missing
+tool or wrong camera never aborts the chain.
 
-  1. GoPro GPMF  — Hero 5/6/7/8/9/10/11/12, Max, Session 5 Black, Fusion
-                    GPS embedded as GPMF telemetry track in the MP4 moov atom.
-                    Requires: gpmf-python (pip install gpmf) OR the bundled
-                    struct-based parser (zero extra deps, always available).
+  1. sidecar   — a .gpx / .nmea / .csv / .json / .srt file sharing the video's
+                  stem. Pure stdlib. (Mostly for manual/CLI runs — the frontend
+                  uploads only the .mp4.)
 
-  2. Novatek / VIOFO / Blackvue atom
-                    GPS stored as a proprietary atom ('GPS ', 'free', 'gps0')
-                    inside the MP4 container.
-                    Requires: zero extra deps (struct + stdlib only).
+  2. gpmf      — GoPro (Hero 5+/Max/Fusion). GPMF telemetry track. Uses the
+                  `gpmf` pip package if installed, else a built-in recursive KLV
+                  parser (ffmpeg to dump the 'gpmd' stream, then SCAL-scaled
+                  GPS5/GPS9). Requires ffmpeg for the built-in path.
 
-  3. exiftool CAMM / generic
-                    Falls back to exiftool -ee -p gpx.fmt if the above two
-                    strategies yield no points.
-                    Requires: exiftool installed and on PATH.
+  3. novatek   — Novatek/VIOFO/Blackvue 'freeGPS' blocks scanned from the MP4.
+                  Pure stdlib. Range-validated, fail-soft.
+
+  4. subtitle  — GPS carried in an embedded subtitle stream (DJI, many dashcams)
+                  or sidecar already handled above. DJI brackets / DJI GPS() /
+                  NMEA $GPRMC|$GPGGA / generic. Requires ffmpeg for embedded.
+
+  5. exiftool  — exiftool -ee over CAMM / Sony RTMD / Garmin / DJI / generic
+                  embedded metadata. Requires exiftool on PATH.
+
+  6. iso6709    — single QuickTime ©xyz / ISO 6709 location atom (phone videos).
+                  One point for the whole clip. Pure stdlib.
+
+  7. ocr       — burned-in overlay text (Vidometer etc.) read with EasyOCR or
+                  Tesseract, parsed (labelled / hemisphere / DMS / bare pair),
+                  then geo-filtered. Requires opencv + an OCR backend.
 
 Output
 ──────
@@ -207,20 +221,13 @@ def _locate_gpmf_atom(data: bytes) -> Optional[bytes]:
 
 def _extract_gpmf_struct(mp4_path: Path) -> List[GPSPoint]:
     """
-    Use ffmpeg to dump the GoPro metadata track, then parse GPS5/GPS9 KLV.
+    Use ffmpeg to dump the GoPro 'gpmd' metadata track, then parse the GPMF KLV.
 
-    Requires ffmpeg on PATH. If ffmpeg is absent, raises ExtractorError.
+    Requires ffmpeg/ffprobe on PATH. If absent, raises ExtractorError.
     """
-    # Step 1: find the data stream index for the GPMF track
-    probe_cmd = [
-        "ffprobe", "-v", "error",
-        "-show_streams", "-of", "json",
-        str(mp4_path),
-    ]
+    probe_cmd = ["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(mp4_path)]
     try:
-        result = subprocess.run(
-            probe_cmd, capture_output=True, text=True, timeout=30
-        )
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
     except FileNotFoundError:
         raise ExtractorError(
             "ffprobe not found on PATH. Install ffmpeg: https://ffmpeg.org/download.html"
@@ -234,164 +241,160 @@ def _extract_gpmf_struct(mp4_path: Path) -> List[GPSPoint]:
     except _json.JSONDecodeError:
         raise ExtractorError(f"ffprobe returned invalid JSON for {mp4_path}")
 
-    # Find GPMF stream by codec_tag_string == 'GoPro MET' or handler_name
+    # GoPro telemetry is a 'data' stream tagged 'gpmd' (handler 'GoPro MET').
     gpmf_index: Optional[int] = None
     for s in probe_data.get("streams", []):
         tag = s.get("codec_tag_string", "")
         handler = s.get("tags", {}).get("handler_name", "")
-        if "GoPro MET" in tag or "GoPro Met" in handler or "GoPro MET" in handler:
+        if tag == "gpmd" or "GoPro MET" in handler or "GoPro MET" in tag:
             gpmf_index = s["index"]
             break
 
     if gpmf_index is None:
         raise ExtractorError(
-            f"[GPMF] No GoPro MET data track found in {mp4_path.name}. "
+            f"[GPMF] No GoPro 'gpmd' data track found in {mp4_path.name}. "
             "This file may not be a GoPro recording."
         )
 
-    # Step 2: extract raw GPMF bytes via ffmpeg
+    # Dump the raw stream. Use the 'data' muxer (NOT rawvideo, which rejects a
+    # non-video stream and silently produces garbage).
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
         tmp_path = Path(tmp.name)
-
     extract_cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-i", str(mp4_path),
-        "-map", f"0:{gpmf_index}",
-        "-c", "copy",
-        "-f", "rawvideo",
-        str(tmp_path),
+        "ffmpeg", "-y", "-v", "error", "-i", str(mp4_path),
+        "-map", f"0:{gpmf_index}", "-c", "copy", "-copy_unknown",
+        "-f", "data", str(tmp_path),
     ]
     try:
-        subprocess.run(extract_cmd, capture_output=True, timeout=120, check=True)
+        subprocess.run(extract_cmd, capture_output=True, timeout=180, check=True)
     except subprocess.CalledProcessError as exc:
         tmp_path.unlink(missing_ok=True)
         raise ExtractorError(
-            f"[GPMF] ffmpeg extraction failed: {exc.stderr.decode(errors='replace')[:300]}"
+            f"[GPMF] ffmpeg extraction failed: "
+            f"{exc.stderr.decode(errors='replace')[:300]}"
         )
 
     raw = tmp_path.read_bytes()
     tmp_path.unlink(missing_ok=True)
-
     if not raw:
-        raise ExtractorError("[GPMF] ffmpeg returned empty GPMF stream")
+        raise ExtractorError("[GPMF] ffmpeg returned an empty GPMF stream")
 
     points = _parse_gpmf_bytes(raw)
     if not points:
         raise ExtractorError(
-            "[GPMF] Parsed 0 valid GPS points from GPMF stream. "
-            "GPS may have had no fix during recording."
+            "[GPMF] Parsed 0 valid GPS points from GPMF stream "
+            "(GPS may have had no fix during recording)."
         )
     log.info("[GPMF] struct parser: extracted %d valid points", len(points))
     return points
 
 
+# GPMF scalar type-char → struct format. (Reference: gopro/gpmf-parser.)
+_GPMF_NUM_FMT = {
+    ord("b"): "b", ord("B"): "B", ord("s"): "h", ord("S"): "H",
+    ord("l"): "i", ord("L"): "I", ord("f"): "f", ord("d"): "d",
+}
+
+
+def _gpmf_numbers(type_char: int, payload: bytes) -> Optional[list]:
+    """Read a GPMF scalar payload (e.g. a SCAL block) into a list of floats."""
+    fmt = _GPMF_NUM_FMT.get(type_char)
+    if not fmt:
+        return None
+    width = struct.calcsize(">" + fmt)
+    if width == 0:
+        return None
+    return [
+        float(struct.unpack_from(">" + fmt, payload, i * width)[0])
+        for i in range(len(payload) // width)
+    ]
+
+
 def _parse_gpmf_bytes(data: bytes) -> List[GPSPoint]:
     """
-    Minimal KLV parser for the GPMF format.
-    Handles GPS5 (lat, lon, alt, speed_2d, speed_3d) and GPS9 keys.
+    Recursive KLV parser for the GPMF telemetry format.
 
-    GPMF KLV layout (each element):
-        FourCC  : 4 bytes  — key name (e.g. b'GPS5')
-        type    : 1 byte   — 'l' = int32, 'L' = uint32, 'f' = float, etc.
-        size    : 1 byte   — bytes per individual value
-        repeat  : 2 bytes  — number of values
-        data    : size * repeat bytes
+    Each KLV item:  FourCC(4) · type(1) · sample_size(1) · repeat(2 BE) · payload
+    (payload padded to a 4-byte boundary). A ``type`` byte of 0x00 means the
+    payload is itself nested KLV — GoPro nests GPS data as DEVC ▸ STRM ▸ {SCAL,
+    GPSU, GPS5/GPS9}. SCAL carries the per-stream divisors, GPSU the UTC time.
+    The previous flat walker skipped nested containers and never found GPS5;
+    this one descends and applies SCAL correctly.
 
-    GPS5 stores: [lat * 1e7, lon * 1e7, alt * 100, speed2D * 100, speed3D * 100]
-    as int32 * 5, repeat = N fixes in the block.
-
-    Reference: https://github.com/gopro/gpmf-parser/blob/main/README.md
+    Handles GPS5 (lat, lon, alt, 2D, 3D — int32 scaled by SCAL) and GPS9
+    (best-effort; lat/lon/alt scaled by SCAL).
     """
     points: List[GPSPoint] = []
-    offset = 0
-    n = len(data)
+    _walk_gpmf(data, points, {"scal": None, "ts": None})
+    return points
 
-    current_timestamp: Optional[datetime] = None
 
+def _walk_gpmf(data: bytes, points: List[GPSPoint], ctx: dict) -> None:
+    offset, n = 0, len(data)
     while offset + 8 <= n:
         fourcc = data[offset:offset + 4]
-        type_char = chr(data[offset + 4])
-        size      = data[offset + 5]
-        repeat    = struct.unpack_from(">H", data, offset + 6)[0]
-        payload_len = size * repeat
-        # Align to 4-byte boundary
-        total_len   = 8 + payload_len + (4 - payload_len % 4) % 4
-        payload     = data[offset + 8: offset + 8 + payload_len]
-        offset += total_len
+        type_char = data[offset + 4]
+        sample_size = data[offset + 5]
+        repeat = struct.unpack_from(">H", data, offset + 6)[0]
+        payload_len = sample_size * repeat
+        payload = data[offset + 8: offset + 8 + payload_len]
+        total = 8 + payload_len + ((4 - payload_len % 4) % 4)
+        offset += total if total > 8 else 8
 
-        if fourcc == b"TSMP":
-            # Timestamp in microseconds from stream start — not wall-clock,
-            # skip for simplicity (we rely on GPSU for wall-clock)
-            pass
+        if type_char == 0:                         # nested container
+            child = {"scal": None, "ts": ctx["ts"]} if fourcc == b"STRM" else ctx
+            _walk_gpmf(payload, points, child)
+            ctx["ts"] = child["ts"]
+            continue
+
+        if fourcc == b"SCAL":
+            ctx["scal"] = _gpmf_numbers(type_char, payload)
 
         elif fourcc == b"GPSU":
-            # UTC timestamp string: "YYMMDDHHmmss.sss"
-            try:
-                ts_str = payload.decode("ascii").strip("\x00")
-                current_timestamp = datetime.strptime(ts_str[:15], "%y%m%d%H%M%S.%f").replace(
-                    tzinfo=timezone.utc
-                )
-            except (ValueError, UnicodeDecodeError):
-                pass
-
-        elif fourcc == b"GPS5":
-            # type 'l' = signed int32, 5 values per fix
-            if type_char != "l" or size != 4 * 5:
-                continue
-            for i in range(repeat):
-                base = i * 20
-                if base + 20 > len(payload):
+            s = payload.decode("ascii", "ignore").strip("\x00")
+            for fmt, ln in (("%y%m%d%H%M%S.%f", 16), ("%y%m%d%H%M%S", 12)):
+                try:
+                    ctx["ts"] = datetime.strptime(s[:ln], fmt).replace(tzinfo=timezone.utc)
                     break
-                lat_raw, lon_raw, alt_raw, s2d_raw, _ = struct.unpack_from(
-                    ">5l", payload, base
-                )
-                p = GPSPoint(
-                    lat=lat_raw / 1e7,
-                    lon=lon_raw / 1e7,
-                    elevation=alt_raw / 100.0,
-                    timestamp=current_timestamp,
-                    speed_mps=s2d_raw / 100.0 if s2d_raw != 0 else None,
-                )
+                except ValueError:
+                    continue
+
+        elif fourcc in (b"GPS5", b"GPS9"):
+            cnt = sample_size // 4
+            if cnt < 2:
+                continue
+            scal = ctx["scal"]
+
+            def _div(idx: int, raw: float) -> float:
+                if not scal:
+                    return raw / (1e7 if idx < 2 else 1000.0)
+                s = scal[idx] if idx < len(scal) else scal[0]
+                return raw / s if s else raw
+
+            for i in range(repeat):
+                try:
+                    vals = struct.unpack_from(f">{cnt}i", payload, i * sample_size)
+                except struct.error:
+                    break
+                lat, lon = _div(0, vals[0]), _div(1, vals[1])
+                ele = _div(2, vals[2]) if cnt > 2 else None
+                spd = (_div(3, vals[3]) if (fourcc == b"GPS5" and cnt > 3) else None)
+                p = GPSPoint(lat=lat, lon=lon, elevation=ele,
+                             timestamp=ctx["ts"], speed_mps=spd)
                 if p.is_valid():
                     points.append(p)
-
-        elif fourcc == b"GPS9":
-            # Extended GPS: lat, lon, alt, speed2D, speed3D, hdop, dvop,
-            # satellite_count, fix_type  (9 × float or mixed)
-            # type 'f' = float32
-            if type_char != "f" or size < 9 * 4:
-                continue
-            for i in range(repeat):
-                base = i * size
-                if base + 36 > len(payload):
-                    break
-                vals = struct.unpack_from(">9f", payload, base)
-                p = GPSPoint(
-                    lat=vals[0],
-                    lon=vals[1],
-                    elevation=vals[2],
-                    timestamp=current_timestamp,
-                    speed_mps=vals[3],
-                )
-                if p.is_valid():
-                    points.append(p)
-
-    return points
 
 
 # ---------------------------------------------------------------------------
 # Strategy 2: Novatek / VIOFO atom parser
 # ---------------------------------------------------------------------------
 
-# Novatek GPS atom magic bytes and struct layout.
+# Novatek/VIOFO cameras embed GPS in 'freeGPS' blocks scattered through the MP4.
+# Firmware layouts differ, so rather than trust a fixed offset we scan for the
+# magic and locate each fix by its signature — the active flag 'A' immediately
+# followed by valid N/S and E/W hemisphere bytes — then read the little-endian
+# lat/lon/speed floats (NMEA DDmm.mmmm) that follow. Everything is range-checked.
 # Reference: https://sergei.nz/extracting-gps-data-from-viofo-a119-and-other-novatek-powered-cameras/
-# The GPS atom contains fixed-size 48-byte records:
-#   hour(1) min(1) sec(1) year(1) month(1) day(1) active(1) lat_hemi(1)
-#   lat(4f) lon_hemi(1) lon(4f) speed(4f) bearing(4f) ??? (4 padding)
-#   ... actual layout varies by firmware; we handle the two most common.
-
-_NOVATEK_ATOM_NAMES = (b"GPS ", b"gps0", b"free", b"moov")
-_NOVATEK_RECORD_SIZE = 48
 
 
 def _find_atoms(data: bytes, target: bytes, max_depth: int = 6) -> list[tuple[int, int]]:
@@ -442,103 +445,85 @@ def _find_atoms(data: bytes, target: bytes, max_depth: int = 6) -> list[tuple[in
     return results
 
 
-def _parse_novatek_record(record: bytes) -> Optional[GPSPoint]:
+def _novatek_coord(raw_deg_min: float, hemi: int) -> Optional[float]:
+    """Convert a Novatek NMEA-style DDmm.mmmm float to signed decimal degrees."""
+    if raw_deg_min != raw_deg_min or abs(raw_deg_min) > 18000.0:   # NaN / absurd
+        return None
+    a = abs(raw_deg_min)
+    deg = int(a // 100)
+    minutes = a - deg * 100
+    dec = deg + minutes / 60.0
+    if chr(hemi).upper() in ("S", "W"):
+        dec = -dec
+    return dec
+
+
+def _parse_freegps_block(block: bytes) -> Optional[GPSPoint]:
     """
-    Parse one 48-byte Novatek GPS record.
-    Returns None if the record is invalid or GPS fix was not active.
+    Parse one Novatek 'freeGPS' record. Firmware layouts vary, so we locate the
+    fix by its signature — the active flag 'A' immediately followed by valid
+    N/S and E/W hemisphere bytes — then read the three little-endian floats
+    (lat, lon, speed) that follow. Range-validated, so a wrong guess is rejected.
     """
-    if len(record) < 48:
-        return None
-
-    try:
-        hour, minute, second, year, month, day, active, lat_hemi = struct.unpack_from(
-            "8B", record, 0
-        )
-    except struct.error:
-        return None
-
-    # active == ord('A') means valid fix; ord('V') means void
-    if active != ord("A"):
-        return None
-
-    try:
-        lat_raw = struct.unpack_from(">f", record,  8)[0]
-        lon_hemi = record[12]
-        lon_raw  = struct.unpack_from(">f", record, 13)[0]
-        speed_kn = struct.unpack_from(">f", record, 17)[0]
-    except struct.error:
-        return None
-
-    # Novatek stores NMEA-style DDmm.mmmm
-    lat_deg = int(lat_raw / 100)
-    lat_min = lat_raw - lat_deg * 100
-    lat     = lat_deg + lat_min / 60.0
-    if chr(lat_hemi).upper() == "S":
-        lat = -lat
-
-    lon_deg = int(lon_raw / 100)
-    lon_min = lon_raw - lon_deg * 100
-    lon     = lon_deg + lon_min / 60.0
-    if chr(lon_hemi).upper() == "W":
-        lon = -lon
-
-    try:
-        ts = datetime(
-            2000 + year, month, day, hour, minute, second, tzinfo=timezone.utc
-        )
-    except ValueError:
-        ts = None
-
-    p = GPSPoint(
-        lat=lat,
-        lon=lon,
-        elevation=None,
-        timestamp=ts,
-        speed_mps=speed_kn * 0.514444,   # knots → m/s
-    )
-    return p if p.is_valid() else None
+    for i in range(len(block) - 16):
+        if block[i] != 0x41:                                 # 'A' (active fix)
+            continue
+        lat_h, lon_h = block[i + 1], block[i + 2]
+        if lat_h not in (0x4E, 0x53) or lon_h not in (0x45, 0x57):  # N/S, E/W
+            continue
+        try:
+            lat_raw, lon_raw, spd_raw = struct.unpack_from("<3f", block, i + 3)
+        except struct.error:
+            continue
+        lat = _novatek_coord(lat_raw, lat_h)
+        lon = _novatek_coord(lon_raw, lon_h)
+        if lat is None or lon is None:
+            continue
+        # Optional UTC: 6 little-endian uint32 (h,m,s,Y,M,D) just before 'A'.
+        ts: Optional[datetime] = None
+        if i >= 24:
+            try:
+                hh, mm, ss, yy, mo, dd = struct.unpack_from("<6I", block, i - 24)
+                if hh < 24 and mm < 60 and ss < 60 and 1 <= mo <= 12 and 1 <= dd <= 31:
+                    ts = datetime(2000 + (yy % 100), mo, dd, hh, mm, ss, tzinfo=timezone.utc)
+            except (struct.error, ValueError):
+                ts = None
+        spd = spd_raw * 0.514444 if 0.0 <= spd_raw < 200.0 else None   # knots → m/s
+        p = GPSPoint(lat=lat, lon=lon, timestamp=ts, speed_mps=spd)
+        if p.is_valid():
+            return p
+    return None
 
 
 def _extract_novatek(mp4_path: Path) -> List[GPSPoint]:
     """
-    Extract GPS from Novatek/VIOFO GPS atom.
-    Reads the full file into memory — suitable for dashcam clips up to ~2 GB.
-    For larger files, use strategy 3 (exiftool) instead.
+    Extract GPS from a Novatek/VIOFO recording by scanning the file for
+    'freeGPS' blocks and parsing each. Reads the file into memory.
     """
-    log.info("[Novatek] Attempting Novatek/VIOFO atom extraction from %s", mp4_path.name)
-
-    file_size = mp4_path.stat().st_size
-    if file_size > 2 * 1024 ** 3:
-        log.warning(
-            "[Novatek] File is %.1f GB; reading entirely into memory. "
-            "Consider using --strategy exiftool for large files.",
-            file_size / 1024 ** 3,
-        )
-
+    log.info("[Novatek] Attempting Novatek/VIOFO 'freeGPS' extraction from %s", mp4_path.name)
     try:
         data = mp4_path.read_bytes()
     except OSError as exc:
         raise ExtractorError(f"[Novatek] Cannot read {mp4_path}: {exc}")
 
     points: List[GPSPoint] = []
-
-    for atom_name in (b"GPS ", b"gps0"):
-        hits = _find_atoms(data, atom_name)
-        for payload_off, payload_len in hits:
-            payload = data[payload_off: payload_off + payload_len]
-            n_records = payload_len // _NOVATEK_RECORD_SIZE
-            for i in range(n_records):
-                record = payload[i * _NOVATEK_RECORD_SIZE: (i + 1) * _NOVATEK_RECORD_SIZE]
-                p = _parse_novatek_record(record)
-                if p is not None:
-                    points.append(p)
+    magic = b"freeGPS "
+    start = 0
+    while True:
+        idx = data.find(magic, start)
+        if idx == -1:
+            break
+        p = _parse_freegps_block(data[idx: idx + 256])
+        if p is not None:
+            points.append(p)
+        start = idx + len(magic)
 
     if not points:
         raise ExtractorError(
-            f"[Novatek] No valid GPS records found in {mp4_path.name}. "
-            "The file may not use a Novatek chipset, or GPS had no fix."
+            f"[Novatek] No 'freeGPS' fixes found in {mp4_path.name}. Not a "
+            "Novatek/VIOFO file, GPS had no fix, or the firmware encrypts the block."
         )
-
+    points = _geofilter(points)
     log.info("[Novatek] Extracted %d valid GPS points", len(points))
     return points
 
@@ -700,22 +685,44 @@ import re as _re
 
 # ── Regex patterns for coordinate parsing ────────────────────────────────────
 
-# Matches a bare coordinate value (decimal or DMS), NO trailing hemisphere.
-# Hemisphere handling is done in the caller to avoid ambiguous greedy matches
-# (e.g. a standalone compass-bearing "W" between LAT and LONG values).
-_DEG_DEC  = r"\d{1,3}(?:[.,]\d+)?"           # decimal degrees, e.g. 47.048
-_DEG_DMS  = r"\d{1,3}[°d]\s*\d{1,2}[\'′]\s*\d{1,2}(?:[.,]\d+)?[\"″]?"
+# A decimal coordinate MUST carry a fractional part of at least this many
+# digits. This is the single most important guard in the OCR parser: without
+# it the regex happily matches bare integers that share the overlay strip —
+# speed ("65"), altitude ("250"), heading ("180"), the year ("2026") — and
+# emits them as "coordinates", producing fixes scattered all over the map.
+# (That is the root cause of "points spread across Europe instead of Oradea".)
+_MIN_FRAC_DIGITS = 3
 
-_COORD_RE = _re.compile(rf"[+-]?(?:{_DEG_DMS}|{_DEG_DEC})")
+# A dashcam survey is geographically contiguous. After extraction we drop any
+# fix farther than this from the median position — a cheap, format-independent
+# outlier filter that removes the residual OCR garbage the parser still lets
+# through (a single misread digit yields a wrong-but-in-range coordinate).
+_GEOFILTER_RADIUS_KM = 50.0
 
-# Label prefixes — deliberately loose to handle OCR noise.
+# Decimal degrees WITH a mandatory fractional part, e.g. 47.0480 or 21,9550.
+_DEG_DEC = rf"\d{{1,3}}[.,]\d{{{_MIN_FRAC_DIGITS},}}"
+# Degrees-minutes-seconds, e.g. 47°02'53.1"  (spaces tolerated between parts).
+_DEG_DMS = r"\d{1,3}\s*[°d]\s*\d{1,2}\s*['′]\s*\d{1,2}(?:[.,]\d+)?\s*[\"″]?"
+
+# A bare coordinate token (DMS preferred over decimal). No hemisphere here.
+_COORD_RE = _re.compile(rf"(?:{_DEG_DMS}|{_DEG_DEC})")
+
+# A coordinate token with an OPTIONAL adjacent hemisphere letter on either side.
+# Captured so we can tell latitude (N/S) from longitude (E/W) regardless of the
+# order they appear in — handles "N47.04 E21.95" and "47.04N 21.95E" alike.
+_HEMI_COORD_RE = _re.compile(
+    rf"(?P<pre>[NSEWnsew])?\s*(?P<val>{_DEG_DMS}|{_DEG_DEC})"
+    rf"\s*(?P<post>[NSEWnsew](?![.,\d]))?"   # trailing hemi must NOT precede another number
+)
+
+# Label prefixes (longest alternative first so "longitude" wins over "lon").
 # Capture group 1 = hemisphere letter embedded in the label (e.g. "LAT N:").
 _LAT_PREFIX = _re.compile(
-    r"(?:lat(?:itude)?|lt)\s*[:\-=]?\s*([NnSs]?)\s*",
+    r"(?:latitude|lat)\s*[:\-=]?\s*([NnSs]?)\s*",
     _re.IGNORECASE,
 )
 _LON_PREFIX = _re.compile(
-    r"(?:lon(?:g(?:itude)?)?|lng|lo)\s*[:\-=]?\s*([EeWw]?)\s*",
+    r"(?:longitude|long|lng|lon)\s*[:\-=]?\s*([EeWw]?)\s*",
     _re.IGNORECASE,
 )
 
@@ -728,8 +735,8 @@ _TS_RE = _re.compile(
 def _dms_to_decimal(text: str) -> Optional[float]:
     """Convert a DMS string like '47°02′53.1″' to decimal degrees."""
     m = _re.match(
-        r"(\d{1,3})[°d]\s*(\d{1,2})[\'′]\s*(\d{1,2}(?:[.,]\d+)?)[\"″]?",
-        text.strip(),
+        r"\s*(\d{1,3})\s*[°d]\s*(\d{1,2})\s*['′]\s*(\d{1,2}(?:[.,]\d+)?)\s*[\"″]?",
+        text,
     )
     if not m:
         return None
@@ -755,19 +762,89 @@ def _parse_coord_value(raw: str, hemisphere: str) -> Optional[float]:
     return val
 
 
+def _labeled_coord(text: str, prefix_re: "_re.Pattern", axis_hemis: tuple) -> Optional[float]:
+    """
+    Find a coordinate that follows a 'LAT'/'LON' label.
+
+    Searches (not anchors) for the coordinate token in a short window after the
+    label, so a stray OCR character between label and number does not break the
+    match. The hemisphere sign is taken from the label itself or from a letter
+    adjacent to the number, but only when that letter belongs to THIS axis
+    (N/S for latitude, E/W for longitude) — never the next field's letter.
+    """
+    m = prefix_re.search(text)
+    if not m:
+        return None
+    window = text[m.end(): m.end() + 28]
+    cm = _HEMI_COORD_RE.search(window)
+    if not cm:
+        return None
+    hemi = (m.group(1) or "").upper()
+    if not hemi:
+        for cand in (cm.group("pre"), cm.group("post")):
+            if cand and cand.upper() in axis_hemis:
+                hemi = cand.upper()
+                break
+    return _parse_coord_value(cm.group("val"), hemi if hemi in axis_hemis else "")
+
+
+def _hemi_scan(text: str) -> tuple[Optional[float], Optional[float]]:
+    """
+    Scan for hemisphere-tagged coordinates anywhere in the text, in any order.
+    A token tagged N/S becomes latitude; one tagged E/W becomes longitude.
+    Handles 'N47.0480 E21.9550', '47.0480N 21.9550E', etc.
+    """
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    for cm in _HEMI_COORD_RE.finditer(text):
+        hemi = (cm.group("pre") or cm.group("post") or "").upper()
+        if not hemi:
+            continue
+        val = _parse_coord_value(cm.group("val"), hemi)
+        if val is None:
+            continue
+        if hemi in ("N", "S") and lat is None:
+            lat = val
+        elif hemi in ("E", "W") and lon is None:
+            lon = val
+    return lat, lon
+
+
+def _bare_pair(text: str) -> tuple[Optional[float], Optional[float]]:
+    """
+    Last-resort parse for an unlabeled decimal pair, e.g. '47.0480 21.9550' or
+    '47.0480, 21.9550'. Assumes latitude first, longitude second, but corrects
+    an obvious swap (a value whose magnitude exceeds 90 cannot be a latitude).
+    Both values must fall in valid coordinate ranges or nothing is returned.
+    """
+    vals = [
+        v for v in (_parse_coord_value(cm.group(), "") for cm in _COORD_RE.finditer(text))
+        if v is not None
+    ]
+    if len(vals) < 2:
+        return None, None
+    a, b = vals[0], vals[1]
+    if abs(a) > 90.0 and abs(b) <= 90.0:   # first looks like a longitude — swap
+        a, b = b, a
+    if abs(a) <= 90.0 and abs(b) <= 180.0:
+        return a, b
+    return None, None
+
+
 def _parse_ocr_text(text: str) -> tuple[Optional[float], Optional[float], Optional[datetime]]:
     """
     Parse a block of OCR text to extract (lat, lon, timestamp).
     All three fields are optional — returns None for any that are absent.
 
-    Handles:
-      - "LAT: 47.048  LONG: 21.955"
-      - "Lat 47°02'53\" N  Lon 021°57'18\" E"
-      - "N47.048 E21.955"  (prefix-only format)
+    Resolution order (most explicit → least):
+      1. Labeled        — "LAT: 47.0480  LONG: 21.9550"
+      2. Hemisphere-tag — "N47.0480 E21.9550", "47.0480N 21.9550E" (any order)
+      3. Bare pair      — "47.0480 21.9550" / "47.0480, 21.9550"
+
+    A returned coordinate is always range-checked (lat∈[-90,90], lon∈[-180,180]).
     """
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    ts:  Optional[datetime] = None
+    text = text.replace("\n", " ")
+    ts: Optional[datetime] = None
 
     # ── Timestamp ────────────────────────────────────────────────────────────
     ts_m = _TS_RE.search(text)
@@ -781,54 +858,25 @@ def _parse_ocr_text(text: str) -> tuple[Optional[float], Optional[float], Option
         except ValueError:
             pass
 
-    # ── Latitude ─────────────────────────────────────────────────────────────
-    lat_m = _LAT_PREFIX.search(text)
-    if lat_m:
-        remainder = text[lat_m.end():]
-        coord_m = _COORD_RE.match(remainder)
-        if coord_m:
-            hemi = lat_m.group(1)
-            # Hemisphere may trail the number, but only accept it when it is
-            # immediately adjacent AND not followed by ':' or '=' (which would
-            # indicate the start of a new label such as "LONG:").
-            tail = remainder[coord_m.end():].lstrip()
-            if not hemi and tail and tail[0].upper() in ("N", "S"):
-                next_ch = tail[1:2]
-                if next_ch not in (":", "=") and not next_ch.isalpha():
-                    hemi = tail[0]
-            lat = _parse_coord_value(coord_m.group(), hemi)
+    # 1) Labeled latitude / longitude.
+    lat = _labeled_coord(text, _LAT_PREFIX, ("N", "S"))
+    lon = _labeled_coord(text, _LON_PREFIX, ("E", "W"))
 
-    # ── Longitude ────────────────────────────────────────────────────────────
-    lon_m = _LON_PREFIX.search(text)
-    if lon_m:
-        remainder = text[lon_m.end():]
-        coord_m = _COORD_RE.match(remainder)
-        if coord_m:
-            hemi = lon_m.group(1)
-            # Same guard as latitude: only accept trailing hemisphere when the
-            # character immediately after is not alphabetic (avoids consuming
-            # unrelated words like "VIDOMETER").
-            tail = remainder[coord_m.end():].lstrip()
-            if not hemi and tail and tail[0].upper() in ("E", "W"):
-                next_ch = tail[1:2]
-                if next_ch not in (":", "=") and not next_ch.isalpha():
-                    hemi = tail[0]
-            lon = _parse_coord_value(coord_m.group(), hemi)
-
-    # ── Prefix-only format: N47.048 E21.955 ─────────────────────────────────
+    # 2) Hemisphere-tagged tokens for whatever the labels did not yield.
     if lat is None or lon is None:
-        prefix_re = _re.compile(
-            r"([NnSs])\s*(\d{1,3}(?:[.,]\d+)?)"
-            r".*?"
-            r"([EeWw])\s*(\d{1,3}(?:[.,]\d+)?)",
-            _re.DOTALL,
-        )
-        pm = prefix_re.search(text)
-        if pm:
-            if lat is None:
-                lat = _parse_coord_value(pm.group(2), pm.group(1))
-            if lon is None:
-                lon = _parse_coord_value(pm.group(4), pm.group(3))
+        hlat, hlon = _hemi_scan(text)
+        lat = lat if lat is not None else hlat
+        lon = lon if lon is not None else hlon
+
+    # 3) Unlabeled decimal pair.
+    if lat is None and lon is None:
+        lat, lon = _bare_pair(text)
+
+    # ── Range validation — never emit an out-of-range coordinate ─────────────
+    if lat is not None and not (-90.0 <= lat <= 90.0):
+        lat = None
+    if lon is not None and not (-180.0 <= lon <= 180.0):
+        lon = None
 
     return lat, lon, ts
 
@@ -855,27 +903,75 @@ def _ocr_frame_tesseract(crop: "np.ndarray") -> str:
 def _preprocess_crop(crop: "np.ndarray") -> "np.ndarray":
     """
     Light preprocessing to improve OCR accuracy on dashcam overlays.
-    Converts to grayscale, applies adaptive threshold to handle varying
-    background brightness (road, sky, etc.).
+
+    Converts to grayscale and upscales small crops so the text is large enough
+    for the recognizer. We deliberately do NOT binarize here: EasyOCR is a deep
+    recognizer that performs best on the natural grayscale image, and the
+    previous version computed an adaptive threshold only to discard it and
+    return the grayscale concatenated with its own photographic negative — that
+    duplicated every glyph side-by-side, which corrupts downstream parsing.
+    Polarity is handled by the caller, which retries on an inverted copy when
+    the first pass yields no coordinate.
     """
     import cv2 as _cv2
-    import numpy as _np
     gray = _cv2.cvtColor(crop, _cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-    # Upscale small crops — OCR engines struggle below ~30px font height
+    # Upscale small crops — OCR engines struggle below ~30 px font height.
     h, w = gray.shape[:2]
-    if h < 80:
+    if 0 < h < 80:
         scale = max(2, 80 // h)
-        gray = _cv2.resize(gray, (w * scale, h * scale), interpolation=_cv2.INTER_CUBIC)
-    # Adaptive threshold: white text on dark background and vice-versa
-    binary = _cv2.adaptiveThreshold(
-        gray, 255,
-        _cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        _cv2.THRESH_BINARY, 31, 10,
-    )
-    # Return both original and inverted — caller concatenates horizontally
-    # so the OCR engine sees both polarities in one pass
-    combined = _np.hstack([gray, _cv2.bitwise_not(gray)])
-    return combined
+        gray = _cv2.resize(
+            gray, (w * scale, h * scale), interpolation=_cv2.INTER_CUBIC
+        )
+    return gray
+
+
+def _invert(img: "np.ndarray") -> "np.ndarray":
+    """Photometric negative — used to retry OCR on the opposite polarity."""
+    import cv2 as _cv2
+    return _cv2.bitwise_not(img)
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two WGS84 points, in kilometres."""
+    import math
+    r = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _geofilter(
+    points: List[GPSPoint],
+    radius_km: float = _GEOFILTER_RADIUS_KM,
+) -> List[GPSPoint]:
+    """
+    Drop geographic outliers. A real dashcam survey is contiguous, so any fix
+    far from the median position is almost certainly a misparse (one wrong OCR
+    digit → a wrong-but-in-range coordinate). We anchor on the component-wise
+    median (robust to up to ~50 % bad points) and keep everything within
+    ``radius_km`` of it. If filtering would remove everything, the input is
+    returned unchanged so a genuinely long route is never silently emptied.
+    """
+    if len(points) < 4:
+        return points
+    lats = sorted(p.lat for p in points)
+    lons = sorted(p.lon for p in points)
+    med_lat = lats[len(lats) // 2]
+    med_lon = lons[len(lons) // 2]
+    kept = [
+        p for p in points
+        if _haversine_km(p.lat, p.lon, med_lat, med_lon) <= radius_km
+    ]
+    dropped = len(points) - len(kept)
+    if dropped:
+        log.warning(
+            "[geofilter] Dropped %d/%d fix(es) >%.0f km from median "
+            "(%.5f, %.5f) — likely OCR misparses.",
+            dropped, len(points), radius_km, med_lat, med_lon,
+        )
+    return kept or points
 
 
 def _extract_ocr(
@@ -954,6 +1050,34 @@ def _extract_ocr(
             "  pip install pytesseract      # + Tesseract binary from https://github.com/tesseract-ocr/tesseract"
         )
 
+    # ── OCR helper bound to the resolved backend ─────────────────────────────
+    def _ocr(img: "np.ndarray") -> str:
+        return (
+            _ocr_frame_easyocr(easyocr_reader, img)
+            if use_easyocr else _ocr_frame_tesseract(img)
+        )
+
+    def _read_overlay(frame: "np.ndarray") -> tuple:
+        """
+        Try to read a coordinate from a frame: bottom strip first, then top,
+        each at normal and inverted polarity. Uses the REAL decoded height so a
+        rotated/anamorphic frame is cropped correctly. Returns (lat, lon, ts).
+        """
+        height = frame.shape[0]
+        strip = max(40, int(height * strip_frac))
+        for region in (frame[height - strip:, :], frame[:strip, :]):
+            base = _preprocess_crop(region)
+            for img in (base, _invert(base)):
+                try:
+                    txt = _ocr(img)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("[OCR] recognizer error: %s", exc)
+                    continue
+                la, lo, t = _parse_ocr_text(txt)
+                if la is not None and lo is not None:
+                    return la, lo, t
+        return None, None, None
+
     # ── Open video ───────────────────────────────────────────────────────────
     cap = cv2.VideoCapture(str(mp4_path))
     if not cap.isOpened():
@@ -961,91 +1085,80 @@ def _extract_ocr(
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps          = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_h      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    if total_frames <= 0:
-        cap.release()
-        raise ExtractorError(
-            f"[OCR] Could not determine frame count for {mp4_path.name}. "
-            "The file may be corrupt or use an unsupported container."
+    # Build the sample plan. When the frame count is known we seek by timestamp
+    # (CAP_PROP_POS_MSEC) — far more reliable across H.264/H.265 long-GOP files
+    # than exact-frame seeking, which lands on the wrong frame or fails. When it
+    # is unknown (some containers report 0), we fall back to decoding the stream
+    # sequentially and sampling at a fixed stride.
+    sample_ts_ms: Optional[list] = None
+    stride = 1
+    if total_frames > 0:
+        duration_s = total_frames / fps
+        log.info(
+            "[OCR] Video: %d frames, %.2f fps, %.1f s — timestamp sampling",
+            total_frames, fps, duration_s,
+        )
+        sample_ts_ms = [
+            1000.0 * duration_s * (i + 0.5) / n_samples for i in range(n_samples)
+        ]
+    else:
+        stride = max(1, int(round(fps / 2.0)))   # ~2 fps
+        log.info(
+            "[OCR] Frame count unknown — sequential sampling every %d frame(s) "
+            "(%.2f fps source)", stride, fps,
         )
 
-    log.info(
-        "[OCR] Video: %d frames, %.2f fps, height=%d px",
-        total_frames, fps, frame_h,
-    )
+    # ── Sampling loop ────────────────────────────────────────────────────────
+    points:  List[GPSPoint] = []
+    n_parsed = 0
+    n_failed = 0
+    n_seen   = 0
 
-    # Sample indices: evenly spaced across the full duration, avoiding the
-    # very first and last frames which may be black/transition frames.
-    margin   = max(1, total_frames // 50)
-    indices  = [
-        int(i)
-        for i in _np.linspace(margin, total_frames - margin - 1, n_samples)
-    ]
-
-    # Strip height in pixels
-    strip_px = max(40, int(frame_h * strip_frac))
-
-    # ── Per-frame OCR loop ───────────────────────────────────────────────────
-    points:    List[GPSPoint] = []
-    n_parsed   = 0
-    n_failed   = 0
-
-    for frame_idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            n_failed += 1
-            continue
-
-        # Crop bottom strip (primary overlay location for Vidometer et al.)
-        crop = frame[frame_h - strip_px:, :]
-        processed = _preprocess_crop(crop)
-
-        # OCR
-        try:
-            if use_easyocr:
-                text = _ocr_frame_easyocr(easyocr_reader, processed)
-            else:
-                text = _ocr_frame_tesseract(processed)
-        except Exception as exc:  # noqa: BLE001
-            log.debug("[OCR] frame %d OCR error: %s", frame_idx, exc)
-            n_failed += 1
-            continue
-
-        lat, lon, ts = _parse_ocr_text(text)
-
-        if lat is None or lon is None:
-            # Try the top strip too — some apps put overlay at top
-            top_crop = frame[:strip_px, :]
-            top_processed = _preprocess_crop(top_crop)
-            try:
-                if use_easyocr:
-                    top_text = _ocr_frame_easyocr(easyocr_reader, top_processed)
-                else:
-                    top_text = _ocr_frame_tesseract(top_processed)
-                lat, lon, ts = _parse_ocr_text(top_text)
-            except Exception:  # noqa: BLE001
-                pass
-
-        if lat is None or lon is None:
-            n_failed += 1
-            continue
-
-        # Derive timestamp from frame index + fps if overlay had none
-        if ts is None:
-            ts = datetime.fromtimestamp(frame_idx / fps, tz=timezone.utc)
-
-        p = GPSPoint(lat=lat, lon=lon, timestamp=ts)
-        if p.is_valid():
-            points.append(p)
-            n_parsed += 1
+    if sample_ts_ms is not None:
+        for t_ms in sample_ts_ms:
+            cap.set(cv2.CAP_PROP_POS_MSEC, t_ms)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                n_failed += 1
+                continue
+            n_seen += 1
+            lat, lon, ts = _read_overlay(frame)
+            if lat is None or lon is None:
+                n_failed += 1
+                continue
+            if ts is None:
+                ts = datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc)
+            p = GPSPoint(lat=lat, lon=lon, timestamp=ts)
+            if p.is_valid():
+                points.append(p)
+                n_parsed += 1
+    else:
+        idx = -1
+        while n_seen < n_samples:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
+            idx += 1
+            if idx % stride != 0:
+                continue
+            n_seen += 1
+            lat, lon, ts = _read_overlay(frame)
+            if lat is None or lon is None:
+                n_failed += 1
+                continue
+            if ts is None:
+                ts = datetime.fromtimestamp(idx / fps, tz=timezone.utc)
+            p = GPSPoint(lat=lat, lon=lon, timestamp=ts)
+            if p.is_valid():
+                points.append(p)
+                n_parsed += 1
 
     cap.release()
 
     log.info(
-        "[OCR] Processed %d frames → %d valid points, %d failed/unparsed",
-        len(indices), n_parsed, n_failed,
+        "[OCR] Sampled %d frame(s) → %d valid points, %d failed/unparsed",
+        n_seen, n_parsed, n_failed,
     )
 
     if not points:
@@ -1054,17 +1167,25 @@ def _extract_ocr(
             "via OCR. Possible causes:\n"
             "  • The video has no burned-in GPS overlay.\n"
             "  • The overlay uses an unrecognised format (check --verbose output).\n"
-            "  • Poor OCR quality — try adjusting --ocr_strip_frac or --ocr_backend."
+            "  • The overlay is not in the bottom/top strip — adjust --ocr_strip_frac.\n"
+            "  • Poor OCR quality — try --ocr_backend tesseract."
         )
 
-    # Deduplicate: consecutive identical fixes (static vehicle) collapse to one
+    # Reject geographic outliers (the 'spread across Europe' misparses) BEFORE
+    # collapsing duplicates, so a single bad fix cannot anchor the track.
+    points = _geofilter(points)
+
+    # Deduplicate consecutive identical fixes (static vehicle) into one.
     deduped: List[GPSPoint] = [points[0]]
     for p in points[1:]:
         prev = deduped[-1]
         if p.lat != prev.lat or p.lon != prev.lon:
             deduped.append(p)
 
-    log.info("[OCR] After deduplication: %d unique GPS points", len(deduped))
+    log.info(
+        "[OCR] %d point(s) after geo-filter + dedup (from %d parsed)",
+        len(deduped), n_parsed,
+    )
     return deduped
 
 
@@ -1074,6 +1195,415 @@ try:
     import numpy as _np  # type: ignore
 except ImportError:
     _np = None  # type: ignore  # _extract_ocr will fail with a clear error if called
+
+
+# ---------------------------------------------------------------------------
+# Strategy: subtitle / SRT GPS track  (DJI, many dashcams, NMEA loggers)
+# ---------------------------------------------------------------------------
+#
+# A large class of cameras store GPS not as a binary telemetry atom but as a
+# text SUBTITLE stream — either embedded in the MP4 as a mov_text/SubRip track,
+# or written next to the video as a sidecar `.srt` / `.nmea` file.
+# Common payload formats handled here:
+#   • DJI      "[latitude: 47.0480] [longitude: 21.9550]"  and
+#              "GPS (21.9550,47.0480, ...)"   (DJI order is lon,lat)
+#   • NMEA     "$GPRMC,...", "$GPGGA,...", "$GNRMC,..."
+#   • generic  any line that _parse_ocr_text can read (labelled / hemisphere)
+#
+# This is fast and exact when present, so it runs before the OCR fallback.
+
+_DJI_LAT_RE = _re.compile(r"latitude\s*[:=]\s*([+-]?\d+(?:\.\d+)?)", _re.IGNORECASE)
+_DJI_LON_RE = _re.compile(r"longitude\s*[:=]\s*([+-]?\d+(?:\.\d+)?)", _re.IGNORECASE)
+_DJI_GPS_RE = _re.compile(
+    r"GPS\s*[\(:]\s*([+-]?\d+\.\d+)\s*[,;]\s*([+-]?\d+\.\d+)", _re.IGNORECASE
+)
+
+
+def _nmea_to_deg(value: str, hemi: str) -> Optional[float]:
+    """Convert an NMEA ddmm.mmmm / dddmm.mmmm field to signed decimal degrees."""
+    if not value:
+        return None
+    try:
+        f = float(value)
+    except ValueError:
+        return None
+    deg = int(f // 100)
+    minutes = f - deg * 100
+    dec = deg + minutes / 60.0
+    if hemi.upper() in ("S", "W"):
+        dec = -dec
+    return dec
+
+
+def _nmea_datetime(tod: str, dat: str) -> Optional[datetime]:
+    """Build a UTC datetime from NMEA time (hhmmss[.sss]) + date (ddmmyy)."""
+    try:
+        hh, mm, ss = int(tod[0:2]), int(tod[2:4]), int(tod[4:6])
+        dd, mo, yy = int(dat[0:2]), int(dat[2:4]), 2000 + int(dat[4:6])
+        return datetime(yy, mo, dd, hh, mm, ss, tzinfo=timezone.utc)
+    except (ValueError, IndexError):
+        return None
+
+
+def _parse_nmea_line(line: str) -> Optional[GPSPoint]:
+    """Parse a single NMEA RMC or GGA sentence into a GPSPoint (or None)."""
+    parts = line.split(",")
+    tag = parts[0]
+    try:
+        if tag.endswith("RMC") and len(parts) >= 7 and parts[2] == "A":
+            lat = _nmea_to_deg(parts[3], parts[4])
+            lon = _nmea_to_deg(parts[5], parts[6])
+            spd = None
+            if len(parts) >= 8 and parts[7]:
+                try:
+                    spd = float(parts[7]) * 0.514444   # knots → m/s
+                except ValueError:
+                    spd = None
+            ts = _nmea_datetime(parts[1], parts[9]) if len(parts) >= 10 else None
+            if lat is not None and lon is not None:
+                p = GPSPoint(lat=lat, lon=lon, timestamp=ts, speed_mps=spd)
+                return p if p.is_valid() else None
+        elif tag.endswith("GGA") and len(parts) >= 6:
+            lat = _nmea_to_deg(parts[2], parts[3])
+            lon = _nmea_to_deg(parts[4], parts[5])
+            ele = None
+            if len(parts) >= 10 and parts[9]:
+                try:
+                    ele = float(parts[9])
+                except ValueError:
+                    ele = None
+            if lat is not None and lon is not None:
+                p = GPSPoint(lat=lat, lon=lon, elevation=ele)
+                return p if p.is_valid() else None
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
+def _parse_subtitle_blob(blob: str) -> List[GPSPoint]:
+    """Parse a whole SRT / NMEA text blob into GPSPoints (DJI / NMEA / generic)."""
+    pts: List[GPSPoint] = []
+    for raw in blob.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        # NMEA sentences.
+        if line.startswith("$") and ("RMC" in line[:8] or "GGA" in line[:8]):
+            p = _parse_nmea_line(line)
+            if p is not None:
+                pts.append(p)
+            continue
+
+        lat = lon = None
+        ts: Optional[datetime] = None
+
+        m_la, m_lo = _DJI_LAT_RE.search(line), _DJI_LON_RE.search(line)
+        if m_la and m_lo:
+            lat, lon = float(m_la.group(1)), float(m_lo.group(1))
+        else:
+            m_gps = _DJI_GPS_RE.search(line)
+            if m_gps:
+                a, b = float(m_gps.group(1)), float(m_gps.group(2))
+                # DJI writes GPS(longitude, latitude); disambiguate by range.
+                if abs(a) <= 90.0 and abs(b) > 90.0:
+                    lat, lon = a, b
+                elif abs(b) <= 90.0 and abs(a) > 90.0:
+                    lat, lon = b, a
+                else:
+                    lon, lat = a, b            # default to DJI lon,lat order
+
+        if lat is None or lon is None:
+            la2, lo2, ts = _parse_ocr_text(line)
+            lat = lat if lat is not None else la2
+            lon = lon if lon is not None else lo2
+
+        if lat is not None and lon is not None and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+            p = GPSPoint(lat=lat, lon=lon, timestamp=ts)
+            if p.is_valid():
+                pts.append(p)
+    return pts
+
+
+def _ffmpeg_dump_subtitles(mp4_path: Path) -> Optional[str]:
+    """Return the first embedded subtitle stream as SRT text, or None."""
+    import json as _json
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s",
+             "-show_streams", "-of", "json", str(mp4_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except FileNotFoundError:
+        log.debug("[Subtitle] ffprobe not on PATH — skipping embedded check")
+        return None
+    except subprocess.TimeoutExpired:
+        log.debug("[Subtitle] ffprobe timed out")
+        return None
+    try:
+        streams = _json.loads(probe.stdout).get("streams", [])
+    except _json.JSONDecodeError:
+        return None
+    if not streams:
+        return None
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(mp4_path),
+             "-map", "0:s:0", "-f", "srt", "pipe:1"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout or None
+
+
+def _extract_subtitle(mp4_path: Path) -> List[GPSPoint]:
+    """
+    Extract GPS from an embedded subtitle track or a sidecar .srt / .nmea file.
+    """
+    log.info("[Subtitle] Attempting subtitle/SRT GPS extraction from %s", mp4_path.name)
+
+    blobs: List[str] = []
+
+    # Sidecar files next to the video (DJI exports VIDEO.SRT; loggers write .nmea).
+    for ext in (".srt", ".SRT", ".nmea", ".NMEA"):
+        side = mp4_path.with_suffix(ext)
+        if side.exists():
+            try:
+                blobs.append(side.read_text(encoding="utf-8", errors="replace"))
+                log.info("[Subtitle] Read sidecar %s", side.name)
+            except OSError as exc:
+                log.debug("[Subtitle] Could not read %s: %s", side.name, exc)
+
+    # Embedded subtitle stream.
+    embedded = _ffmpeg_dump_subtitles(mp4_path)
+    if embedded:
+        blobs.append(embedded)
+        log.info("[Subtitle] Pulled embedded subtitle stream via ffmpeg")
+
+    if not blobs:
+        raise ExtractorError(
+            "[Subtitle] No embedded subtitle track or sidecar .srt/.nmea found "
+            f"for {mp4_path.name}."
+        )
+
+    points: List[GPSPoint] = []
+    for blob in blobs:
+        points.extend(_parse_subtitle_blob(blob))
+
+    if not points:
+        raise ExtractorError(
+            "[Subtitle] Subtitle data was present but contained no recognisable "
+            "GPS coordinates (DJI / NMEA / labelled formats)."
+        )
+
+    points = _geofilter(points)
+    log.info("[Subtitle] Extracted %d GPS points", len(points))
+    return points
+
+
+# ---------------------------------------------------------------------------
+# Strategy: sidecar files next to the video (.gpx / .nmea / .csv / .json / .srt)
+# ---------------------------------------------------------------------------
+
+def _first_key(d: dict, names: tuple):
+    for n in names:
+        if n in d:
+            return d[n]
+    return None
+
+
+def _is_num(v) -> bool:
+    try:
+        float(v)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _parse_any_time(v) -> Optional[datetime]:
+    """Best-effort timestamp parse: ISO 8601, common formats, or epoch seconds."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(s[:19], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    try:
+        f = float(s)
+        if f > 1e8:
+            return datetime.fromtimestamp(f, tz=timezone.utc)
+    except ValueError:
+        pass
+    return None
+
+
+def _parse_csv_points(text: str) -> List[GPSPoint]:
+    """Parse a CSV telemetry export with lat/lon (and optional ele/time) columns."""
+    import csv
+    import io
+    pts: List[GPSPoint] = []
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return pts
+    cols = {c.lower().strip(): c for c in reader.fieldnames if c}
+
+    def pick(*names):
+        for n in names:
+            if n in cols:
+                return cols[n]
+        return None
+
+    lat_c = pick("lat", "latitude", "gpslatitude")
+    lon_c = pick("lon", "lng", "long", "longitude", "gpslongitude")
+    ele_c = pick("ele", "elevation", "alt", "altitude")
+    t_c = pick("time", "timestamp", "datetime", "date", "utc")
+    if not lat_c or not lon_c:
+        return pts
+    for row in reader:
+        try:
+            lat = float(str(row[lat_c]).replace(",", "."))
+            lon = float(str(row[lon_c]).replace(",", "."))
+        except (ValueError, TypeError, KeyError):
+            continue
+        ele = None
+        if ele_c and row.get(ele_c) and _is_num(str(row[ele_c]).replace(",", ".")):
+            ele = float(str(row[ele_c]).replace(",", "."))
+        ts = _parse_any_time(row.get(t_c)) if t_c else None
+        p = GPSPoint(lat=lat, lon=lon, elevation=ele, timestamp=ts)
+        if p.is_valid():
+            pts.append(p)
+    return pts
+
+
+def _json_walk_points(node, pts: List[GPSPoint]) -> None:
+    if isinstance(node, dict):
+        lat = _first_key(node, ("lat", "latitude", "Lat", "Latitude"))
+        lon = _first_key(node, ("lon", "lng", "long", "longitude", "Lon", "Longitude"))
+        if _is_num(lat) and _is_num(lon):
+            ele = _first_key(node, ("ele", "alt", "altitude", "elevation"))
+            tval = _first_key(node, ("time", "timestamp", "datetime", "utc", "date"))
+            p = GPSPoint(
+                lat=float(lat), lon=float(lon),
+                elevation=float(ele) if _is_num(ele) else None,
+                timestamp=_parse_any_time(tval),
+            )
+            if p.is_valid():
+                pts.append(p)
+        for v in node.values():
+            _json_walk_points(v, pts)
+    elif isinstance(node, list):
+        for v in node:
+            _json_walk_points(v, pts)
+
+
+def _parse_json_points(text: str) -> List[GPSPoint]:
+    """Parse a JSON telemetry export, finding any nested {lat, lon, ...} objects."""
+    import json as _json
+    try:
+        obj = _json.loads(text)
+    except _json.JSONDecodeError:
+        return []
+    pts: List[GPSPoint] = []
+    _json_walk_points(obj, pts)
+    return pts
+
+
+def _extract_sidecar(mp4_path: Path) -> List[GPSPoint]:
+    """
+    Extract GPS from a sidecar file sharing the video's stem:
+    .gpx, .nmea, .csv, .json, or .srt. (When a survey is uploaded through the
+    frontend only the .mp4 is present, so this mostly helps manual/CLI runs.)
+    """
+    log.info("[Sidecar] Looking for a GPS sidecar next to %s", mp4_path.name)
+    points: List[GPSPoint] = []
+    found: List[str] = []
+    for ext in (".gpx", ".GPX", ".nmea", ".NMEA", ".csv", ".CSV",
+                ".json", ".JSON", ".srt", ".SRT"):
+        side = mp4_path.with_suffix(ext)
+        if not side.exists():
+            continue
+        try:
+            text = side.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found.append(side.name)
+        e = ext.lower()
+        if e == ".gpx":
+            points += _parse_gpx_xml(text)
+        elif e in (".nmea", ".srt"):
+            points += _parse_subtitle_blob(text)
+        elif e == ".csv":
+            points += _parse_csv_points(text)
+        elif e == ".json":
+            points += _parse_json_points(text)
+
+    if not found:
+        raise ExtractorError(
+            f"[Sidecar] No .gpx/.nmea/.csv/.json/.srt sidecar found for {mp4_path.name}."
+        )
+    if not points:
+        raise ExtractorError(
+            f"[Sidecar] Sidecar(s) {found} contained no usable GPS coordinates."
+        )
+    log.info("[Sidecar] Parsed %d points from %s", len(points), ", ".join(found))
+    return points
+
+
+# ---------------------------------------------------------------------------
+# Strategy: ISO 6709 location atom (QuickTime ©xyz — phones, single location)
+# ---------------------------------------------------------------------------
+
+_ISO6709_RE = _re.compile(
+    r"([+-]\d{1,3}(?:\.\d+)?)([+-]\d{1,3}(?:\.\d+)?)(?:([+-]\d+(?:\.\d+)?))?"
+)
+
+
+def _extract_iso6709(mp4_path: Path) -> List[GPSPoint]:
+    """
+    Single-location fallback: the ISO 6709 string in the MP4 'udta' atom
+    (QuickTime ©xyz / Apple 'com.apple.quicktime.location.ISO6709'). Many phone
+    videos carry one location for the whole clip — enough to place a survey.
+    """
+    log.info("[ISO6709] Looking for a QuickTime location atom in %s", mp4_path.name)
+    try:
+        data = mp4_path.read_bytes()
+    except OSError as exc:
+        raise ExtractorError(f"[ISO6709] Cannot read {mp4_path}: {exc}")
+
+    iso: Optional[str] = None
+    pos = data.find(b"\xa9xyz")                       # ©xyz atom payload: [len:2][lang:2][str]
+    if pos != -1:
+        try:
+            slen = struct.unpack_from(">H", data, pos + 4)[0]
+            iso = data[pos + 8: pos + 8 + slen].decode("ascii", "ignore")
+        except (struct.error, UnicodeDecodeError):
+            iso = None
+    if not iso:                                       # fall back to a raw scan of udta
+        m = _re.search(rb"[+-]\d{1,2}\.\d+[+-]\d{1,3}\.\d+", data)
+        iso = m.group(0).decode("ascii", "ignore") if m else None
+    if not iso:
+        raise ExtractorError(f"[ISO6709] No location atom found in {mp4_path.name}.")
+
+    m = _ISO6709_RE.search(iso)
+    if not m:
+        raise ExtractorError(f"[ISO6709] Could not parse location string {iso!r}.")
+    p = GPSPoint(
+        lat=float(m.group(1)), lon=float(m.group(2)),
+        elevation=float(m.group(3)) if m.group(3) else None,
+    )
+    if not p.is_valid():
+        raise ExtractorError(f"[ISO6709] Parsed out-of-range location: {iso!r}.")
+    log.info("[ISO6709] Single location: lat=%.6f lon=%.6f", p.lat, p.lon)
+    return [p]
 
 
 # ---------------------------------------------------------------------------
@@ -1142,7 +1672,7 @@ def _build_gpx_xml(points: List[GPSPoint], source_name: str) -> str:
 # Orchestrator: try strategies in order
 # ---------------------------------------------------------------------------
 
-STRATEGIES = ("gpmf", "novatek", "exiftool", "ocr")
+STRATEGIES = ("sidecar", "gpmf", "novatek", "subtitle", "exiftool", "iso6709", "ocr")
 
 
 def extract(
@@ -1168,9 +1698,12 @@ def extract(
         return _extract_ocr(p, n_samples=ocr_samples, strip_frac=ocr_strip_frac, backend=ocr_backend)
 
     dispatch = {
+        "sidecar":   _extract_sidecar,
         "gpmf":      _extract_gpmf,
         "novatek":   _extract_novatek,
+        "subtitle":  _extract_subtitle,
         "exiftool":  _extract_exiftool,
+        "iso6709":   _extract_iso6709,
         "ocr":       _ocr_bound,
     }
 

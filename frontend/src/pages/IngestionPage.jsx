@@ -332,10 +332,13 @@ export default function IngestionPage() {
       try {
         const data = await fetchJobStatus(jid)
         setJobStatus(data)
-        // Stop when terminal state reached
+        // Stop when terminal state reached. Clear the cross-page "active job"
+        // key on terminal status too (MapPage already does this), so navigating
+        // back here after a finished run doesn't rehydrate a stale tracker.
         if (data.status === 'complete' || data.status === 'failed') {
           clearInterval(pollRef.current)
           pollRef.current = null
+          localStorage.removeItem('rids_active_job')
         }
       } catch (err) {
         // A 404 means the job_id no longer exists on the backend (e.g. a stale

@@ -13,7 +13,7 @@ runs/*
 scripts/*
 # 2. Un-ignore the specific parent folder `detect` so git can look inside
 !runs/detect/
-
+latex/*
 # 3. Ignore everything inside `detect` (this prevents other folders like `train` from being tracked)
 runs/detect/*
 
