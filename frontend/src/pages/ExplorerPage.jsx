@@ -147,6 +147,26 @@ export default function ExplorerPage() {
     }
   }
 
+  const handleSingleDelete = async (id) => {
+    const item = items.find(entry => entry.id === id)
+    const confirmMessage = deleteSurveyLog
+      ? `Delete this detection and matching survey_log row?`
+      : `Delete this detection?`
+
+    if (!window.confirm(confirmMessage)) return
+
+    try {
+      setLoading(true)
+      await deleteDetectionsBulk([id], deleteSurveyLog)
+      setSelectedIds(prev => prev.filter(selectedId => selectedId !== id))
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo
   const visibleIds = items.map(item => item.id)
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id))
@@ -276,8 +296,6 @@ export default function ExplorerPage() {
               { key: 'confidence',     label: 'Confidence'  },
               { key: 'priority_score', label: 'Priority'    },
               { key: 'detection_count',label: 'Seen'        },
-              { key: 'latitude',       label: 'GPS'         },
-              { key: 'last_detected',  label: 'Last Seen'   },
             ].map(col => (
               <div
                 key={col.key}
@@ -289,6 +307,7 @@ export default function ExplorerPage() {
               </div>
             ))}
             <div style={{ ...styles.th, justifyContent: 'center' }}>Fixed</div>
+            <div style={{ ...styles.th, justifyContent: 'center' }}>Delete</div>
           </div>
 
           {/* Body */}
@@ -378,24 +397,27 @@ export default function ExplorerPage() {
                   {item.detection_count}×
                 </div>
 
-                {/* GPS */}
-                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>
-                  {item.latitude?.toFixed(5)}<br />{item.longitude?.toFixed(5)}
-                </div>
-
-                {/* Last seen */}
-                <div style={{ ...styles.td, fontSize: 11, color: 'var(--text-dim)' }}>
-                  {item.last_detected || '—'}
-                </div>
-
                 {/* Fixed Checkbox */}
                 <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                   <input
                     type="checkbox"
                     checked={item.is_fixed}
                     onChange={() => handleToggleFixed(item.id, item.is_fixed)}
-                    style={{ cursor: 'pointer', width: 16, height: 16 }}
+                    style={styles.rowCheckbox}
                   />
+                </div>
+
+                {/* Delete action */}
+                <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleSingleDelete(item.id)}
+                    style={styles.rowDeleteBtn}
+                    aria-label={`Delete detection ${item.id}`}
+                    title="Delete detection"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             )
@@ -440,7 +462,7 @@ export default function ExplorerPage() {
   )
 }
 
-const COL = '1.8fr 90px 110px 110px 60px 120px 1fr 60px'
+const COL = 'repeat(8, minmax(0, 1fr))'
 
 const styles = {
   page: { paddingTop: 48, minHeight: '100vh', background: 'var(--bg)' },
@@ -566,6 +588,24 @@ const styles = {
     height: 15,
     cursor: 'pointer',
     accentColor: 'var(--accent)',
+  },
+  rowDeleteBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 56,
+    height: 28,
+    padding: '0 10px',
+    borderRadius: 'var(--radius)',
+    border: '1px solid rgba(255,68,68,0.18)',
+    background: 'rgba(255,68,68,0.05)',
+    color: 'var(--red)',
+    cursor: 'pointer',
+    flexShrink: 0,
+    fontFamily: 'var(--font-mono)',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '.06em',
   },
 
   tableLoading: {
