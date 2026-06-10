@@ -168,6 +168,8 @@ class SegmentorConfig:
     save_masks:   bool  = False
     damage_only:  bool  = False
     min_sam_score: float = 0.0
+    save_debug:   bool  = False   # if True, write per-frame combined mask
+                                  # overlays to output_dir/debug/
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +256,15 @@ class SegmentedBox:
     sam_score:         Optional[float]
     geometry:          Optional[MaskGeometry]
     low_sam_quality:   bool = False
+    # --- runtime-only handoff to Stage 4 (NOT serialised to JSON) ---
+    # The exact SAM binary mask, cropped tight to its nonzero bounding box,
+    # as uint8 (0/255). mask_origin is the (y, x) of the crop top-left in the
+    # full frame. These let Stage 4 use the real mask instead of an ellipse
+    # approximation. They are dropped on save/load (JSON stores geometry only),
+    # so a standalone Stage 4 run from segmentations.json still falls back to
+    # the approximation.
+    mask:        Optional["np.ndarray"] = field(default=None, repr=False, compare=False)
+    mask_origin: Optional[tuple]        = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         return {
@@ -410,6 +421,58 @@ def _overlay_mask(image_bgr: np.ndarray, mask_uint8: np.ndarray, colour: tuple) 
     return overlay
 
 
+def _crop_mask(mask_uint8: np.ndarray) -> tuple:
+    """
+    Crop a full-frame binary mask to its nonzero bounding box.
+
+    Returns (crop_uint8, (y0, x0)) where crop is the tight nonzero region and
+    (y0, x0) is its top-left origin in the full frame. Returns (None, None)
+    if the mask is empty. Storing the tight crop keeps the per-detection
+    memory cost small while preserving the exact mask for Stage 4.
+    """
+    ys, xs = np.where(mask_uint8 > 127)
+    if ys.size == 0:
+        return None, None
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    return mask_uint8[y0:y1, x0:x1].copy(), (y0, x0)
+
+
+def _combined_overlay(image_bgr: np.ndarray, items: list) -> np.ndarray:
+    """
+    Blend every mask for one frame onto a single image, then draw each
+    bounding box and label on top.
+
+    Parameters
+    ----------
+    image_bgr : np.ndarray
+        The source frame (BGR).
+    items : list of (mask_uint8, colour, (x1, y1, x2, y2), label)
+        One entry per segmented box.
+
+    Returns a new image; the input is not modified.
+    """
+    out = image_bgr.copy()
+    for mask_uint8, colour, _bbox, _label in items:
+        sel = mask_uint8 > 127
+        if sel.any():
+            out[sel] = (
+                np.array(colour, dtype=np.uint8) * 0.6 + out[sel] * 0.4
+            ).astype(np.uint8)
+
+    for _mask, colour, bbox, label in items:
+        x1, y1, x2, y2 = (int(v) for v in bbox)
+        cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
+        (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        ly = max(y1 - 4, th + 4)
+        cv2.rectangle(out, (x1, ly - th - base), (x1 + tw, ly + base), colour, -1)
+        cv2.putText(
+            out, label, (x1, ly),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
+        )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Segmentor
 # ---------------------------------------------------------------------------
@@ -502,6 +565,12 @@ class Segmentor:
             masks_dir = Path(output_dir) / "masks"
             masks_dir.mkdir(parents=True, exist_ok=True)
             logger.info("Mask overlay images will be saved to: %s", masks_dir)
+
+        debug_dir: Optional[Path] = None
+        if output_dir and self.cfg.save_debug:
+            debug_dir = Path(output_dir) / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Combined mask overlays will be saved to: %s", debug_dir)
 
         results: List[SegmentationResult] = []
         t_start = time.perf_counter()
@@ -620,6 +689,9 @@ class Segmentor:
             n_sam_run += 1
             frame_stem = Path(det_result.frame_path).stem
 
+            # Items for the optional combined per-frame debug overlay
+            debug_items: list = []
+
             # Per-box: geometry + optional mask save
             for i, (bbox, mask, sam_score) in enumerate(
                 zip(boxes_to_segment, masks, scores)
@@ -663,9 +735,24 @@ class Segmentor:
                     geometry          = geometry,
                     low_sam_quality   = low_quality,
                 )
+
+                # Keep the exact mask (tight crop) in memory for Stage 4.
+                # Not serialised to JSON — dropped on save/load.
+                crop, origin = _crop_mask(mask_uint8)
+                seg_box.mask        = crop
+                seg_box.mask_origin = origin
+
                 seg_result.boxes.append(seg_box)
 
-                # Optionally save mask overlay image
+                # Collect for the combined debug overlay
+                if debug_dir is not None:
+                    colour = _CLASS_COLOURS.get(bbox.class_name, (0, 255, 0))
+                    label  = f"{bbox.class_name} {bbox.confidence:.2f}"
+                    debug_items.append(
+                        (mask_uint8, colour, (bbox.x1, bbox.y1, bbox.x2, bbox.y2), label)
+                    )
+
+                # Optionally save per-box mask overlay image (legacy save_masks)
                 if masks_dir is not None:
                     colour       = _CLASS_COLOURS.get(bbox.class_name, (0, 255, 0))
                     overlay      = _overlay_mask(image_bgr, mask_uint8, colour)
@@ -679,6 +766,11 @@ class Segmentor:
                     )
                     mask_filename = f"{frame_stem}_box{i}_{bbox.class_name}_mask.jpg"
                     cv2.imwrite(str(masks_dir / mask_filename), overlay)
+
+            # Combined per-frame mask overlay (one image per detection frame)
+            if debug_dir is not None and debug_items:
+                combined = _combined_overlay(image_bgr, debug_items)
+                cv2.imwrite(str(debug_dir / f"{frame_stem}.jpg"), combined)
 
             results.append(seg_result)
 
@@ -862,7 +954,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--save_masks", action="store_true",
-        help="Save mask overlay images to output/masks/ (useful for debugging)",
+        help="Save per-box mask overlay images to output/masks/ (legacy)",
+    )
+    parser.add_argument(
+        "--save_debug", action="store_true",
+        help="Save one combined mask overlay per detection frame to output/debug/",
     )
     parser.add_argument(
         "--damage_only", action="store_true",
@@ -897,6 +993,7 @@ def main() -> None:
         save_masks    = args.save_masks,
         damage_only   = args.damage_only,
         min_sam_score = args.min_sam_score,
+        save_debug    = args.save_debug,
     )
     segmentor = Segmentor(cfg)
     segmentor.run(detection_results, output_dir=args.output)

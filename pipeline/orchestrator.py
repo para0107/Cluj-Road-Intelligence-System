@@ -106,6 +106,9 @@ class OrchestratorConfig:
     fps:          float         = 2.0
     dry_run_db:   bool          = False
     resume:       bool          = False
+    save_debug:   bool          = False   # write per-stage debug images
+    use_exact_mask_depth: bool  = False   # exact SAM mask in depth extraction
+    keep_all_frames: bool       = False   # keep non-detection frames on disk
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +227,10 @@ class Orchestrator:
                 result, frames,
                 self.session_dir / "02_detections" / "detections.json",
             )
+            # Remove frames with no detections from disk (Stage 1 extracted all
+            # of them; nothing downstream re-reads the non-detection frames).
+            # Runs only after Stage 2 has fully completed.
+            self._prune_nondetection_frames(det_results)
             seg_results = self._run_stage3(
                 result, det_results,
                 self.session_dir / "03_segmentations" / "segmentations.json",
@@ -335,7 +342,10 @@ class Orchestrator:
         t0 = time.perf_counter()
         try:
             weights = str(Path(_WEIGHTS_DIR) / _RTDETR_WEIGHTS)
-            cfg = DetectorConfig(weights=weights, device=self._device)
+            cfg = DetectorConfig(
+                weights=weights, device=self._device,
+                save_debug=self.cfg.save_debug,
+            )
             det_results = Detector(cfg).run(frames, output_dir=str(det_path.parent))
             result.n_detections = sum(r.n_detections for r in det_results)
             elapsed = time.perf_counter() - t0
@@ -399,6 +409,74 @@ class Orchestrator:
             )
             self.cfg.gps_path = None        
 
+    def _prune_nondetection_frames(self, det_results: list) -> None:
+        """
+        Delete extracted frames that have no accepted detection.
+
+        Stage 1 writes every extracted frame to <session>/01_manifest/frames/.
+        Stages 3 and 4 only read frames that have detections, and the Stage 2
+        debug overlays (when enabled) are already written by the time this is
+        called, so the non-detection frames are safe to remove. The end state
+        on disk is detection frames only. Disabled with keep_all_frames=True.
+
+        Safety guards:
+          - never runs when keep_all_frames is set
+          - never runs when the whole session has zero detections (otherwise it
+            would empty the entire frames directory)
+          - only deletes image files inside the session frames directory
+          - never deletes a frame referenced by a detection
+
+        Note: manifest.json is not rewritten, so it still lists every extracted
+        frame. A resume that re-runs Stage 2 from scratch would need the frames
+        re-extracted; resuming from detections.json is unaffected.
+        """
+        if self.cfg.keep_all_frames:
+            logger.info("Frame prune: disabled (keep_all_frames=True)")
+            return
+
+        frames_dir = self.session_dir / "01_manifest" / "frames"
+        if not frames_dir.is_dir():
+            logger.debug(
+                "Frame prune: frames dir not found (%s) — nothing to do",
+                frames_dir,
+            )
+            return
+
+        keep = {
+            Path(r.frame_path).name
+            for r in det_results
+            if r.has_detections
+        }
+
+        if not keep:
+            logger.warning(
+                "Frame prune: 0 frames have detections — skipping prune so the "
+                "frames directory is not emptied. Inspect the run first."
+            )
+            return
+
+        image_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        removed = kept = 0
+        freed_bytes = 0
+        for p in frames_dir.iterdir():
+            if not p.is_file() or p.suffix.lower() not in image_exts:
+                continue
+            if p.name in keep:
+                kept += 1
+                continue
+            try:
+                freed_bytes += p.stat().st_size
+                p.unlink()
+                removed += 1
+            except OSError as exc:
+                logger.warning("Frame prune: could not delete %s (%s)", p, exc)
+
+        logger.info(
+            "Frame prune: kept %d detection frame(s), removed %d "
+            "(%.1f MB freed). manifest.json still lists all extracted frames.",
+            kept, removed, freed_bytes / 1e6,
+        )
+
     def _run_stage3(self, result: SessionResult, det_results: list, seg_path: Path):
         from pipeline.segmentor import Segmentor, SegmentorConfig
         if self.cfg.resume and seg_path.exists():
@@ -412,7 +490,10 @@ class Orchestrator:
         t0 = time.perf_counter()
         try:
             sam_weights = str(Path(_WEIGHTS_DIR) / "sam2.1_hiera_tiny.pt")
-            cfg = SegmentorConfig(weights=sam_weights, device=self._device)
+            cfg = SegmentorConfig(
+                weights=sam_weights, device=self._device,
+                save_debug=self.cfg.save_debug,
+            )
             seg_results = Segmentor(cfg).run(
                 det_results, output_dir=str(seg_path.parent)
             )
@@ -453,6 +534,8 @@ class Orchestrator:
                     r"C:\Facultate\pothole-detection\Pothole-Detection\ml\weights\mono_640x192",
                 ),
                 device = self._device,
+                save_debug = self.cfg.save_debug,
+                use_exact_mask_depth = self.cfg.use_exact_mask_depth,
             )
             dep_results = DepthEstimator(cfg).run(
                 seg_results, output_dir=str(depth_path.parent)
@@ -707,6 +790,21 @@ def main() -> None:
     parser.add_argument("--fps",        type=float, default=2.0)
     parser.add_argument("--dry_run_db", action="store_true")
     parser.add_argument("--resume",     action="store_true")
+    parser.add_argument(
+        "--save_debug", action="store_true",
+        help="Write per-stage debug images (boxes / mask overlay / disparity) "
+             "to <stage>/debug/ for frames that have detections",
+    )
+    parser.add_argument(
+        "--exact_mask_depth", action="store_true",
+        help="Use the exact SAM mask in Stage 4 depth extraction (changes "
+             "depth_norm / depth_confidence vs the validated default)",
+    )
+    parser.add_argument(
+        "--keep_all_frames", action="store_true",
+        help="Keep non-detection frames on disk (default: prune them after "
+             "Stage 2 so only detection frames remain)",
+    )
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
 
@@ -721,6 +819,9 @@ def main() -> None:
         fps         = args.fps,
         dry_run_db  = args.dry_run_db,
         resume      = args.resume,
+        save_debug  = args.save_debug,
+        use_exact_mask_depth = args.exact_mask_depth,
+        keep_all_frames      = args.keep_all_frames,
     )
 
     result = Orchestrator(cfg).run()

@@ -122,6 +122,11 @@ CROP_FRACTION = 0.6
 # Depth confidence threshold below which geometry proxy is used
 DEPTH_CONF_THRESHOLD = 0.4
 
+# Colormap for the disparity debug image. Monodepth2's own test_simple.py uses
+# matplotlib 'magma'. cv2.COLORMAP_MAGMA exists in modern OpenCV (>= 3.4); fall
+# back to COLORMAP_JET (always present) on older builds so this never crashes.
+_DEPTH_COLORMAP = getattr(cv2, "COLORMAP_MAGMA", cv2.COLORMAP_JET)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -157,6 +162,15 @@ class DepthEstimatorConfig:
     device:              str   = "cpu"
     depth_conf_threshold: float = DEPTH_CONF_THRESHOLD
     crop_fraction:       float = CROP_FRACTION
+    save_debug:          bool  = False   # write colourised disparity images to
+                                        # output_dir/debug/ for detection frames
+    use_exact_mask_depth: bool = False   # if True and the real SAM mask is
+                                        # available (orchestrator run), use it
+                                        # for the depth extraction region instead
+                                        # of the ellipse approximation. Default
+                                        # False to keep validated numbers stable.
+                                        # The debug overlay always uses the exact
+                                        # mask when present, regardless of this.
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +253,9 @@ class DepthBox:
     low_sam_quality:   bool
     # --- added by Stage 4 ---
     depth:             Optional[DepthEstimate]   # None if depth failed
+    # --- runtime-only handoff from Stage 3 (NOT serialised) ---
+    mask:        Optional["np.ndarray"] = field(default=None, repr=False, compare=False)
+    mask_origin: Optional[tuple]        = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         geom = self.geometry
@@ -634,6 +651,92 @@ def _geometry_proxy_depth(
 
 
 # ---------------------------------------------------------------------------
+# Debug / exact-mask helpers
+# ---------------------------------------------------------------------------
+
+def _reconstruct_mask(seg_box, img_h: int, img_w: int) -> Optional[np.ndarray]:
+    """
+    Rebuild a full-frame binary mask (uint8 0/255) from the tight crop that
+    Stage 3 attached in memory (seg_box.mask + seg_box.mask_origin).
+
+    Returns None when the exact mask is not available (e.g. a standalone
+    Stage 4 run loaded from segmentations.json, where masks are not stored).
+    """
+    crop   = getattr(seg_box, "mask", None)
+    origin = getattr(seg_box, "mask_origin", None)
+    if crop is None or origin is None:
+        return None
+    full = np.zeros((img_h, img_w), dtype=np.uint8)
+    y0, x0 = int(origin[0]), int(origin[1])
+    h, w   = crop.shape[:2]
+    y1, x1 = min(y0 + h, img_h), min(x0 + w, img_w)
+    full[y0:y1, x0:x1] = crop[: y1 - y0, : x1 - x0]
+    return full
+
+
+def _colourise_disparity(depth_map: np.ndarray) -> np.ndarray:
+    """
+    Map a relative disparity array to a BGR colour image for inspection.
+
+    Normalises with a 5th–95th percentile clip (same spirit as Monodepth2's
+    test_simple.py, which clips vmax at the 95th percentile) so a few extreme
+    pixels do not wash out the colour range. Higher disparity (closer to the
+    camera) maps to the bright end of the colormap.
+    """
+    finite = depth_map[np.isfinite(depth_map)]
+    if finite.size == 0:
+        return np.zeros((*depth_map.shape, 3), dtype=np.uint8)
+    vmin = float(np.percentile(finite, 5))
+    vmax = float(np.percentile(finite, 95))
+    if vmax <= vmin:
+        vmin, vmax = float(finite.min()), float(finite.max())
+        if vmax <= vmin:
+            vmax = vmin + 1e-6
+    norm = np.clip((depth_map - vmin) / (vmax - vmin), 0.0, 1.0)
+    u8   = (norm * 255.0).astype(np.uint8)
+    return cv2.applyColorMap(u8, _DEPTH_COLORMAP)
+
+
+def _draw_depth_debug(
+    depth_colour: np.ndarray,
+    boxes: list,
+    img_h: int,
+    img_w: int,
+) -> np.ndarray:
+    """
+    Draw bounding boxes, the exact mask contour (when available), and the
+    per-box depth_norm label on top of the colourised disparity image.
+
+    Boxes here are DepthBox objects that still carry the Stage 3 mask handoff
+    fields. White boxes and cyan contours read clearly on the magma colormap.
+    """
+    out = depth_colour.copy()
+    for db in boxes:
+        x1, y1, x2, y2 = int(db.x1), int(db.y1), int(db.x2), int(db.y2)
+        cv2.rectangle(out, (x1, y1), (x2, y2), (255, 255, 255), 1)
+
+        mask = _reconstruct_mask(db, img_h, img_w)
+        if mask is not None:
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            cv2.drawContours(out, contours, -1, (255, 255, 0), 1)
+
+        if db.depth is not None:
+            label = f"{db.class_name} d={db.depth.depth_norm:.2f}"
+        else:
+            label = db.class_name
+        (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        ly = max(y1 - 3, th + 3)
+        cv2.rectangle(out, (x1, ly - th - base), (x1 + tw, ly + base), (0, 0, 0), -1)
+        cv2.putText(
+            out, label, (x1, ly),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA,
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # DepthEstimator
 # ---------------------------------------------------------------------------
 
@@ -716,6 +819,12 @@ class DepthEstimator:
         """
         if self._encoder is None:
             self._load()
+
+        debug_dir: Optional[Path] = None
+        if output_dir and self.cfg.save_debug:
+            debug_dir = Path(output_dir) / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Disparity debug images will be saved to: %s", debug_dir)
 
         results: List[DepthResult] = []
         t_start = time.perf_counter()
@@ -835,15 +944,22 @@ class DepthEstimator:
                 )
 
                 if use_mask:
-                    # Reconstruct approximate mask from geometry
-                    approx_mask = _mask_from_geometry(
-                        seg_box.x1, seg_box.y1, seg_box.x2, seg_box.y2,
-                        compactness = geom.mask_compactness,
-                        img_h       = img_h,
-                        img_w       = img_w,
-                    )
+                    # Prefer the exact SAM mask when it was threaded through
+                    # from Stage 3 and the operator opted in; otherwise fall
+                    # back to the ellipse approximation (the validated default).
+                    extract_mask = None
+                    if self.cfg.use_exact_mask_depth:
+                        extract_mask = _reconstruct_mask(seg_box, img_h, img_w)
+
+                    if extract_mask is None:
+                        extract_mask = _mask_from_geometry(
+                            seg_box.x1, seg_box.y1, seg_box.x2, seg_box.y2,
+                            compactness = geom.mask_compactness,
+                            img_h       = img_h,
+                            img_w       = img_w,
+                        )
                     depth_est = _extract_depth_mask_region(
-                        depth_map, approx_mask, img_h, img_w,
+                        depth_map, extract_mask, img_h, img_w,
                         frame_min, frame_max,
                     )
                     if depth_est is not None:
@@ -879,6 +995,17 @@ class DepthEstimator:
                 depth_result.boxes.append(
                     _seg_box_to_depth_box(seg_box, depth=depth_est)
                 )
+
+            # Disparity debug image — one per detection frame.
+            # Only produced here, where a real Monodepth2 map exists (low-light
+            # and failed frames take the proxy/None paths above and are skipped).
+            if debug_dir is not None and depth_result.boxes:
+                depth_colour = _colourise_disparity(depth_map)
+                annotated    = _draw_depth_debug(
+                    depth_colour, depth_result.boxes, img_h, img_w
+                )
+                stem = Path(seg_result.frame_path).stem
+                cv2.imwrite(str(debug_dir / f"{stem}.jpg"), annotated)
 
             results.append(depth_result)
 
@@ -1041,6 +1168,8 @@ def _seg_box_to_depth_box(seg_box, depth: Optional[DepthEstimate]) -> DepthBox:
         geometry          = seg_box.geometry,
         low_sam_quality   = seg_box.low_sam_quality,
         depth             = depth,
+        mask              = getattr(seg_box, "mask", None),
+        mask_origin       = getattr(seg_box, "mask_origin", None),
     )
 
 
@@ -1108,6 +1237,16 @@ def main() -> None:
         help=f"Confidence threshold for geometry proxy fallback (default: {DEPTH_CONF_THRESHOLD})",
     )
     parser.add_argument(
+        "--save_debug", action="store_true",
+        help="Save colourised disparity images to output/debug/ for detection frames",
+    )
+    parser.add_argument(
+        "--exact_mask_depth", action="store_true",
+        help="Use the exact SAM mask (when available) for depth extraction "
+             "instead of the ellipse approximation. Changes depth_norm / "
+             "depth_confidence vs the validated default; off by default.",
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
@@ -1127,6 +1266,8 @@ def main() -> None:
         weights_dir          = args.weights_dir,
         device               = args.device,
         depth_conf_threshold = args.depth_conf_threshold,
+        save_debug           = args.save_debug,
+        use_exact_mask_depth = args.exact_mask_depth,
     )
     de = DepthEstimator(cfg)
     de.run(seg_results, output_dir=args.output)

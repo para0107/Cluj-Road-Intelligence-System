@@ -73,7 +73,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+import cv2   # used only for the optional debug overlay; already a project dependency
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Class colour map for debug overlays (BGR).
+# Mirrors _CLASS_COLOURS in segmentor.py so the detection and segmentation
+# debug images use the same colour per class. Kept local here to avoid a
+# module-level import dependency on segmentor.
+# ---------------------------------------------------------------------------
+_CLASS_COLOURS: dict[str, tuple] = {
+    "longitudinal_crack":        (0,   0,   255),   # red
+    "transverse_crack":          (0,   165, 255),   # orange
+    "alligator_crack":           (0,   255, 255),   # yellow
+    "repaired_crack":            (255, 0,   255),   # magenta
+    "pothole":                   (255, 0,   0),     # blue
+    "pedestrian_crossing_blur":  (0,   165, 255),   # orange
+    "lane_line_blur":            (0,   165, 255),   # orange
+    "manhole_cover":             (128, 128, 128),   # grey
+    "patchy_road":               (0,   255, 0),     # green
+    "rutting":                   (255, 255, 0),     # cyan
+}
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +222,7 @@ class DetectorConfig:
     imgsz:      int   = 640
     device:     str   = "cpu"
     batch_size: int   = 1
+    save_debug: bool  = False   # if True, write annotated frames to output_dir/debug/
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +330,42 @@ class DetectionResult:
 
 
 # ---------------------------------------------------------------------------
+# Debug overlay helper
+# ---------------------------------------------------------------------------
+
+def _draw_detections(
+    image_bgr,
+    boxes: List["BoundingBox"],
+):
+    """
+    Draw bounding boxes and class/confidence labels onto a copy of the frame.
+
+    Colours follow _CLASS_COLOURS. The returned image is a new array; the
+    input is not modified.
+    """
+    out = image_bgr.copy()
+    for b in boxes:
+        colour = _CLASS_COLOURS.get(b.class_name, (0, 255, 0))
+        x1, y1 = int(b.x1), int(b.y1)
+        x2, y2 = int(b.x2), int(b.y2)
+        cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
+
+        label = f"{b.class_name} {b.confidence:.2f}"
+        (tw, th), base = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+        )
+        ly = max(y1 - 4, th + 4)
+        cv2.rectangle(
+            out, (x1, ly - th - base), (x1 + tw, ly + base), colour, -1
+        )
+        cv2.putText(
+            out, label, (x1, ly),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Detector
 # ---------------------------------------------------------------------------
 class Detector:
@@ -405,6 +464,12 @@ class Detector:
         """
         self._load_model()
         self._validate_class_names()
+
+        debug_dir: Optional[Path] = None
+        if output_dir and self.cfg.save_debug:
+            debug_dir = Path(output_dir) / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Debug overlays will be saved to: %s", debug_dir)
 
         results: List[DetectionResult] = []
         n_frames      = len(frames)
@@ -514,6 +579,20 @@ class Detector:
                 boxes         = boxes,
             )
             results.append(result)
+
+            # Debug overlay — only for frames that actually have detections
+            if debug_dir is not None and boxes:
+                dbg_img = cv2.imread(frame.frame_path)
+                if dbg_img is None:
+                    logger.warning(
+                        "Debug: cannot read frame %s for overlay",
+                        frame.frame_path,
+                    )
+                else:
+                    annotated = _draw_detections(dbg_img, boxes)
+                    stem     = Path(frame.frame_path).stem
+                    out_jpg  = debug_dir / f"{stem}.jpg"
+                    cv2.imwrite(str(out_jpg), annotated)
 
             # Log every 10 frames, or any frame that has detections
             if idx % 10 == 0 or len(boxes) > 0:
@@ -703,6 +782,11 @@ def main() -> None:
         help="Inference device: cpu | cuda | cuda:0  (default: cpu)",
     )
     parser.add_argument(
+        "--save_debug", action="store_true",
+        help="Save annotated frames (boxes + labels) to output/debug/ "
+             "for frames that have at least one detection",
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG-level logging",
     )
@@ -721,6 +805,7 @@ def main() -> None:
         conf    = args.conf,
         iou     = args.iou,
         device  = args.device,
+        save_debug = args.save_debug,
     )
     detector = Detector(cfg)
     detector.run(frames, output_dir=args.output)
