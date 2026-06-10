@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Search, Download } from 'lucide-react'
-import { fetchDetections, updateDetectionStatus } from '../utils/api'
-import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS } from '../utils/constants'
+import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Download } from 'lucide-react'
+import { fetchDetections, updateDetectionStatus, deleteDetectionsBulk } from '../utils/api'
+import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS } from '../utils/constants'
 
 const DAMAGE_TYPES = [
   'longitudinal_crack','transverse_crack','alligator_crack','repaired_crack',
@@ -39,6 +39,8 @@ export default function ExplorerPage() {
   const [data,    setData]    = useState(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState(null)
+  const [selectedIds, setSelectedIds] = useState([])
+  const [deleteSurveyLog, setDeleteSurveyLog] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -66,9 +68,14 @@ export default function ExplorerPage() {
 
   useEffect(() => { load() }, [load])
 
+  useEffect(() => {
+    setSelectedIds([])
+  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo, sortCol, sortDir])
+
   // Reset to page 1 when filters change
-  const applyFilter = () => { setPage(1); load() }
+  const applyFilter = () => { setSelectedIds([]); setPage(1); load() }
   const clearFilters = () => {
+    setSelectedIds([])
     setDamageType(''); setSeverityMin(''); setSeverityMax('')
     setDateFrom(''); setDateTo(''); setPage(1)
   }
@@ -78,6 +85,7 @@ export default function ExplorerPage() {
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1
 
   const toggleSort = (col) => {
+    setSelectedIds([])
     setPage(1) // Reset to page 1 on sort change
     if (sortCol === col) {
       setSortDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -98,7 +106,51 @@ export default function ExplorerPage() {
     }
   }
 
+  const toggleSelected = (id) => {
+    setSelectedIds(prev => (
+      prev.includes(id)
+        ? prev.filter(selectedId => selectedId !== id)
+        : [...prev, id]
+    ))
+  }
+
+  const selectAllVisible = () => {
+    const visibleIds = items.map(item => item.id)
+    if (!visibleIds.length) return
+
+    const allVisibleSelected = visibleIds.every(id => selectedIds.includes(id))
+    setSelectedIds(prev => (
+      allVisibleSelected
+        ? prev.filter(id => !visibleIds.includes(id))
+        : Array.from(new Set([...prev, ...visibleIds]))
+    ))
+  }
+
+  const handleBulkDelete = async () => {
+    if (!selectedIds.length) return
+
+    const confirmMessage = deleteSurveyLog
+      ? `Delete ${selectedIds.length} selected detections and matching survey_log rows?`
+      : `Delete ${selectedIds.length} selected detections?`
+
+    if (!window.confirm(confirmMessage)) return
+
+    try {
+      setLoading(true)
+      await deleteDetectionsBulk(selectedIds, deleteSurveyLog)
+      setSelectedIds([])
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo
+  const visibleIds = items.map(item => item.id)
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id))
+  const selectedCount = selectedIds.length
 
   return (
     <div style={styles.page}>
@@ -178,17 +230,46 @@ export default function ExplorerPage() {
 
           </div>
 
-          {hasFilters && (
-            <button style={styles.clearBtn} onClick={clearFilters}>
-              <X size={12} /> Clear
-            </button>
-          )}
+          <div style={styles.filterActions}>
+            {selectedCount > 0 && (
+              <div style={styles.bulkActions}>
+                <span style={styles.bulkCount}>{selectedCount} selected</span>
+                <label style={styles.bulkCheckLabel}>
+                  <input
+                    type="checkbox"
+                    checked={deleteSurveyLog}
+                    onChange={e => setDeleteSurveyLog(e.target.checked)}
+                    style={styles.bulkCheckbox}
+                  />
+                  Also delete survey_log
+                </label>
+                <button style={styles.deleteBtn} onClick={handleBulkDelete}>
+                  Delete selected
+                </button>
+              </div>
+            )}
+
+            {hasFilters && (
+              <button style={styles.clearBtn} onClick={clearFilters}>
+                <X size={12} /> Clear
+              </button>
+            )}
+          </div>
         </div>
 
         {/* ── Table ──────────────────────────────────────────────── */}
         <div style={styles.tableWrap}>
           {/* Head */}
           <div style={styles.tableHead}>
+            <div style={{ ...styles.th, justifyContent: 'center' }}>
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={selectAllVisible}
+                style={styles.rowCheckbox}
+                aria-label="Select all detections on this page"
+              />
+            </div>
             {[
               { key: 'damage_type',    label: 'Class'       },
               { key: 'severity',       label: 'Severity'    },
@@ -233,8 +314,19 @@ export default function ExplorerPage() {
                 style={{
                   ...styles.tableRow,
                   background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)',
+                  boxShadow: selectedIds.includes(item.id) ? 'inset 0 0 0 1px var(--accent)' : 'none',
                 }}
               >
+                <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(item.id)}
+                    onChange={() => toggleSelected(item.id)}
+                    style={styles.rowCheckbox}
+                    aria-label={`Select detection ${item.id}`}
+                  />
+                </div>
+
                 {/* Class */}
                 <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 7 }}>
                   <span style={{
@@ -365,6 +457,7 @@ const styles = {
     fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em',
   },
   headerRight: { display: 'flex', alignItems: 'center' },
+  filterActions: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   exportBtn: {
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '6px 14px', background: 'var(--accent-dim)',
@@ -405,6 +498,34 @@ const styles = {
     color: 'var(--red)', fontSize: 11, cursor: 'pointer',
     fontFamily: 'var(--font-mono)', fontWeight: 700,
   },
+  bulkActions: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '6px 10px', borderRadius: 'var(--radius)',
+    background: 'rgba(255,68,68,0.06)', border: '1px solid rgba(255,68,68,0.2)',
+    flexWrap: 'wrap',
+  },
+  bulkCount: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: 11,
+    fontWeight: 700,
+    color: 'var(--text)',
+  },
+  bulkCheckLabel: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    fontSize: 11, color: 'var(--text-muted)',
+    cursor: 'pointer', userSelect: 'none',
+  },
+  bulkCheckbox: {
+    width: 14, height: 14,
+    cursor: 'pointer', accentColor: 'var(--accent)',
+  },
+  deleteBtn: {
+    display: 'flex', alignItems: 'center', gap: 5,
+    padding: '5px 10px', background: 'rgba(255,68,68,0.14)',
+    border: '1px solid rgba(255,68,68,0.35)', borderRadius: 'var(--radius)',
+    color: 'var(--red)', fontSize: 11, cursor: 'pointer',
+    fontFamily: 'var(--font-mono)', fontWeight: 700,
+  },
 
   tableWrap: {
     background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -425,6 +546,12 @@ const styles = {
     textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4,
   },
   td: { padding: '10px 12px', fontSize: 13, color: 'var(--text)', alignSelf: 'center' },
+  rowCheckbox: {
+    width: 15,
+    height: 15,
+    cursor: 'pointer',
+    accentColor: 'var(--accent)',
+  },
 
   tableLoading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -16,6 +16,14 @@ export const fetchDetectionById = (id) =>
 export const updateDetectionStatus = (id, isFixed) =>
   api.patch(`/detections/${id}/status`, { is_fixed: isFixed }).then(r => r.data)
 
+export const deleteDetectionsBulk = (ids, deleteSurveyLog = false) =>
+  api.delete('/detections/bulk', {
+    data: {
+      ids,
+      delete_survey_log: deleteSurveyLog,
+    },
+  }).then(r => r.data)
+
 export const fetchNearby = (lat, lon, radius_m = 200, limit = 50) =>
   api.get('/detections/nearby', { params: { latitude: lat, longitude: lon, radius_m, limit } })
      .then(r => r.data)

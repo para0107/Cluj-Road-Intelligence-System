@@ -20,8 +20,14 @@ from sqlalchemy.orm import Session
 from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID
 
 from backend.database import get_db
-from backend.models import Detection
-from backend.schemas import DetectionRead, DetectionListResponse, DetectionStatusUpdate
+from backend.models import Detection, SurveyLog
+from backend.schemas import (
+    DetectionRead,
+    DetectionListResponse,
+    DetectionStatusUpdate,
+    DetectionDeleteRequest,
+    DetectionDeleteResponse,
+)
 
 router = APIRouter()
 
@@ -133,3 +139,48 @@ def update_detection_status(
     db.commit()
     db.refresh(detection)
     return detection
+
+
+@router.delete("/detections/bulk", response_model=DetectionDeleteResponse)
+def delete_detections_bulk(
+    payload: DetectionDeleteRequest,
+    db: Session = Depends(get_db),
+):
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="At least one detection id is required.")
+
+    rows = (
+        db.query(Detection.id, Detection.survey_date)
+        .filter(Detection.id.in_(payload.ids))
+        .all()
+    )
+
+    existing_ids = {row.id for row in rows}
+    deleted_survey_dates = sorted({row.survey_date for row in rows if row.survey_date})
+    missing_ids = [detection_id for detection_id in payload.ids if detection_id not in existing_ids]
+
+    deleted_detections = (
+        db.query(Detection)
+        .filter(Detection.id.in_(existing_ids))
+        .delete(synchronize_session=False)
+        if existing_ids
+        else 0
+    )
+
+    deleted_survey_logs = 0
+    if payload.delete_survey_log and deleted_survey_dates:
+        deleted_survey_logs = (
+            db.query(SurveyLog)
+            .filter(SurveyLog.survey_date.in_(deleted_survey_dates))
+            .delete(synchronize_session=False)
+        )
+
+    db.commit()
+
+    return DetectionDeleteResponse(
+        requested_count=len(payload.ids),
+        deleted_detections=deleted_detections,
+        deleted_survey_logs=deleted_survey_logs,
+        deleted_survey_dates=deleted_survey_dates,
+        missing_ids=missing_ids,
+    )

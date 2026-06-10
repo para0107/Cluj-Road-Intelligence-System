@@ -75,6 +75,19 @@ class DetectionStatusUpdate(BaseModel):
     is_fixed: bool
 
 
+class DetectionDeleteRequest(BaseModel):
+    ids: List[UUID]
+    delete_survey_log: bool = False
+
+
+class DetectionDeleteResponse(BaseModel):
+    requested_count: int
+    deleted_detections: int
+    deleted_survey_logs: int
+    deleted_survey_dates: List[date]
+    missing_ids: List[UUID]
+
+
 # ─────────────────────────────────────────────
 # List response with pagination
 # ─────────────────────────────────────────────
