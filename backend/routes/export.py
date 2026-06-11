@@ -43,16 +43,16 @@ def export_csv(db: Session = Depends(get_db)):
         writer.writerow([
             det.id,
             det.damage_type,
-            round(det.confidence, 4) if det.confidence else "",
-            round(det.latitude, 6) if det.latitude else "",
-            round(det.longitude, 6) if det.longitude else "",
+            round(det.confidence, 4) if det.confidence is not None else "",
+            round(det.latitude, 6) if det.latitude is not None else "",
+            round(det.longitude, 6) if det.longitude is not None else "",
             det.severity,
-            round(det.depth_estimate_cm, 2) if det.depth_estimate_cm else "",
-            round(det.surface_area_cm2, 2) if det.surface_area_cm2 else "",
+            round(det.depth_estimate_cm, 2) if det.depth_estimate_cm is not None else "",
+            round(det.surface_area_cm2, 2) if det.surface_area_cm2 is not None else "",
             det.detection_count,
             det.first_detected,
             det.last_detected,
-            round(det.priority_score, 4) if det.priority_score else "",
+            round(det.priority_score, 4) if det.priority_score is not None else "",
             det.is_fixed
         ])
     

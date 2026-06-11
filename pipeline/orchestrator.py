@@ -449,13 +449,17 @@ class Orchestrator:
             self.cfg.video_path,
         )
         try:
-            from extract_gpx_from_video import extract
+            # Import BOTH helpers from the same module so a single GPSPoint
+            # type flows from extract() into _build_gpx_xml(). The pipeline
+            # copy is the canonical, fuller implementation (it also defines
+            # _build_gpx_xml); sourcing them from different module roots
+            # (pipeline vs scripts) risked a GPSPoint-type mismatch.
+            from pipeline.extract_gpx_from_video import extract, _build_gpx_xml
             mp4_path = Path(self.cfg.video_path)
             points, strategy = extract(mp4_path)
 
             # Write the .gpx alongside the video file
             gpx_path = mp4_path.with_suffix(".gpx")
-            from scripts.extract_gpx_from_video import _build_gpx_xml
             gpx_xml = _build_gpx_xml(points, source_name=mp4_path.stem)
             gpx_path.write_text(gpx_xml, encoding="utf-8")
 
@@ -747,9 +751,9 @@ class Orchestrator:
                     (survey_date, started_at, status, video_files)
                 VALUES (%s, %s, 'running', %s)
                 ON CONFLICT (survey_date) DO UPDATE
-                    SET started_at  = EXCLUDED.started_at,
-                        status      = 'running',
-                        video_files = survey_log.video_files || EXCLUDED.video_files
+                    SET status      = 'running',
+                        video_files = COALESCE(survey_log.video_files, '[]'::jsonb)
+                                      || EXCLUDED.video_files
                 RETURNING id;
                 """,
                 (
@@ -787,10 +791,10 @@ class Orchestrator:
                 UPDATE survey_log
                 SET    finished_at        = %s,
                        status             = %s,
-                       frames_processed   = %s,
-                       detections_found   = %s,
-                       new_detections     = %s,
-                       updated_detections = %s,
+                       frames_processed   = COALESCE(frames_processed,   0) + %s,
+                       detections_found   = COALESCE(detections_found,   0) + %s,
+                       new_detections     = COALESCE(new_detections,     0) + %s,
+                       updated_detections = COALESCE(updated_detections, 0) + %s,
                        error_message      = %s
                 WHERE  id = %s;
                 """,

@@ -17,6 +17,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID
 
 from backend.database import get_db
@@ -99,12 +100,20 @@ def detections_nearby(
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    radius_deg = radius_m / 111000.0
+    # Cast both operands to geography so ST_DWithin measures the radius in
+    # true metres (matching db_writer's upsert). Using raw geometry degrees
+    # would over-estimate the east–west extent at Cluj's latitude.
     point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
 
     items = (
         db.query(Detection)
-        .filter(ST_DWithin(Detection.geom, point, radius_deg))
+        .filter(
+            ST_DWithin(
+                Detection.geom.cast(Geography),
+                point.cast(Geography),
+                radius_m,
+            )
+        )
         .order_by(Detection.priority_score.desc())
         .limit(limit)
         .all()

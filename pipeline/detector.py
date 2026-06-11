@@ -216,7 +216,7 @@ class DetectorConfig:
     batch_size:
         Frames per forward pass. Keep at 1 for CPU; increase to 4-8 on GPU.
     """
-    weights:    str   = "ml/weights/rtdetr_l_nrdd2024.pt"
+    weights:    str   = "ml/weights/best.pt"
     conf:       float = 0.35
     iou:        float = 0.6
     imgsz:      int   = 640
@@ -761,7 +761,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--weights",
-        default="ml/weights/rtdetr_l_nrdd2024.pt",
+        default="ml/weights/best.pt",
         help="Path to RT-DETR-L .pt checkpoint",
     )
     parser.add_argument(

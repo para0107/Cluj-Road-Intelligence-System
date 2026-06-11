@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -84,6 +85,13 @@ _SESSIONS_DIR = _DATA_DIR / "processed" / "sessions"
 _JOBS_DIR     = _DATA_DIR / "jobs"          # job request drop folder
 
 _FPS          = float(os.getenv("PIPELINE_FPS", "2.0"))
+
+# A pending/running job that has shown no file activity (neither its job file
+# nor its session.json has been touched) for longer than this is treated as
+# dead — e.g. the host watcher crashed mid-run. A stale job no longer blocks
+# new uploads. The default is deliberately generous: the orchestrator rewrites
+# session.json after every stage, so a healthy long run is never flagged.
+_JOB_STALE_TIMEOUT_S = float(os.getenv("JOB_STALE_TIMEOUT_S", "7200"))
 
 
 def _ensure_dirs() -> None:
@@ -126,6 +134,33 @@ def _read_session_json(job_id: str) -> Optional[dict]:
         return None
 
 
+def _job_last_activity(job_file: Path, job_id: Optional[str]) -> float:
+    """
+    Most recent modification time (epoch seconds) across the job file and the
+    orchestrator's session.json for this job. 0.0 if neither can be stat()'d.
+    """
+    latest = 0.0
+    try:
+        latest = job_file.stat().st_mtime
+    except OSError:
+        pass
+    if job_id:
+        session_path = _SESSIONS_DIR / job_id / "session.json"
+        try:
+            latest = max(latest, session_path.stat().st_mtime)
+        except OSError:
+            pass
+    return latest
+
+
+def _job_is_stale(job_file: Path, job_id: Optional[str]) -> bool:
+    """True if a pending/running job has shown no activity within the timeout."""
+    last = _job_last_activity(job_file, job_id)
+    if last <= 0.0:
+        return False
+    return (time.time() - last) > _JOB_STALE_TIMEOUT_S
+
+
 def _active_job_id() -> Optional[str]:
     """
     Scan the jobs directory for a job whose status is 'pending' or 'running'.
@@ -133,6 +168,12 @@ def _active_job_id() -> Optional[str]:
 
     This replaces the in-process _RUNNING_JOBS set from the subprocess version.
     It is correct across container restarts because the state lives on disk.
+
+    A pending/running job that has gone silent for longer than
+    _JOB_STALE_TIMEOUT_S (e.g. the host watcher crashed mid-run) is treated as
+    dead and ignored, so one stuck job can no longer block all future uploads.
+    The watcher only ever picks up 'pending' jobs, so it will not re-run the
+    stale job either.
     """
     if not _JOBS_DIR.exists():
         return None
@@ -140,10 +181,19 @@ def _active_job_id() -> Optional[str]:
         try:
             with job_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            if data.get("status") in ("pending", "running"):
-                return data.get("job_id")
         except (json.JSONDecodeError, OSError):
             continue
+        if data.get("status") not in ("pending", "running"):
+            continue
+        job_id = data.get("job_id")
+        if _job_is_stale(job_file, job_id):
+            logger.warning(
+                "Job %s is %r but has had no activity for over %.0f s — "
+                "treating it as stale and allowing new uploads.",
+                job_id, data.get("status"), _JOB_STALE_TIMEOUT_S,
+            )
+            continue
+        return job_id
     return None
 
 

@@ -631,7 +631,12 @@ class Preprocessor:
             
             # Scenario A: Check if this GPX track was auto-extracted from this identical video container
             if Path(video_path).with_suffix(".gpx").name == Path(gps_path).name:
-                logger.info("Heuristic Engine | Verified embedded telemetry file match. Aligning video start directly to telemetry timeline.")
+                logger.warning(
+                    "Heuristic Engine | Verified embedded telemetry file match. "
+                    "Aligning video start directly to telemetry timeline "
+                    "(video_start_time forced to GPS track start %s).",
+                    gps_start.isoformat(),
+                )
                 video_start_time = gps_start
             else:
                 # Scenario B: External GPS tracks — test START-STAMP and END-STAMP rules against timezone drifts
@@ -650,9 +655,11 @@ class Preprocessor:
                     # we have successfully identified the timezone mismatch boundary.
                     if residual_drift < 45.0:
                         video_start_time = test_time - timedelta(hours=hours_offset)
-                        logger.info(
-                            "Heuristic Engine | Success! Auto-detected whole-hour timezone shift (%d hours) "
-                            "combined with a video %s convention. Synchronized start to: %s",
+                        logger.warning(
+                            "Heuristic Engine | Auto-detected whole-hour timezone shift (%d hours) "
+                            "combined with a video %s convention. ALL frame coordinates shifted "
+                            "accordingly — synchronized start to: %s. Verify GPS alignment if this "
+                            "looks wrong.",
                             hours_offset, timestamp_type, video_start_time.isoformat()
                         )
                         heuristic_resolved = True

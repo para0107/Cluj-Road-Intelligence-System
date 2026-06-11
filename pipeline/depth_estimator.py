@@ -986,11 +986,15 @@ class DepthEstimator:
                             depth_est.depth_confidence,
                             self.cfg.depth_conf_threshold,
                         )
+                        # Undo the count from whichever extraction path
+                        # produced the estimate we are now replacing, so the
+                        # summary tallies always sum to the box total.
+                        if depth_est.extraction_method == "mask_region":
+                            n_mask_region -= 1
+                        elif depth_est.extraction_method == "central_crop":
+                            n_central_crop -= 1
                         depth_est = proxy
                         n_proxy  += 1
-                        # Subtract the central_crop count we just added above
-                        if not use_mask:
-                            n_central_crop -= 1
 
                 depth_result.boxes.append(
                     _seg_box_to_depth_box(seg_box, depth=depth_est)
