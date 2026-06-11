@@ -726,6 +726,15 @@ _LON_PREFIX = _re.compile(
     _re.IGNORECASE,
 )
 
+# Boundary used to stop a labelled-coordinate search before the NEXT axis label.
+# Without it, a garbled latitude value (e.g. EasyOCR reading "47.050" as
+# "47.05O") fails to parse and the search reaches forward into the longitude
+# field, returning the longitude for BOTH axes — collapsing lat==lon and
+# throwing the whole survey to the wrong country.
+_NEXT_LABEL_RE = _re.compile(
+    r"(?:latitude|longitude|lat|long|lng|lon)", _re.IGNORECASE
+)
+
 # Vidometer timestamp: "2026-06-10 16:41:05" or "2026-06-10T16:41:05"
 _TS_RE = _re.compile(
     r"(\d{4})[/-](\d{2})[/-](\d{2})[T\s](\d{2}):(\d{2}):(\d{2})"
@@ -776,6 +785,11 @@ def _labeled_coord(text: str, prefix_re: "_re.Pattern", axis_hemis: tuple) -> Op
     if not m:
         return None
     window = text[m.end(): m.end() + 28]
+    # Truncate before the next axis label so this field cannot swallow the
+    # adjacent one's value when its own (e.g. a mis-OCR'd latitude) won't parse.
+    nxt = _NEXT_LABEL_RE.search(window)
+    if nxt:
+        window = window[:nxt.start()]
     cm = _HEMI_COORD_RE.search(window)
     if not cm:
         return None
@@ -877,6 +891,11 @@ def _parse_ocr_text(text: str) -> tuple[Optional[float], Optional[float], Option
         lat = None
     if lon is not None and not (-180.0 <= lon <= 180.0):
         lon = None
+
+    # lat exactly equal to lon is the signature of one field being back-filled
+    # from the other (garbled label value) — reject rather than emit a fake fix.
+    if lat is not None and lon is not None and lat == lon:
+        return None, None, ts
 
     return lat, lon, ts
 
@@ -1729,6 +1748,15 @@ def extract(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # The console banners below use Unicode glyphs (─ → ✓); the default Windows
+    # console codepage (cp1252) cannot encode them and would crash on print().
+    # Force UTF-8 on stdout/stderr where the runtime supports reconfigure().
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")        # type: ignore[attr-defined]
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(
         description=(
             "Extract GPS track from a dashcam MP4 and write a .gpx file. "
