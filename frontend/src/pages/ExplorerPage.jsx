@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Download } from 'lucide-react'
+import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Download, MapPin, Copy, Check } from 'lucide-react'
 import { fetchDetections, updateDetectionStatus, deleteDetectionsBulk } from '../utils/api'
 import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS } from '../utils/constants'
 
@@ -41,6 +41,7 @@ export default function ExplorerPage() {
   const [error,   setError]   = useState(null)
   const [selectedIds, setSelectedIds] = useState([])
   const [deleteSurveyLog, setDeleteSurveyLog] = useState(true)
+  const [copiedId, setCopiedId] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -89,8 +90,8 @@ export default function ExplorerPage() {
     setPage(1) // Reset to page 1 on sort change
     if (sortCol === col) {
       setSortDir(d => d === 'desc' ? 'asc' : 'desc')
-    } else { 
-      setSortCol(col); setSortDir('desc') 
+    } else {
+      setSortCol(col); setSortDir('desc')
     }
   }
 
@@ -103,6 +104,20 @@ export default function ExplorerPage() {
       }))
     } catch (e) {
       console.error("Failed to update status:", e)
+    }
+  }
+
+  // Copy "lat, lon" to the clipboard so a repair crew can paste the exact
+  // location into a maps app / work order. 6 decimals ≈ 0.1 m precision.
+  const handleCopyCoords = async (item) => {
+    if (item.latitude == null || item.longitude == null) return
+    const text = `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedId(item.id)
+      setTimeout(() => setCopiedId(c => (c === item.id ? null : c)), 1500)
+    } catch (e) {
+      console.error('Failed to copy coordinates:', e)
     }
   }
 
@@ -281,17 +296,18 @@ export default function ExplorerPage() {
         <div style={styles.tableWrap}>
           {/* Head */}
           <div style={styles.tableHead}>
-            <div style={{ ...styles.th, justifyContent: 'center' }}>Delete</div>
+            <div style={{ ...styles.th, justifyContent: 'center' }}>Select</div>
             {[
-              { key: 'damage_type',    label: 'Class'       },
-              { key: 'severity',       label: 'Severity'    },
-              { key: 'confidence',     label: 'Confidence'  },
-              { key: 'priority_score', label: 'Priority'    },
-              { key: 'detection_count',label: 'Seen'        },
+              { key: 'damage_type',     label: 'Class'          },
+              { key: 'severity',        label: 'Severity'       },
+              { key: 'confidence',      label: 'Confidence'     },
+              { key: 'priority_score',  label: 'Priority'       },
+              { key: 'detection_count', label: 'Seen'           },
+              { key: 'latitude',        label: 'GPS (Lat, Lon)' },
             ].map(col => (
               <div
                 key={col.key}
-                style={{ ...styles.th, cursor: 'pointer', userSelect: 'none', paddingLeft: 48 }}
+                style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }}
                 onClick={() => toggleSort(col.key)}
               >
                 {col.label}
@@ -319,6 +335,7 @@ export default function ExplorerPage() {
           {!loading && !error && items.map((item, i) => {
             const clsColor = CLASS_COLORS[item.damage_type] || '#888'
             const sevColor = SEVERITY_COLORS[item.severity] || '#888'
+            const hasCoords = item.latitude != null && item.longitude != null
             return (
               <div
                 key={item.id}
@@ -339,7 +356,7 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Class */}
-                <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 7, paddingLeft: 48 }}>
+                <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{
                     width: 8, height: 8, borderRadius: '50%',
                     background: clsColor, flexShrink: 0,
@@ -350,7 +367,7 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Severity */}
-                <div style={{ ...styles.td, paddingLeft: 48 }}>
+                <div style={styles.td}>
                   <span style={{
                     background: `${sevColor}20`, color: sevColor,
                     border: `1px solid ${sevColor}45`,
@@ -362,7 +379,7 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Confidence */}
-                <div style={{ ...styles.td, paddingLeft: 48 }}>
+                <div style={styles.td}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{
                       width: 48, height: 4, borderRadius: 2,
@@ -380,13 +397,34 @@ export default function ExplorerPage() {
                 </div>
 
                 {/* Priority */}
-                <div style={{ ...styles.td, paddingLeft: 48, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 12 }}>
+                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 12 }}>
                   {(item.priority_score || 0).toFixed(4)}
                 </div>
 
                 {/* Seen */}
-                <div style={{ ...styles.td, paddingLeft: 48, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                   {item.detection_count}×
+                </div>
+
+                {/* GPS coordinates (click to copy) */}
+                <div style={styles.td}>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyCoords(item)}
+                    style={styles.gpsCell}
+                    title={hasCoords ? 'Click to copy coordinates' : 'No GPS for this detection'}
+                    disabled={!hasCoords}
+                  >
+                    <MapPin size={12} style={{ color: clsColor, flexShrink: 0 }} />
+                    <span style={styles.gpsCoords}>
+                      {hasCoords
+                        ? `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
+                        : '—'}
+                    </span>
+                    {hasCoords && (copiedId === item.id
+                      ? <Check size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                      : <Copy  size={12} style={{ color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />)}
+                  </button>
                 </div>
 
                 {/* Fixed Checkbox */}
@@ -454,7 +492,10 @@ export default function ExplorerPage() {
   )
 }
 
-const COL = 'repeat(8, minmax(0, 1fr))'
+// Explicit per-column widths give every column its own breathing room and keep
+// the wide GPS column from being squeezed by the narrow numeric ones.
+// Order: Select · Class · Severity · Confidence · Priority · Seen · GPS · Fixed · Delete
+const COL = '56px minmax(150px,1.6fr) 96px 150px 110px 80px minmax(190px,1.5fr) 72px 96px'
 
 const styles = {
   page: { paddingTop: 48, minHeight: '100vh', background: 'var(--bg)' },
@@ -558,28 +599,42 @@ const styles = {
 
   tableWrap: {
     background: 'var(--bg-card)', border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)', overflow: 'hidden',
+    borderRadius: 'var(--radius-lg)', overflowX: 'auto',
   },
   tableHead: {
-    display: 'grid', gridTemplateColumns: COL,
+    display: 'grid', gridTemplateColumns: COL, columnGap: 10,
     background: 'var(--bg-card2)', borderBottom: '1px solid var(--border)',
+    minWidth: 'fit-content',
   },
   tableRow: {
-    display: 'grid', gridTemplateColumns: COL,
+    display: 'grid', gridTemplateColumns: COL, columnGap: 10,
     borderBottom: '1px solid var(--border)',
     transition: 'background 0.1s',
+    minWidth: 'fit-content',
   },
   th: {
-    padding: '10px 12px', fontSize: 10, fontFamily: 'var(--font-mono)',
+    padding: '12px 16px', fontSize: 10, fontFamily: 'var(--font-mono)',
     fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '.08em',
     textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4,
   },
-  td: { padding: '10px 12px', fontSize: 13, color: 'var(--text)', alignSelf: 'center' },
+  td: { padding: '12px 16px', fontSize: 13, color: 'var(--text)', alignSelf: 'center' },
   rowCheckbox: {
     width: 15,
     height: 15,
     cursor: 'pointer',
     accentColor: 'var(--accent)',
+  },
+  gpsCell: {
+    display: 'inline-flex', alignItems: 'center', gap: 7,
+    maxWidth: '100%', padding: '4px 8px',
+    background: 'var(--bg-card2)', border: '1px solid var(--border-bright)',
+    borderRadius: 'var(--radius)', cursor: 'pointer',
+    fontFamily: 'var(--font-mono)',
+  },
+  gpsCoords: {
+    fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-dim)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    letterSpacing: '.02em',
   },
   rowDeleteBtn: {
     display: 'inline-flex',
