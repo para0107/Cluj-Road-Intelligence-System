@@ -1,0 +1,201 @@
+"""
+ml/detection/data_prep/coco_to_yolo.py
+
+PURPOSE:
+    Converts merged COCO JSON files (train/val/test) to Ultralytics YOLO format.
+
+    Ultralytics RT-DETR does NOT accept COCO JSON paths in dataset.yaml.
+    It expects:
+        - dataset.yaml pointing to image directories
+        - One .txt label file per image, same stem, in a parallel 'labels/' folder
+
+    This script:
+        1. Reads data/detection/{split}.json
+        2. For each image, writes a YOLO .txt label file next to the image
+           (or in a parallel labels/ directory)
+        3. Writes data/detection/dataset.yaml with absolute image directory paths
+
+    YOLO label format (one line per bbox):
+        <class_id> <cx> <cy> <w> <h>   (all normalised 0-1)
+
+    Images are already on disk at the absolute paths stored in file_name.
+    No images are copied or moved.
+
+USAGE:
+    python ml/detection/data_prep/coco_to_yolo.py
+
+OUTPUT:
+    For each image at:
+        C:\\...\\rdd2022\\train\\images\\China_Drone_000001.jpg
+    Writes label at:
+        C:\\...\\rdd2022\\train\\labels\\China_Drone_000001.txt
+
+    For each image at:
+        C:\\...\\pothole600\\images\\potholes10.png
+    Writes label at:
+        C:\\...\\pothole600\\labels\\potholes10.txt
+
+    Also writes:
+        data/detection/dataset.yaml   (Ultralytics-compatible, image dirs)
+        data/detection/train_images.txt   (list of all train image paths)
+        data/detection/val_images.txt
+        data/detection/test_images.txt
+"""
+
+import json
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+from tqdm import tqdm
+from loguru import logger
+
+ROOT      = Path(__file__).resolve().parents[3]
+DATA_DIR  = ROOT / "data" / "detection"
+
+SPLITS = ["train", "val", "test"]
+
+CATEGORIES = [
+    "longitudinal_crack",
+    "transverse_crack",
+    "alligator_crack",
+    "pothole",
+    "patch_deterioration",
+]
+
+
+def coco_bbox_to_yolo(bbox, img_w, img_h):
+    """
+    Convert COCO bbox [x, y, w, h] (absolute pixels) to
+    YOLO format [cx, cy, w, h] (normalised 0-1).
+    Clamps all values to [0, 1].
+    """
+    x, y, w, h = bbox
+    cx = (x + w / 2) / img_w
+    cy = (y + h / 2) / img_h
+    nw = w / img_w
+    nh = h / img_h
+    # clamp
+    cx = max(0.0, min(1.0, cx))
+    cy = max(0.0, min(1.0, cy))
+    nw = max(0.0, min(1.0, nw))
+    nh = max(0.0, min(1.0, nh))
+    return cx, cy, nw, nh
+
+
+def convert_split(split: str):
+    json_path = DATA_DIR / f"{split}.json"
+    if not json_path.exists():
+        logger.warning(f"  [{split}] JSON not found: {json_path} — skipping")
+        return []
+
+    logger.info(f"  [{split}] Loading {json_path.name} ...")
+    with open(json_path) as f:
+        coco = json.load(f)
+
+    # Build lookup: image_id → image info
+    images = {img["id"]: img for img in coco["images"]}
+
+    # Build lookup: image_id → list of annotations
+    ann_by_image = defaultdict(list)
+    for ann in coco["annotations"]:
+        ann_by_image[ann["image_id"]].append(ann)
+
+    image_paths = []
+    missing     = 0
+    written     = 0
+    skipped_ann = 0
+
+    for img_id, img_info in tqdm(images.items(), desc=f"  {split}", leave=True):
+        img_path = Path(img_info["file_name"])
+
+        if not img_path.exists():
+            missing += 1
+            continue
+
+        img_w = img_info["width"]
+        img_h = img_info["height"]
+
+        # Label file goes in a 'labels' folder parallel to 'images'
+        # e.g.  .../rdd2022/train/images/foo.jpg  →  .../rdd2022/train/labels/foo.txt
+        #        .../pothole600/images/bar.png     →  .../pothole600/labels/bar.txt
+        label_dir = img_path.parent.parent / "labels"
+        label_dir.mkdir(parents=True, exist_ok=True)
+        label_path = label_dir / (img_path.stem + ".txt")
+
+        lines = []
+        for ann in ann_by_image[img_id]:
+            cat_id = ann["category_id"]   # 0-4
+            bbox   = ann["bbox"]          # [x, y, w, h] absolute
+            w, h   = bbox[2], bbox[3]
+            if w <= 0 or h <= 0:
+                skipped_ann += 1
+                continue
+            cx, cy, nw, nh = coco_bbox_to_yolo(bbox, img_w, img_h)
+            lines.append(f"{cat_id} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+
+        # Write label file (empty file = image with no annotations, valid for training)
+        label_path.write_text("\n".join(lines))
+        image_paths.append(str(img_path))
+        written += 1
+
+    # Write image list txt file
+    list_path = DATA_DIR / f"{split}_images.txt"
+    list_path.write_text("\n".join(image_paths))
+
+    logger.success(
+        f"  [{split}] {written} labels written, "
+        f"{missing} images missing, "
+        f"{skipped_ann} invalid bboxes skipped"
+    )
+    logger.info(f"  [{split}] Image list → {list_path.name}")
+    return image_paths
+
+
+def write_dataset_yaml():
+    """
+    Write dataset.yaml pointing to the image list .txt files.
+    Ultralytics accepts .txt files containing one absolute image path per line.
+    """
+    content = f"""# data/detection/dataset.yaml
+# Generated by ml/detection/data_prep/coco_to_yolo.py
+# Uses image-list .txt files — compatible with Ultralytics RT-DETR 8.2+
+
+path: {ROOT.as_posix()}
+
+train: data/detection/train_images.txt
+val:   data/detection/val_images.txt
+test:  data/detection/test_images.txt
+
+nc: 5
+
+names:
+  0: longitudinal_crack
+  1: transverse_crack
+  2: alligator_crack
+  3: pothole
+  4: patch_deterioration
+"""
+    yaml_path = DATA_DIR / "dataset.yaml"
+    yaml_path.write_text(content)
+    logger.success(f"  dataset.yaml → {yaml_path}")
+
+
+def main():
+    logger.info("── COCO JSON → YOLO labels conversion ─────────────────────")
+    logger.info(f"  Root : {ROOT}")
+    logger.info(f"  Data : {DATA_DIR}")
+
+    for split in SPLITS:
+        convert_split(split)
+
+    write_dataset_yaml()
+
+    logger.success("Conversion complete.")
+    logger.info("")
+    logger.info("Next step:")
+    logger.info("  python ml/detection/train.py --smoke_test")
+
+
+if __name__ == "__main__":
+    main()

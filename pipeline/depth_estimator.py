@@ -157,8 +157,8 @@ class DepthEstimatorConfig:
         Fraction of the bounding box used for central-crop depth extraction
         when no SAM mask geometry is available. Default 0.6.
     """
-    monodepth_root:      str   = r"C:\Facultate\pothole-detection\Monodepth"
-    weights_dir:         str   = r"C:\Facultate\pothole-detection\Pothole-Detection\ml\weights\mono_640x192"
+    monodepth_root:      str   = "ml/weights"
+    weights_dir:         str   = "ml/weights/mono_640x192"
     device:              str   = "cpu"
     depth_conf_threshold: float = DEPTH_CONF_THRESHOLD
     crop_fraction:       float = CROP_FRACTION
@@ -1220,12 +1220,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--monodepth_root",
-        default=r"C:\Facultate\pothole-detection\Monodepth",
-        help="Path to cloned Monodepth2 repository",
+        default="ml/weights",
+        help="Directory containing the importable networks/ package "
+             "(bundled at ml/weights/networks/) or a cloned Monodepth2 repo",
     )
     parser.add_argument(
         "--weights_dir",
-        default=r"C:\Facultate\pothole-detection\Pothole-Detection\ml\weights\mono_640x192",
+        default="ml/weights/mono_640x192",
         help="Directory containing encoder.pth and depth.pth",
     )
     parser.add_argument(

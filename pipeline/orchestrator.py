@@ -594,11 +594,11 @@ class Orchestrator:
             cfg = DepthEstimatorConfig(
                 monodepth_root = os.environ.get(
                     "MONODEPTH_ROOT",
-                    r"C:\Facultate\pothole-detection\Monodepth",
+                    "ml/weights",
                 ),
                 weights_dir = os.environ.get(
                     "MONODEPTH_WEIGHTS_DIR",
-                    r"C:\Facultate\pothole-detection\Pothole-Detection\ml\weights\mono_640x192",
+                    "ml/weights/mono_640x192",
                 ),
                 device = self._device,
                 save_debug = self.cfg.save_debug,

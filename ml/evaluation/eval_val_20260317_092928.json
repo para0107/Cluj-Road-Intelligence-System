@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-03-17T09:29:28.377286",
+  "weights": "runs\\detect\\rtdetr_road\\Kaggle\\Run_39_58\\detect\\rtdetr_road\\weights\\best.pt",
+  "split": "val",
+  "tta": false,
+  "mAP50": 0.2719001909201708,
+  "mAP50-95": 0.12718087699214004,
+  "precision": 0.313440290866803,
+  "recall": 0.3755079767801337,
+  "per_class_AP": {
+    "longitudinal_crack": 0.0,
+    "transverse_crack": 0.0,
+    "alligator_crack": 0.0,
+    "pothole": 0.0,
+    "patch_deterioration": 0.0
+  }
+}

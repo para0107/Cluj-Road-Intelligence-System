@@ -376,13 +376,161 @@ docker-compose.yml  .env  requirements.txt (full host/ML deps)  CLAUDE.md
 
 ## Getting started
 
+### What is included in the delivered package
+
+The delivered ZIP contains everything needed to run, **except the `ml/` folder**:
+`backend/`, `frontend/`, `pipeline/`, `scripts/`, `db/`, `docker-compose.yml`,
+and a ready-to-use **`.env`** (no manual configuration needed for the
+containers).
+
+**Excluded from the ZIP (must be added separately to run the pipeline):**
+
+The entire **`ml/`** folder is not shipped. To run the host GPU pipeline you must
+recreate `ml/weights/` with the following, all at the **exact** paths shown in
+*Model weights* below:
+
+- **`ml/weights/best.pt`** — RT-DETR-L detection checkpoint (download).
+- **`ml/weights/sam2.1_hiera_tiny.pt`** — SAM 2.1 Tiny checkpoint (download).
+- **`ml/weights/mono_640x192/`** — Monodepth2 depth weights (download + extract).
+- **`ml/weights/networks/`** — the Monodepth2 network definition `.py` files
+  (code, obtained from the Monodepth2 repo). The depth stage imports this as the
+  `networks` package.
+
+All four are documented with exact sources and placement in *Model weights*.
+
+> The **Docker stack (db + backend + frontend) runs without `ml/` at all** — the
+> web app, map, statistics, explorer, and database work out of the box with just
+> `docker compose up --build`. `ml/` is only needed by the **host GPU pipeline**
+> that processes uploaded videos.
+
 ### Prerequisites
 
-- **Docker + Docker Compose** (for db / backend / frontend)
-- **Windows host with an NVIDIA GPU** + CUDA-capable PyTorch (for the pipeline)
-- A Python **venv** at `.venv/` with the host/ML deps from `requirements.txt`
-- Model weights in `ml/weights/`: `best.pt` (RT-DETR-L), `sam2.1_hiera_tiny.pt`, `mono_640x192/`
-- The **Monodepth2 repo** cloned separately (see `MONODEPTH_ROOT` in `.env`)
+- **Docker + Docker Compose** — for the db / backend / frontend stack. *This is
+  all you need to run the web application.*
+- For the **inference pipeline** only:
+  - **Windows host with an NVIDIA GPU** + CUDA-capable PyTorch
+  - A Python **venv** at `.venv/` with the host/ML deps from `requirements.txt`
+  - **Model weights** placed under `ml/weights/` (see below)
+  - The Monodepth2 `networks/` code at `ml/weights/networks/` **or** a cloned
+    Monodepth2 repo pointed to by `MONODEPTH_ROOT` — see *Model weights* below
+
+### Model weights (downloaded separately)
+
+None of the files below are in the ZIP. Create the `ml/weights/` directory and
+populate it so it matches this layout **exactly** — the pipeline reads these
+paths (relative to the project root) as configured in `.env`, so the names and
+nesting must match precisely:
+
+```
+ml/weights/
+├── best.pt                    ← RT-DETR-L, fine-tuned on N-RDD2024 (detection)
+├── sam2.1_hiera_tiny.pt       ← SAM 2.1 Tiny (segmentation)
+├── mono_640x192/              ← Monodepth2 weights (depth)
+│   ├── encoder.pth
+│   ├── depth.pth
+│   ├── pose.pth
+│   └── pose_encoder.pth
+└── networks/                  ← Monodepth2 network code (depth) — see below
+    ├── __init__.py
+    ├── resnet_encoder.py
+    ├── depth_decoder.py
+    ├── pose_decoder.py
+    ├── pose_cnn.py
+    └── layers.py
+```
+
+#### 1. Downloadable checkpoints
+
+| Model | Destination | Source |
+|-------|-------------|--------|
+| **RT-DETR-L** (detection) | `ml/weights/best.pt` | https://www.kaggle.com/models/paraschiv/rt-detr-l-fine-tuned-on-nrdd2024 |
+| **SAM 2.1 Tiny** (segmentation) | `ml/weights/sam2.1_hiera_tiny.pt` | https://www.kaggle.com/models/paraschiv/sam2-1-hiera-tiny-pt |
+| **Monodepth2 weights** (depth) | `ml/weights/mono_640x192/{encoder,depth,pose,pose_encoder}.pth` | Official release zip: https://storage.googleapis.com/niantic-lon-static/research/monodepth2/mono_640x192.zip — extract so the four `.pth` files sit **directly** under `ml/weights/mono_640x192/` |
+
+#### 2. Monodepth2 network code → `ml/weights/networks/`
+
+The depth stage does `import networks` from `MONODEPTH_ROOT` (which `.env` sets to
+`ml/weights`). The code comes from the official repo
+**https://github.com/nianticlabs/monodepth2**. Choose **one** method:
+
+**Method A — populate `ml/weights/networks/` (keeps the default `.env`):**
+
+```bash
+git clone https://github.com/nianticlabs/monodepth2.git
+mkdir -p ml/weights/networks
+# copy the package files + layers.py INTO the networks/ folder:
+cp monodepth2/networks/__init__.py        ml/weights/networks/
+cp monodepth2/networks/resnet_encoder.py  ml/weights/networks/
+cp monodepth2/networks/depth_decoder.py   ml/weights/networks/
+cp monodepth2/networks/pose_decoder.py    ml/weights/networks/
+cp monodepth2/networks/pose_cnn.py        ml/weights/networks/
+cp monodepth2/layers.py                   ml/weights/networks/   # repo root → into networks/
+```
+
+> **Important:** upstream `depth_decoder.py` imports `from layers import *` while
+> `layers.py` lives at the repo root. Because this project keeps `layers.py`
+> *inside* `networks/`, change that one import in
+> `ml/weights/networks/depth_decoder.py` to:
+> ```python
+> from networks.layers import *
+> ```
+> No other edits are needed. (`__init__.py` already imports `ResnetEncoder`,
+> `DepthDecoder`, `PoseDecoder`, `PoseCNN`.)
+
+**Method B — point `MONODEPTH_ROOT` at the clone (no file copying, no code edit):**
+
+Leave `ml/weights/networks/` empty, clone the repo anywhere, and in `.env` set:
+```
+MONODEPTH_ROOT=C:\path\to\monodepth2
+```
+Upstream is self-consistent (`layers.py` at its root), so `import networks`
+resolves without modification. The depth **weights** still go in
+`ml/weights/mono_640x192/`.
+
+After setup, verify the layout matches the tree above. If a weight or the
+`networks/` package is missing or misplaced, the corresponding pipeline stage
+fails to load its model.
+
+### Running the pipeline on a new machine — checklist
+
+The **web app needs none of this** — it is only required to actually process
+uploaded videos on a GPU host. All paths in `.env` are now **relative to the
+project root**, and the watcher runs the orchestrator from the project root, so
+there are **no machine-specific paths to edit** for a standard layout.
+
+1. **Have an NVIDIA GPU + CUDA-capable PyTorch on a host** (the watcher forces
+   `--device cuda`). Set `PIPELINE_DEVICE=cpu` in `.env` only for CPU testing.
+2. **Create the venv and install host/ML deps:**
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate          # Windows  (source .venv/bin/activate on Linux/macOS)
+   pip install -r requirements.txt
+   ```
+3. **Download and place the model weights** under `ml/weights/` exactly as in the
+   *Model weights* tree above (`best.pt`, `sam2.1_hiera_tiny.pt`,
+   `mono_640x192/*.pth`). See *Model weights → Downloadable checkpoints*.
+4. **Provide the Monodepth2 `networks/` code** — see *Model weights →
+   Monodepth2 network code*. Either populate `ml/weights/networks/` (Method A,
+   keeps the default `MONODEPTH_ROOT=ml/weights`) or clone the repo and point
+   `MONODEPTH_ROOT` at it (Method B).
+5. **Verify `.env` paths** (defaults are already correct for the standard
+   layout):
+   - `PROJECT_ROOT` — leave commented out; `job_watcher.py` auto-detects it.
+   - `WEIGHTS_DIR=ml/weights`, `MONODEPTH_ROOT=ml/weights`,
+     `MONODEPTH_WEIGHTS_DIR=ml/weights/mono_640x192` (relative — no edit needed).
+   - DB: host-run pipeline connects to `localhost:${POSTGRES_PORT}` (the `.env`
+     `DATABASE_URL` already uses this); the container backend uses `db:5432`.
+6. **Start the stack and the watcher:**
+   ```bash
+   docker compose up -d --build       # db + backend + frontend (schema auto-creates)
+   python pipeline/job_watcher.py     # host daemon — must stay running for uploads
+   ```
+7. **Upload a video** on the IngestionPage (http://localhost:3000/ingest) and
+   watch the seven stages progress.
+
+> The legacy validation scripts under `scripts/` (e.g. `validate_depth.py`) still
+> contain hardcoded absolute paths; they are research tools, not part of the
+> runtime, and are not needed to run the pipeline.
 
 ### 1. Bring up the containerised stack
 
@@ -397,7 +545,24 @@ docker compose down                     # stop (keeps pgdata volume)
 - Frontend: **http://localhost:3000** · Backend docs: **http://localhost:8000/docs**
 - Backend health: **http://localhost:8000/health**
 
-### 2. Initialise the database schema (once, host venv)
+### 2. Database schema — created automatically
+
+The schema is bootstrapped **automatically** the first time the `db` container
+starts on an empty volume. `db/init/01_schema.sql` is mounted into
+`/docker-entrypoint-initdb.d/`, so PostGIS runs it once (extensions + tables +
+indexes + trigger) before the backend connects. **You do not need to run
+anything for a fresh setup.**
+
+> The script only runs on a **fresh** `pgdata` volume. If you started the stack
+> before this file existed, reset the volume once:
+> ```bash
+> docker compose down -v && docker compose up -d --build
+> ```
+> (`-v` deletes the database volume — only do this when you want an empty DB.)
+
+`scripts/setup_db.py` remains available and is **equivalent** (same schema, fully
+idempotent). Use it only when running the DB outside Docker, or to re-apply the
+schema to an existing volume from the host venv:
 
 ```bash
 python scripts/setup_db.py    # postgis/pgcrypto extensions + tables + indexes + trigger
@@ -430,8 +595,12 @@ A single `.env` at the project root is loaded by `python-dotenv` everywhere and 
 
 - **Database**: `POSTGRES_DB / USER / PASSWORD / HOST / PORT`, `DATABASE_URL`
   *(see the port nuance above — `5433` on the host, `5432` inside Docker)*.
-- **Host paths (Windows, absolute)**: `PROJECT_ROOT`, `MONODEPTH_ROOT`, `MONODEPTH_WEIGHTS_DIR`,
-  `WEIGHTS_DIR`, `RAW_FOOTAGE_DIR`, `RAW_GPS_DIR` — not used inside containers.
+- **Host paths (relative to the project root)**: `MONODEPTH_ROOT=ml/weights`,
+  `MONODEPTH_WEIGHTS_DIR=ml/weights/mono_640x192`, `WEIGHTS_DIR=ml/weights`,
+  `RAW_FOOTAGE_DIR`, `RAW_GPS_DIR` — used only by the host pipeline (the watcher
+  runs the orchestrator from the project root so these resolve correctly), not
+  inside containers. `PROJECT_ROOT` is left **unset** so `job_watcher.py`
+  auto-detects it; set it only to override auto-detection.
 - **Container mount**: `PROJECT_DATA_DIR=/app/data` — must equal the compose bind-mount target;
   it is the prefix `job_watcher` strips when translating container → host paths.
 - **Weights**: `RTDETR_WEIGHTS=best.pt`, SAM `sam2.1_hiera_tiny.pt`, `mono_640x192/`.
@@ -528,7 +697,10 @@ Plus dataset/inspection helpers (`dataset_analysis.py`, `inspect_*.py`, `run_tok
 - **GPS accuracy depends on clock alignment** between the camera and the GPS logger. The
   preprocessor resolves the video start time from explicit input → MP4 `creation_time` → first GPS
   point, and includes heuristics for whole-hour/timezone drift.
-- **Some host paths are hardcoded Windows absolute paths** (e.g. Monodepth2 defaults).
+- **Pipeline paths are project-relative** and resolve from the project root (the
+  watcher runs the orchestrator with that working directory). The legacy
+  `scripts/validate_*.py` research tools still hardcode absolute paths, but they
+  are not part of the runtime.
 - **Enrichment stays gone** — no Nominatim/Overpass/Open-Meteo, no dropped columns.
 
 ---
