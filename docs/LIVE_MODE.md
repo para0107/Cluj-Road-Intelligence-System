@@ -54,21 +54,54 @@ lets you pick either path.
   de-duplicate (same class within 20 m / 30 s) so a pothole seen on 12
   consecutive frames produces one report, not twelve.
 
+## The lite pipeline — one instance per user, zero cloud cost
+
+`pipeline/live_pipeline.py` is a *softened* version of the 7-stage survey
+pipeline that runs on each user's own machine (this is how the system scales:
+users bring their own compute; the server is just a stateless aggregator):
+
+| Survey stage | Lite equivalent | Cost |
+|---|---|---|
+| 2 · RT-DETR detection | same `best.pt`, same per-class thresholds, fp16 @ imgsz 480 (or free ONNX export for CPU) | ~½ the FLOPs of the survey pass |
+| 3 · SAM geometry | Otsu-mask proxies with the *same* feature definitions (area / boundary Sobel sharpness / interior-vs-ring contrast / compactness) | ~0.4 ms per box, no VRAM |
+| 4 · Monodepth2 | the pipeline's own documented geometry-proxy fallback, verbatim | free |
+| 5 · Severity | **unmodified** `severity_classifier.classify_box` — same weights, same S1–S5 bands, marking classes still capped ≤ S2; `severity_confidence` honestly reports ~0.5 (proxy) | free |
+| 6 · Dedup | local per-class gap/cooldown + server-side `ST_DWithin` clustering | free |
+| 7 · DB write | `POST /api/live/reports` | one indexed query |
+
+Extra inference savings: **motion gating** (a 64×36 gray-diff skips frames
+where the car is stationary), frame stride (`--every`), and fp16. A one-time
+`--export-onnx [--quantize]` produces a CPU-friendly model for users without
+GPUs — all local, all free.
+
+## Accounts & roles
+
+All live actions require a signed-in account (JWT): `user` reports and votes,
+`municipality` (bound to a city) and `admin` can additionally resolve events
+and manage repairs; admins manage accounts at `/admin`. The starting admin is
+seeded at backend startup (`ADMIN_USERNAME`/`ADMIN_EMAIL`/`ADMIN_PASSWORD`).
+Edge agents authenticate with `--email/--password`, `--token`, or the
+`RIDS_EMAIL`/`RIDS_PASSWORD`/`RIDS_TOKEN` environment variables.
+
 ## Running the demo
 
 ```bash
-# 1. Stack up (backend now creates live tables on startup)
+# 1. Stack up (backend creates live + auth tables on startup)
 docker compose up -d --build
 
-# 2. Open the Live map
-#    http://localhost:3000/live
+# 2. Sign in at http://localhost:3000 (seed admin: tudypara) and open /live
 
 # 3a. Simulated fleet — no GPU or weights needed
-python pipeline/simulate_fleet.py --vehicles 6
+python pipeline/simulate_fleet.py --vehicles 6 --email <you> --password <pw>
 
-# 3b. Real edge camera — same baseline model as the survey pipeline
-python pipeline/live_camera.py --video data/raw/footage/drive.mp4 \
-    --gps data/raw/gps_logs/drive.gpx --device-id car-01 --device cuda
+# 3b. Real per-user lite pipeline — same baseline model as the survey pipeline
+python pipeline/live_pipeline.py --video data/raw/footage/drive.mp4 \
+    --gps data/raw/gps_logs/drive.gpx --email <you> --password <pw>
+
+# 3c. CPU-only user (one-time free export, then run on ONNX)
+python pipeline/live_pipeline.py --export-onnx
+python pipeline/live_pipeline.py --video drive.mp4 --lat 46.77 --lon 23.62 \
+    --weights ml/weights/best.onnx --device cpu --email <you> --password <pw>
 ```
 
 Watch events appear as `unverified`, then flip to `confirmed`/`verified` as
@@ -83,3 +116,8 @@ other vehicles drive through the same hotspots. Click an event to vote.
 | `LIVE_CONFIRM_DEVICES` | 2 | distinct devices → `confirmed` |
 | `LIVE_VERIFY_DEVICES` | 3 | distinct devices → `verified` |
 | `LIVE_DISPUTE_MIN` | 2 | min distinct disputers to remove an event |
+| `JWT_SECRET` | dev value | JWT signing key — change before exposing the API |
+| `ADMIN_USERNAME/EMAIL/PASSWORD` | seed admin | starting admin account |
+| `GOOGLE_CLIENT_ID` | empty | enables free Google sign-in when set |
+
+See `docs/FREE_DEPLOYMENT.md` for zero-cost hosting options.

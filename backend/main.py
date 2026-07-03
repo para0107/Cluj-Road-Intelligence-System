@@ -19,9 +19,10 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from backend.database import check_connection, engine, Base
-from backend.routes import detections, stats, heatmap, priority, export, ingest, live
+from backend.routes import detections, stats, heatmap, priority, export, ingest, live, auth, cities
 from backend.live_manager import manager as live_ws_manager
 import backend.models_live  # noqa: F401 — register live_events/live_reports on Base.metadata
+import backend.models_auth  # noqa: F401 — register users/city_landmarks on Base.metadata
 
 load_dotenv()
 
@@ -63,6 +64,8 @@ app.include_router(priority.router,   prefix="/api", tags=["Priority"])
 app.include_router(export.router,     prefix="/api", tags=["Export"])
 app.include_router(ingest.router,     prefix="/api", tags=["Ingest"])
 app.include_router(live.router,       prefix="/api", tags=["Live"])
+app.include_router(auth.router,       prefix="/api", tags=["Auth"])
+app.include_router(cities.router,     prefix="/api", tags=["Cities"])
 
 # ─────────────────────────────────────────────
 # Startup event
@@ -80,14 +83,68 @@ async def startup_event():
             "Make sure Docker is running: docker-compose up -d"
         )
     else:
-        # Idempotent: creates only missing tables (live_events / live_reports
-        # on stacks whose pgdata volume predates Live mode). The core schema
-        # still comes from db/init/01_schema.sql on fresh volumes.
+        # Idempotent: creates only missing tables (live_events/live_reports,
+        # users, city_landmarks on volumes that predate them). The core schema
+        # still comes from db/init/01_schema.sql on fresh volumes. A failure
+        # here means those features 500 — log it LOUDLY, don't whisper.
         try:
             Base.metadata.create_all(bind=engine)
-        except Exception as exc:
-            logger.warning("create_all skipped: {}", exc)
+        except Exception:
+            logger.exception(
+                "Base.metadata.create_all FAILED — live/auth tables may be "
+                "missing and their endpoints will return 500. Fix the schema "
+                "error above and restart the backend."
+            )
+        _seed_admin()
         logger.success("API ready.")
+
+
+def _seed_admin() -> None:
+    """
+    Guarantee a starting admin account exists (env-overridable):
+        ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD
+    Runs on every startup; no-ops if the username or e-mail already exists.
+    """
+    from backend.database import SessionLocal
+    from backend.models_auth import User, ROLE_ADMIN
+    from backend.auth import hash_password
+    from sqlalchemy import or_, func as sqlfunc
+
+    username = os.getenv("ADMIN_USERNAME", "tudypara")
+    email = os.getenv("ADMIN_EMAIL", "tudorparaschiv04@yahoo.ro").lower()
+    password = os.getenv("ADMIN_PASSWORD", "costincnva2016")
+
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(User)
+            .filter(or_(
+                sqlfunc.lower(User.username) == username.lower(),
+                sqlfunc.lower(User.email) == email,
+            ))
+            .first()
+        )
+        if existing:
+            if existing.role != ROLE_ADMIN:
+                existing.role = ROLE_ADMIN
+                db.commit()
+                logger.info("Seed admin '{}' promoted back to admin.", existing.username)
+            return
+        db.add(User(
+            username=username,
+            email=email,
+            full_name="Paraschiv Tudor",
+            password_hash=hash_password(password),
+            role=ROLE_ADMIN,
+            city="Cluj-Napoca",
+        ))
+        db.commit()
+        logger.success("Seed admin account '{}' created.", username)
+    except Exception:
+        db.rollback()
+        logger.exception("Could not seed the admin account.")
+    finally:
+        db.close()
 
 
 # ─────────────────────────────────────────────

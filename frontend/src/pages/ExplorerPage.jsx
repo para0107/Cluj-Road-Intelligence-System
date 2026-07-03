@@ -278,7 +278,12 @@ export default function ExplorerPage() {
                       </td>
                       <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
                         <span style={{ display: 'inline-flex', gap: 4 }}>
-                          <IconBtn title="Show on map" onClick={() => navigate('/map')}>
+                          <IconBtn
+                            title="Show on map"
+                            onClick={() => navigate('/map', {
+                              state: { focus: { id: d.id, lat: d.latitude, lon: d.longitude } },
+                            })}
+                          >
                             <MapPin size={12} />
                           </IconBtn>
                           <IconBtn title="Copy GPS" onClick={() => copyGps(d)}>

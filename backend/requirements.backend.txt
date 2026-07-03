@@ -15,6 +15,10 @@ pydantic==2.7.1
 pydantic-settings==2.2.1
 python-multipart==0.0.9        # file upload support
 
+# ─── Auth (all free/open-source; passwords hashed with stdlib pbkdf2) ────────
+PyJWT==2.8.0                   # JWT issue/verify (HS256)
+email-validator==2.1.1         # pydantic EmailStr support
+
 # ─── Database ────────────────────────────────────────────────────────────────
 psycopg2-binary==2.9.9
 SQLAlchemy==2.0.30

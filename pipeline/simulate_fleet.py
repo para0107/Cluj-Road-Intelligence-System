@@ -146,7 +146,10 @@ class Vehicle(threading.Thread):
                 "severity": max(1, min(5, spot["severity"] + random.choice((-1, 0, 0, 0, 1)))),
             }
             try:
-                r = requests.post(f"{self.api}/api/live/reports", json=payload, timeout=5)
+                r = requests.post(
+                    f"{self.api}/api/live/reports", json=payload,
+                    headers=AUTH_HEADERS, timeout=5,
+                )
                 r.raise_for_status()
                 data = r.json()
                 ev = data.get("event") or {}
@@ -165,9 +168,41 @@ class Vehicle(threading.Thread):
             time.sleep(self.tick_s)
 
 
+# Filled by _login(); module-level so Vehicle threads share one token.
+AUTH_HEADERS: dict = {}
+
+
+def _login(api: str, email: str | None, password: str | None) -> None:
+    """
+    Live reporting requires an account. Credentials come from --email/--password
+    or env RIDS_EMAIL / RIDS_PASSWORD; the seeded admin works for local demos.
+    """
+    import os
+    email = email or os.getenv("RIDS_EMAIL")
+    password = password or os.getenv("RIDS_PASSWORD")
+    token = os.getenv("RIDS_TOKEN")
+    if not token:
+        if not (email and password):
+            print("[x] Provide --email/--password (or RIDS_EMAIL/RIDS_PASSWORD, or RIDS_TOKEN).")
+            raise SystemExit(1)
+        r = requests.post(
+            f"{api}/api/auth/login",
+            json={"identifier": email, "password": password},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            print(f"[x] Login failed ({r.status_code}): {r.text[:200]}")
+            raise SystemExit(1)
+        token = r.json()["access_token"]
+        print(f"[fleet] logged in as {email}")
+    AUTH_HEADERS["Authorization"] = f"Bearer {token}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="RIDS live-mode fleet simulator")
     ap.add_argument("--api", default="http://localhost:8000", help="Backend base URL")
+    ap.add_argument("--email", default=None, help="Account e-mail (or env RIDS_EMAIL)")
+    ap.add_argument("--password", default=None, help="Account password (or env RIDS_PASSWORD)")
     ap.add_argument("--vehicles", type=int, default=4, help="Number of simulated cars")
     ap.add_argument("--speed", type=float, default=40.0, help="Vehicle speed (km/h)")
     ap.add_argument("--tick", type=float, default=1.5, help="Simulation tick (s)")
@@ -180,6 +215,8 @@ def main() -> int:
     except requests.RequestException as exc:
         print(f"[x] Live API unreachable at {args.api}: {exc}")
         return 1
+
+    _login(args.api, args.email, args.password)
 
     stop = threading.Event()
     route_names = list(ROUTES.keys())

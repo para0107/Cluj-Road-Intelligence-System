@@ -67,8 +67,11 @@ class LiveEvent(Base):
     last_reported = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
+    # NOTE: no explicit GIST index here — GeoAlchemy2 auto-creates a spatial
+    # index named idx_live_events_geom for every Geometry column. Declaring it
+    # again collides on the name and makes Base.metadata.create_all() fail,
+    # which silently left the live tables missing (manual reports 500'd).
     __table_args__ = (
-        Index("idx_live_events_geom", "geom", postgresql_using="gist"),
         Index("idx_live_events_active", "is_active", "expires_at"),
         Index("idx_live_events_type", "damage_type"),
     )

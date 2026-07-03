@@ -43,6 +43,8 @@ from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID, ST_Dista
 
 from backend.database import get_db, SessionLocal
 from backend.models_live import LiveEvent, LiveReport
+from backend.models_auth import User
+from backend.auth import get_current_user, require_operator
 from backend.schemas_live import (
     LiveReportCreate, LiveVoteRequest, LiveEventRead,
     LiveEventListResponse, LiveActionResponse, LiveStatsResponse,
@@ -154,7 +156,11 @@ def _get_active_event(db: Session, event_id: UUID) -> LiveEvent:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/live/reports", response_model=LiveActionResponse, status_code=201)
-def create_report(payload: LiveReportCreate, db: Session = Depends(get_db)):
+def create_report(
+    payload: LiveReportCreate,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
     _sweep_expired(db)
 
     point = ST_SetSRID(ST_MakePoint(payload.longitude, payload.latitude), 4326)
@@ -222,7 +228,12 @@ def create_report(payload: LiveReportCreate, db: Session = Depends(get_db)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/live/events/{event_id}/confirm", response_model=LiveActionResponse)
-def confirm_event(event_id: UUID, payload: LiveVoteRequest, db: Session = Depends(get_db)):
+def confirm_event(
+    event_id: UUID,
+    payload: LiveVoteRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
     event = _get_active_event(db, event_id)
 
     # Idempotent per device — confirming twice does not double-count
@@ -242,7 +253,12 @@ def confirm_event(event_id: UUID, payload: LiveVoteRequest, db: Session = Depend
 
 
 @router.post("/live/events/{event_id}/dispute", response_model=LiveActionResponse)
-def dispute_event(event_id: UUID, payload: LiveVoteRequest, db: Session = Depends(get_db)):
+def dispute_event(
+    event_id: UUID,
+    payload: LiveVoteRequest,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
     event = _get_active_event(db, event_id)
 
     if not _has_vote(db, event.id, payload.device_id, ("dispute",)):
@@ -268,8 +284,12 @@ def dispute_event(event_id: UUID, payload: LiveVoteRequest, db: Session = Depend
 
 
 @router.post("/live/events/{event_id}/resolve", response_model=LiveActionResponse)
-def resolve_event(event_id: UUID, db: Session = Depends(get_db)):
-    """Operator action: the hazard was repaired / cleared."""
+def resolve_event(
+    event_id: UUID,
+    db: Session = Depends(get_db),
+    _op: User = Depends(require_operator),
+):
+    """Operator action (municipality/admin): the hazard was repaired / cleared."""
     event = _get_active_event(db, event_id)
     event.resolved = True
     event.is_active = False

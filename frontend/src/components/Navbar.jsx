@@ -5,13 +5,20 @@
  * Brand · nav links · live pipeline indicator · API health dot · clock · theme.
  */
 
-import React, { useState, useEffect } from 'react'
-import { NavLink } from 'react-router-dom'
+import React, { useState, useEffect, useRef } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
-  Info, Sun, Moon, Activity, Radio,
+  Info, Sun, Moon, Activity, Radio, LogOut, Shield, MapPin, ChevronDown,
 } from 'lucide-react'
 import { fetchHealth } from '../utils/api'
+import { useAuth } from '../context/AuthContext'
+
+const ROLE_COLORS = {
+  admin: 'var(--red)',
+  municipality: 'var(--cyan)',
+  user: 'var(--green)',
+}
 
 const NAV_ITEMS = [
   { to: '/',         label: 'Command',  icon: LayoutDashboard },
@@ -36,10 +43,23 @@ function LogoMark() {
 }
 
 export default function Navbar() {
+  const { user, isAuthed, isAdmin, logout, shareLocation } = useAuth()
+  const navigate = useNavigate()
   const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
   const [now, setNow] = useState(new Date())
   const [health, setHealth] = useState(null)          // null | 'ok' | 'down'
   const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef(null)
+
+  // Close the user menu on outside click
+  useEffect(() => {
+    const onClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
 
   // Theme sync
   useEffect(() => {
@@ -79,9 +99,9 @@ export default function Navbar() {
         </div>
       </NavLink>
 
-      {/* Links */}
+      {/* Links (only when signed in) */}
       <div style={styles.links}>
-        {NAV_ITEMS.map(({ to, label, icon: Icon, live }) => (
+        {isAuthed && NAV_ITEMS.map(({ to, label, icon: Icon, live }) => (
           <NavLink
             key={to}
             to={to}
@@ -131,6 +151,60 @@ export default function Navbar() {
         >
           {dark ? <Sun size={14} /> : <Moon size={14} />}
         </button>
+
+        {/* User menu */}
+        {isAuthed ? (
+          <div style={{ position: 'relative' }} ref={menuRef}>
+            <button className="btn btn-ghost btn-sm" style={styles.userBtn} onClick={() => setMenuOpen(v => !v)}>
+              <span style={{ ...styles.avatar, borderColor: `${ROLE_COLORS[user.role]}66`, color: ROLE_COLORS[user.role] }}>
+                {(user.username || '?')[0].toUpperCase()}
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 600, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {user.username}
+              </span>
+              <ChevronDown size={11} style={{ color: 'var(--text-muted)' }} />
+            </button>
+
+            {menuOpen && (
+              <div className="glass anim-fade-in" style={styles.userMenu}>
+                <div style={styles.menuHeader}>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{user.full_name || user.username}</div>
+                  <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 2 }}>{user.email}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                    <span className="mono" style={{
+                      fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+                      color: ROLE_COLORS[user.role], border: `1px solid ${ROLE_COLORS[user.role]}55`,
+                      borderRadius: 4, padding: '1px 6px',
+                    }}>
+                      {user.role}
+                    </span>
+                    {user.city && (
+                      <span style={{ fontSize: 10.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 3 }}>
+                        <MapPin size={9} /> {user.city}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button className="table-row-hover" style={styles.menuItem}
+                  onClick={() => { shareLocation(); setMenuOpen(false) }}>
+                  <MapPin size={12} style={{ color: 'var(--cyan)' }} /> Update my location
+                </button>
+                {isAdmin && (
+                  <button className="table-row-hover" style={styles.menuItem}
+                    onClick={() => { navigate('/admin'); setMenuOpen(false) }}>
+                    <Shield size={12} style={{ color: 'var(--red)' }} /> Manage accounts
+                  </button>
+                )}
+                <button className="table-row-hover" style={{ ...styles.menuItem, borderTop: '1px solid var(--border)' }}
+                  onClick={() => { logout(); setMenuOpen(false); navigate('/login') }}>
+                  <LogOut size={12} style={{ color: 'var(--text-muted)' }} /> Sign out
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <NavLink to="/login" className="btn btn-accent btn-sm">Sign in</NavLink>
+        )}
       </div>
     </nav>
   )
@@ -208,5 +282,46 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: 5,
+  },
+  userBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    padding: '3px 8px 3px 4px',
+    height: 34,
+    border: '1px solid var(--border)',
+  },
+  avatar: {
+    width: 24, height: 24, borderRadius: 7, flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    border: '1px solid', background: 'var(--bg-card2)',
+    fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-display)',
+  },
+  userMenu: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    right: 0,
+    width: 230,
+    zIndex: 1100,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  menuHeader: {
+    padding: '12px 14px',
+    borderBottom: '1px solid var(--border)',
+  },
+  menuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    width: '100%',
+    padding: '10px 14px',
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--text-dim)',
+    fontSize: 12,
+    cursor: 'pointer',
+    textAlign: 'left',
   },
 }

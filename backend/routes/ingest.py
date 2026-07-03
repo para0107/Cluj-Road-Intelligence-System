@@ -61,7 +61,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+
+from backend.auth import get_current_user
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
@@ -210,6 +212,7 @@ def _active_job_id() -> Optional[str]:
 async def upload_survey(
     video: UploadFile = File(..., description="Dashcam footage (.mp4)"),
     gps:   UploadFile = File(None, description="GPS log (.gpx) — optional"),
+    _user=Depends(get_current_user),   # any authenticated account may upload
 ):
     """
     Persists uploaded files to the shared data/ volume and writes a job-request

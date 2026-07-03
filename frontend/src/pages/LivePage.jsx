@@ -24,6 +24,7 @@ import {
   openLiveSocket,
 } from '../utils/live'
 import { ClassDot } from '../components/ui'
+import { useIsDark } from '../hooks/useTheme'
 
 const POLL_FALLBACK_MS = 5_000
 
@@ -226,6 +227,11 @@ export default function LivePage() {
   )
   const selected = selectedId ? events[selectedId] : null
 
+  // Tiles follow the app theme for consistency with MapPage:
+  // dark mode → Dark tiles, light mode → Streets tiles.
+  const isDark = useIsDark()
+  const tiles = isDark ? BASEMAPS.dark : BASEMAPS.voyager
+
   return (
     <div style={styles.page}>
       {/* ── Map ──────────────────────────────────────────────────────── */}
@@ -237,7 +243,7 @@ export default function LivePage() {
         style={{ width: '100%', height: '100%', cursor: reporting ? 'crosshair' : 'grab' }}
         zoomControl={false}
       >
-        <TileLayer url={BASEMAPS.dark.url} attribution={BASEMAPS.dark.attr} maxZoom={20} maxNativeZoom={19} />
+        <TileLayer key={tiles.url} url={tiles.url} attribution={tiles.attr} maxZoom={20} maxNativeZoom={19} />
         <ReportClickCatcher reporting={reporting} onPick={setPickerAt} />
         <FlyTo target={flyTarget} />
 

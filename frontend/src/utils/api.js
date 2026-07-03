@@ -5,6 +5,70 @@ const api = axios.create({
   timeout: 15000,
 })
 
+// ── Auth wiring ────────────────────────────────────────────────────────────
+// Every request carries the JWT; a 401 clears the session and returns the
+// user to /login (except on the auth endpoints themselves, where 401 is a
+// normal "wrong password" answer the form handles).
+
+export const TOKEN_KEY = 'rids_token'
+export const USER_KEY = 'rids_user'
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+api.interceptors.response.use(
+  (resp) => resp,
+  (error) => {
+    const status = error?.response?.status
+    const url = error?.config?.url || ''
+    if (status === 401 && !url.startsWith('/auth/')) {
+      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(USER_KEY)
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login')
+      }
+    }
+    return Promise.reject(error)
+  },
+)
+
+// ── Auth endpoints ─────────────────────────────────────────────────────────
+
+export const authLogin = (identifier, password) =>
+  api.post('/auth/login', { identifier, password }).then(r => r.data)
+
+export const authRegister = (payload) =>
+  api.post('/auth/register', payload).then(r => r.data)
+
+export const authGoogle = (idToken) =>
+  api.post('/auth/oauth/google', { id_token: idToken }).then(r => r.data)
+
+export const fetchAuthConfig = () =>
+  api.get('/auth/config').then(r => r.data)
+
+export const fetchMe = () =>
+  api.get('/auth/me').then(r => r.data)
+
+export const updateMyLocation = (latitude, longitude, city = null) =>
+  api.patch('/auth/me/location', { latitude, longitude, city }).then(r => r.data)
+
+export const fetchUsers = () =>
+  api.get('/auth/users').then(r => r.data)
+
+export const setUserRole = (userId, role, city = null) =>
+  api.patch(`/auth/users/${userId}/role`, { role, city }).then(r => r.data)
+
+// ── City landmarks (free OSM/Nominatim, cached server-side) ────────────────
+
+export const fetchCityLandmarks = (city, refresh = false) =>
+  api.get('/cities/landmarks', {
+    params: { city, refresh },
+    timeout: 30000,   // first lookup per city is rate-limited by design (~10 s)
+  }).then(r => r.data)
+
 // ── Detections ─────────────────────────────────────────────────────────────
 
 export const fetchDetections = (params = {}) =>

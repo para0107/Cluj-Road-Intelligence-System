@@ -21,6 +21,7 @@ from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID
 
 from backend.database import get_db
+from backend.auth import require_operator
 from backend.models import Detection, SurveyLog
 from backend.schemas import (
     DetectionRead,
@@ -138,7 +139,8 @@ def get_detection(detection_id: UUID, db: Session = Depends(get_db)):
 def update_detection_status(
     detection_id: UUID,
     status_update: DetectionStatusUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _op=Depends(require_operator),   # municipality or admin
 ):
     detection = db.query(Detection).filter(Detection.id == detection_id).first()
     if not detection:
@@ -154,6 +156,7 @@ def update_detection_status(
 def delete_detections_bulk(
     payload: DetectionDeleteRequest,
     db: Session = Depends(get_db),
+    _op=Depends(require_operator),   # municipality or admin
 ):
     if not payload.ids:
         raise HTTPException(status_code=400, detail="At least one detection id is required.")

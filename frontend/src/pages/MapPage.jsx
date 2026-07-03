@@ -11,6 +11,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useLocation } from 'react-router-dom'
 import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts'
 import { MapContainer, TileLayer, CircleMarker, useMap, useMapEvents, Rectangle } from 'react-leaflet'
 import {
@@ -25,9 +26,11 @@ import {
 import { fmtCoord, fmtDate, fmtPct } from '../utils/format'
 import {
   fetchDetections, fetchStats, fetchJobStatus,
-  updateDetectionStatus, deleteDetectionsBulk,
+  updateDetectionStatus, deleteDetectionsBulk, fetchCityLandmarks,
 } from '../utils/api'
 import { SevBadge, ClassChip, ClassDot, KvRow, Spinner, Toggle } from '../components/ui'
+import { useIsDark } from '../hooks/useTheme'
+import { useAuth } from '../context/AuthContext'
 
 // ─── Live-update polling interval (ms) — matches IngestionPage ────────────
 const LIVE_POLL_MS = 10_000
@@ -228,9 +231,32 @@ export default function MapPage() {
   const [selected, setSelected] = useState(null)
   const [showLegend, setShowLegend] = useState(true)
   const [heatmapMode, setHeatmapMode] = useState(false)
-  const [basemap, setBasemap] = useState('dark')
+  // Basemap follows the app theme (dark → Dark tiles, light → Streets tiles)
+  // until the user picks one explicitly with the switcher.
+  const isDark = useIsDark()
+  const [basemapChoice, setBasemapChoice] = useState(null)
+  const basemap = basemapChoice ?? (isDark ? 'dark' : 'voyager')
   const [flyTarget, setFlyTarget] = useState(null)
   const [landmarksOpen, setLandmarksOpen] = useState(false)
+
+  // Landmarks: per-city from the backend (free OSM lookup, cached), with the
+  // built-in Cluj list as offline fallback.
+  const { user } = useAuth()
+  const [landmarks, setLandmarks] = useState(
+    CLUJ_LANDMARKS.map(lm => ({ name: lm.name, latitude: lm.lat, longitude: lm.lon })),
+  )
+  useEffect(() => {
+    const city = user?.city || 'Cluj-Napoca'
+    let alive = true
+    fetchCityLandmarks(city)
+      .then(res => { if (alive && res.items?.length) setLandmarks(res.items) })
+      .catch(() => { /* keep fallback list */ })
+    return () => { alive = false }
+  }, [user?.city])
+
+  // Focus request coming from ExplorerPage ("Show on map")
+  const routerLocation = useLocation()
+  const focusDone = useRef(false)
 
   // Zone drawing
   const [drawingMode, setDrawingMode] = useState(false)
@@ -265,6 +291,16 @@ export default function MapPage() {
   }, [])
 
   useEffect(() => { refreshData(false) }, [refreshData])
+
+  // Fly to + open the detection requested by ExplorerPage's "Show on map".
+  useEffect(() => {
+    const focus = routerLocation.state?.focus
+    if (!focus || focusDone.current || detections.length === 0) return
+    focusDone.current = true
+    const target = detections.find(d => d.id === focus.id)
+    setFlyTarget({ lat: focus.lat, lon: focus.lon, zoom: 18 })
+    if (target) setSelected(target)
+  }, [routerLocation.state, detections])
 
   // Live polling — refresh silently while a pipeline job runs
   useEffect(() => {
@@ -469,12 +505,12 @@ export default function MapPage() {
           </button>
           {landmarksOpen && (
             <div className="glass anim-fade-in" style={styles.landmarkMenu}>
-              {CLUJ_LANDMARKS.map(lm => (
+              {landmarks.map(lm => (
                 <button
                   key={lm.name}
                   className="table-row-hover"
                   style={styles.landmarkItem}
-                  onClick={() => { setFlyTarget({ lat: lm.lat, lon: lm.lon, zoom: 15 }); setLandmarksOpen(false) }}
+                  onClick={() => { setFlyTarget({ lat: lm.latitude, lon: lm.longitude, zoom: 15 }); setLandmarksOpen(false) }}
                 >
                   <Crosshair size={11} style={{ color: 'var(--accent)' }} />
                   {lm.name}
@@ -498,7 +534,7 @@ export default function MapPage() {
                 color: basemap === key ? 'var(--accent)' : 'var(--text-muted)',
                 background: basemap === key ? 'var(--accent-dim)' : 'transparent',
               }}
-              onClick={() => setBasemap(key)}
+              onClick={() => setBasemapChoice(key)}
             >
               {bm.label}
             </button>

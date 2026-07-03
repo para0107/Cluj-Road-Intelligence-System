@@ -37,6 +37,18 @@ services:
       # Container-side mount point for the shared data/ directory.
       PROJECT_DATA_DIR: /app/data
 
+      # ── Auth ────────────────────────────────────────────────────────────
+      # Signing key for JWTs. Override in .env for anything beyond local dev.
+      JWT_SECRET: ${JWT_SECRET:-rids-dev-secret-change-me}
+      # Seed admin (created at startup if missing). Defaults live in main.py;
+      # set these in .env to override without touching code.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-tudypara}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-tudorparaschiv04@yahoo.ro}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-costincnva2016}
+      # Optional free Google OAuth client id (console.cloud.google.com);
+      # leave empty to hide the Google button in the UI.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+
     ports:
       - "8000:8000"
     volumes:

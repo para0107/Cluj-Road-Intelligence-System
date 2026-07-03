@@ -98,8 +98,14 @@ class list lives in `frontend/src/utils/constants.js` and the detector config.
 ## Frontend conventions
 
 - React 18 + Vite 5 + React Router 6, react-leaflet, Recharts, lucide-react, axios.
-  **No global state library** — page-local hooks; the only cross-page signal is
-  `localStorage['rids_active_job']` (set by IngestionPage, polled by MapPage every 10 s).
+  **One global context only**: `AuthContext` (session/user). Everything else is
+  page-local hooks; the cross-page pipeline signal is `localStorage['rids_active_job']`
+  (set by IngestionPage, polled by MapPage every 10 s).
+- Every route except `/login` and `/register` is wrapped in `RequireAuth`; the JWT
+  lives in `localStorage['rids_token']` and is attached by an axios interceptor in
+  `utils/api.js` (a 401 outside `/auth/*` clears the session and redirects to /login).
+- Map tiles follow the app theme (dark → Carto dark, light → Carto voyager) via
+  `hooks/useTheme.js`; MapPage's switcher overrides per-session, LivePage always follows.
 - Styling = inline style objects + CSS design tokens (`--bg`, `--accent`, …) in
   `frontend/src/index.css`; dark theme default, `:root.light` overrides. No Tailwind/CSS modules.
 - All API calls go through `frontend/src/utils/api.js` (axios, baseURL `/api`).
@@ -114,7 +120,23 @@ Paths are project-root-relative; `PROJECT_ROOT` stays unset (watcher auto-detect
 `ml/weights/` (`best.pt`, `sam2.1_hiera_tiny.pt`, `mono_640x192/`, `networks/`) and are **not in
 git** — the Docker stack runs fine without them; only the host pipeline needs them.
 
-## Live (Waze-like) mode
+## Auth & roles
+
+JWT auth (PyJWT HS256, `JWT_SECRET`), passwords = stdlib PBKDF2 (no bcrypt dep).
+Three roles: `user`, `municipality` (operator scoped to a chosen city), `admin`.
+`backend/auth.py` provides `get_current_user` / `require_operator` / `require_admin`;
+protected: ingest upload (any user), detections mutations + live resolve (operator),
+user/role management (admin). Seed admin is created at startup from
+`ADMIN_USERNAME/EMAIL/PASSWORD` env (defaults in `main.py::_seed_admin`). Google OAuth
+is optional and free (set `GOOGLE_CLIENT_ID`); Apple Sign-In is deliberately absent
+(paid Apple program — violates the project's zero-cost rule). Edge scripts authenticate
+via `--email/--password/--token` or `RIDS_EMAIL/RIDS_PASSWORD/RIDS_TOKEN`.
+
+**Landmark lookups are NOT pipeline enrichment.** The enrichment ban above applies to
+the detection pipeline and DB columns. `backend/routes/cities.py` may call Nominatim
+(free, 1 req/s, cached forever in `city_landmarks`) purely for the map's fly-to menu.
+
+## Live (Waze-like) mode & the lite pipeline
 
 Coexists with Survey mode; see `docs/LIVE_MODE.md` for the full design. Key points:
 `backend/routes/live.py` + `backend/models_live.py` implement crowd-validated events
@@ -123,9 +145,21 @@ unverified→confirmed→verified). WS push at `/api/live/ws` (nginx has the Upg
 Vite proxy has `ws: true`); clients fall back to polling `GET /api/live/events`.
 Broadcasts from sync handlers go through `live_manager.broadcast_from_thread()` — never
 `asyncio.run()` in a route. Live tables are created by `Base.metadata.create_all` at startup
-(plus `db/init/02_live_schema.sql` on fresh volumes — keep both in sync). Edge clients:
-`pipeline/live_camera.py` (RTDETR best.pt on a video/webcam) and `pipeline/simulate_fleet.py`
-(multi-vehicle demo, no GPU).
+(plus `db/init/02_live_schema.sql` + `03_auth_schema.sql` on fresh volumes — keep both
+in sync). **Never add an explicit `Index(..., "geom")` to a GeoAlchemy2 model** — the
+column auto-creates `idx_<table>_<col>` and the name collision silently breaks create_all.
+
+**Lite pipeline (per-user instance):** `pipeline/live_pipeline.py` = same `best.pt` +
+per-class thresholds (imported from `pipeline/detector.py`) + motion gating + frame
+stride + fp16 (or one-time free ONNX export for CPU), with `pipeline/lite_severity.py`
+feeding the UNMODIFIED stage-5 formula via ~0.4 ms CV proxies (Otsu mask, Sobel
+boundary sharpness, interior-vs-ring contrast, and the depth stage's own geometry-proxy
+fallback). `pipeline/simulate_fleet.py` = multi-vehicle demo, no GPU. Scaling model:
+every user runs their own lite instance; the server stays a stateless aggregator.
+
+**Survey detector efficiency:** stage 2 batches frames (`DETECTOR_BATCH`, auto 8 on
+CUDA) and uses fp16 (`DETECTOR_HALF`, auto on CUDA); `DETECTOR_IMGSZ` overrides input
+size. Batching never changes detections; fp16 differences are negligible (<1e-3).
 
 ## Layout notes
 
