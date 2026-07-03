@@ -11,7 +11,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   Map, Upload, BarChart2, ListOrdered, ArrowRight, AlertTriangle,
   Radar, ScanLine, Layers, Ruler, Gauge, Copy, Database, CheckCircle2,
-  MapPin, Activity, Table,
+  MapPin, Activity, Table, Radio, Film, Users,
 } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts'
 import { useApi } from '../hooks/useApi'
@@ -120,6 +120,50 @@ export default function HomePage() {
               Last survey: <span className="mono" style={{ color: 'var(--text-dim)' }}>{fmtDate(stats?.last_survey_date)}</span>
             </div>
           </div>
+        </section>
+
+        {/* ── Mode chooser ─────────────────────────────────────────────── */}
+        <section style={styles.modeGrid}>
+          <Link to="/ingest" className="card card-accent-hover anim-fade-up delay-1" style={styles.modeCard}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <span style={{ ...styles.modeIcon, background: 'var(--accent-dim)', border: '1px solid var(--border-accent)', color: 'var(--accent)' }}>
+                <Film size={18} />
+              </span>
+              <span className="overline" style={{ color: 'var(--accent)' }}>Survey mode</span>
+            </div>
+            <div className="display" style={styles.modeTitle}>Upload a drive. Get a full audit.</div>
+            <p style={styles.modeText}>
+              The deep-analysis path: dashcam video + GPS run through the 7-stage GPU pipeline —
+              SAM geometry, Monodepth2 depth, S1–S5 severity, spatial dedup, PostGIS. Precise,
+              auditable, thesis-grade results.
+            </p>
+            <span style={styles.modeCta}>Start a survey <ArrowRight size={13} /></span>
+          </Link>
+
+          <Link to="/live" className="card card-accent-hover anim-fade-up delay-2" style={styles.modeCard}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <span style={{ ...styles.modeIcon, background: 'rgba(255,93,93,0.1)', border: '1px solid rgba(255,93,93,0.35)', color: 'var(--red)' }}>
+                <Radio size={18} />
+              </span>
+              <span className="overline" style={{ color: 'var(--red)' }}>
+                Live mode
+                <span style={{
+                  display: 'inline-block', width: 6, height: 6, borderRadius: '50%', marginLeft: 7,
+                  background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+                  animation: 'pulse 1.6s ease-in-out infinite',
+                }} />
+              </span>
+            </div>
+            <div className="display" style={styles.modeTitle}>Every car is a sensor. Waze for road damage.</div>
+            <p style={styles.modeText}>
+              The real-time path: cameras running the same RT-DETR model (and people tapping the map)
+              stream hazards in live. Independent vehicles re-sighting the same spot escalate it —
+              unverified → confirmed → verified — and disputes clear it.
+            </p>
+            <span style={{ ...styles.modeCta, color: 'var(--red)' }}>
+              <Users size={13} /> Open the live map <ArrowRight size={13} />
+            </span>
+          </Link>
         </section>
 
         {/* ── KPI row ──────────────────────────────────────────────────── */}
@@ -287,6 +331,45 @@ const styles = {
     width: 320,
     padding: '18px 20px 16px',
     flexShrink: 0,
+  },
+  modeGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 14,
+    margin: '4px 0 22px',
+  },
+  modeCard: {
+    padding: '22px 24px',
+    textDecoration: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  modeIcon: {
+    width: 38, height: 38, borderRadius: 10,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  modeTitle: {
+    fontSize: 17,
+    fontWeight: 700,
+    color: 'var(--text)',
+    letterSpacing: '-0.01em',
+    lineHeight: 1.3,
+  },
+  modeText: {
+    fontSize: 12.5,
+    color: 'var(--text-dim)',
+    lineHeight: 1.7,
+    margin: '8px 0 14px',
+  },
+  modeCta: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    fontSize: 12.5,
+    fontWeight: 700,
+    color: 'var(--accent)',
+    marginTop: 'auto',
   },
   kpiGrid: {
     display: 'grid',

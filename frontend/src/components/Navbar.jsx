@@ -9,12 +9,13 @@ import React, { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
-  Info, Sun, Moon, Activity,
+  Info, Sun, Moon, Activity, Radio,
 } from 'lucide-react'
 import { fetchHealth } from '../utils/api'
 
 const NAV_ITEMS = [
   { to: '/',         label: 'Command',  icon: LayoutDashboard },
+  { to: '/live',     label: 'Live',     icon: Radio, live: true },
   { to: '/map',      label: 'Map',      icon: Map },
   { to: '/explorer', label: 'Explorer', icon: Table },
   { to: '/stats',    label: 'Stats',    icon: BarChart2 },
@@ -80,7 +81,7 @@ export default function Navbar() {
 
       {/* Links */}
       <div style={styles.links}>
-        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+        {NAV_ITEMS.map(({ to, label, icon: Icon, live }) => (
           <NavLink
             key={to}
             to={to}
@@ -89,6 +90,13 @@ export default function Navbar() {
           >
             <Icon size={13} />
             {label}
+            {live && (
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+                animation: 'pulse 1.6s ease-in-out infinite',
+              }} />
+            )}
           </NavLink>
         ))}
       </div>

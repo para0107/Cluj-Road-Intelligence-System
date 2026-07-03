@@ -8,6 +8,7 @@ import ExplorerPage from './pages/ExplorerPage'
 import IngestionPage from './pages/IngestionPage'
 import PriorityPage from './pages/PriorityPage'
 import AboutPage from './pages/AboutPage'
+import LivePage from './pages/LivePage'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
       <Navbar />
       <Routes>
         <Route path="/"         element={<HomePage />}      />
+        <Route path="/live"     element={<LivePage />}      />
         <Route path="/map"      element={<MapPage />}       />
         <Route path="/stats"    element={<StatsPage />}     />
         <Route path="/explorer" element={<ExplorerPage />}  />

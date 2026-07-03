@@ -18,8 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from loguru import logger
 
-from backend.database import check_connection
-from backend.routes import detections, stats, heatmap, priority, export, ingest
+from backend.database import check_connection, engine, Base
+from backend.routes import detections, stats, heatmap, priority, export, ingest, live
+from backend.live_manager import manager as live_ws_manager
+import backend.models_live  # noqa: F401 — register live_events/live_reports on Base.metadata
 
 load_dotenv()
 
@@ -60,6 +62,7 @@ app.include_router(heatmap.router,    prefix="/api", tags=["Heatmap"])
 app.include_router(priority.router,   prefix="/api", tags=["Priority"])
 app.include_router(export.router,     prefix="/api", tags=["Export"])
 app.include_router(ingest.router,     prefix="/api", tags=["Ingest"])
+app.include_router(live.router,       prefix="/api", tags=["Live"])
 
 # ─────────────────────────────────────────────
 # Startup event
@@ -68,6 +71,8 @@ app.include_router(ingest.router,     prefix="/api", tags=["Ingest"])
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting RIDS API...")
+    # Live-mode WS broadcasts are scheduled from sync handlers via this loop.
+    live_ws_manager.capture_loop()
     ok = check_connection()
     if not ok:
         logger.warning(
@@ -75,6 +80,13 @@ async def startup_event():
             "Make sure Docker is running: docker-compose up -d"
         )
     else:
+        # Idempotent: creates only missing tables (live_events / live_reports
+        # on stacks whose pgdata volume predates Live mode). The core schema
+        # still comes from db/init/01_schema.sql on fresh volumes.
+        try:
+            Base.metadata.create_all(bind=engine)
+        except Exception as exc:
+            logger.warning("create_all skipped: {}", exc)
         logger.success("API ready.")
 
 

@@ -114,6 +114,19 @@ Paths are project-root-relative; `PROJECT_ROOT` stays unset (watcher auto-detect
 `ml/weights/` (`best.pt`, `sam2.1_hiera_tiny.pt`, `mono_640x192/`, `networks/`) and are **not in
 git** — the Docker stack runs fine without them; only the host pipeline needs them.
 
+## Live (Waze-like) mode
+
+Coexists with Survey mode; see `docs/LIVE_MODE.md` for the full design. Key points:
+`backend/routes/live.py` + `backend/models_live.py` implement crowd-validated events
+(`live_events`/`live_reports`, TTL-expiring, distinct-device escalation
+unverified→confirmed→verified). WS push at `/api/live/ws` (nginx has the Upgrade block;
+Vite proxy has `ws: true`); clients fall back to polling `GET /api/live/events`.
+Broadcasts from sync handlers go through `live_manager.broadcast_from_thread()` — never
+`asyncio.run()` in a route. Live tables are created by `Base.metadata.create_all` at startup
+(plus `db/init/02_live_schema.sql` on fresh volumes — keep both in sync). Edge clients:
+`pipeline/live_camera.py` (RTDETR best.pt on a video/webcam) and `pipeline/simulate_fleet.py`
+(multi-vehicle demo, no GPU).
+
 ## Layout notes
 
 - `backend/` — FastAPI (routes: detections, stats, heatmap, priority, export, ingest).
