@@ -1,41 +1,82 @@
 /**
  * frontend/src/components/Navbar.jsx
  *
- * Top navigation bar — fixed, 48 px tall.
- * Matches the design tokens in index.css exactly:
- *   --bg-card, --border, --accent, --font-mono, --font-sans, etc.
- *
- * Links: MAP · EXPLORER · STATS · UPLOAD
- * The theme toggle (dark/light) is preserved.
+ * Fixed top navigation — var(--nav-h) tall.
+ * Brand · nav links · live pipeline indicator · API health dot · clock · theme.
  */
 
 import React, { useState, useEffect } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
-import { Map, Table, BarChart2, Upload, Sun, Moon } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
+import {
+  LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
+  Info, Sun, Moon, Activity,
+} from 'lucide-react'
+import { fetchHealth } from '../utils/api'
 
 const NAV_ITEMS = [
-  { to: '/',         label: 'Map',      icon: Map      },
-  { to: '/explorer', label: 'Explorer', icon: Table    },
+  { to: '/',         label: 'Command',  icon: LayoutDashboard },
+  { to: '/map',      label: 'Map',      icon: Map },
+  { to: '/explorer', label: 'Explorer', icon: Table },
   { to: '/stats',    label: 'Stats',    icon: BarChart2 },
-  { to: '/ingest',   label: 'Upload',   icon: Upload   },
+  { to: '/priority', label: 'Repairs',  icon: ListOrdered },
+  { to: '/ingest',   label: 'Upload',   icon: Upload },
+  { to: '/about',    label: 'System',   icon: Info },
 ]
 
-export default function Navbar() {
-  const [dark, setDark] = useState(true)
+// Road-marking logo mark
+function LogoMark() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="var(--bg-card2)" stroke="var(--border-bright)" />
+      <path d="M10 28 L14 4 h4 L22 28 h-4 l-.6-5 h-2.8 L14 28 Z" fill="var(--accent)" opacity=".14" />
+      <path d="M15.2 6 h1.6 v4 h-1.6 Z M15 13 h2 v4 h-2 Z M14.8 20 h2.4 v4 h-2.4 Z" fill="var(--accent)" />
+    </svg>
+  )
+}
 
-  // Sync <html> class on mount and on toggle
+export default function Navbar() {
+  const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
+  const [now, setNow] = useState(new Date())
+  const [health, setHealth] = useState(null)          // null | 'ok' | 'down'
+  const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
+
+  // Theme sync
   useEffect(() => {
     document.documentElement.classList.toggle('light', !dark)
+    localStorage.setItem('rids_theme', dark ? 'dark' : 'light')
   }, [dark])
+
+  // Clock
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Health probe + active job flag (cheap, 30 s cadence)
+  useEffect(() => {
+    let alive = true
+    const probe = async () => {
+      const h = await fetchHealth()
+      if (alive) setHealth(h.status === 'ok' ? 'ok' : 'down')
+      if (alive) setJobActive(Boolean(localStorage.getItem('rids_active_job')))
+    }
+    probe()
+    const t = setInterval(probe, 30_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [])
+
+  const healthColor = health === 'ok' ? 'var(--green)' : health === 'down' ? 'var(--red)' : 'var(--text-muted)'
 
   return (
     <nav style={styles.nav}>
       {/* Brand */}
-      <div style={styles.brand}>
-        <span style={styles.brandDot} />
-        <span style={styles.brandName}>RIDS</span>
-        <span style={styles.brandSub}>Road Infrastructure Detection System</span>
-      </div>
+      <NavLink to="/" style={styles.brand}>
+        <LogoMark />
+        <div style={{ lineHeight: 1.15 }}>
+          <div className="display" style={styles.brandName}>RIDS</div>
+          <div style={styles.brandSub}>CLUJ-NAPOCA · ROAD INTELLIGENCE</div>
+        </div>
+      </NavLink>
 
       {/* Links */}
       <div style={styles.links}>
@@ -44,31 +85,45 @@ export default function Navbar() {
             key={to}
             to={to}
             end={to === '/'}
-            style={({ isActive }) => ({
-              ...styles.link,
-              color:            isActive ? 'var(--accent)' : 'var(--text-muted)',
-              background:       isActive ? 'var(--accent-dim)' : 'transparent',
-              border:           isActive ? '1px solid var(--accent)' : '1px solid transparent',
-            })}
+            className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
           >
             <Icon size={13} />
             {label}
-            {/* Highlight the Upload link with a subtle badge when on /ingest */}
-            {to === '/ingest' && (
-              <span style={styles.uploadBadge}>NEW</span>
-            )}
           </NavLink>
         ))}
       </div>
 
-      {/* Theme toggle */}
-      <button
-        style={styles.themeBtn}
-        onClick={() => setDark(v => !v)}
-        title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      >
-        {dark ? <Sun size={14} /> : <Moon size={14} />}
-      </button>
+      {/* Right cluster */}
+      <div style={styles.right}>
+        {jobActive && (
+          <span style={styles.jobBadge} title="A pipeline run is in progress">
+            <Activity size={11} style={{ animation: 'pulse 1.4s ease-in-out infinite' }} />
+            PIPELINE
+          </span>
+        )}
+
+        <span style={styles.clock} className="mono" title="Local time — Cluj-Napoca">
+          {now.toLocaleTimeString('en-GB')}
+        </span>
+
+        <span style={styles.health} title={`API ${health === 'ok' ? 'online' : health === 'down' ? 'offline' : 'checking…'}`}>
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%', background: healthColor,
+            boxShadow: `0 0 8px ${healthColor}`,
+            animation: health === 'ok' ? 'none' : 'pulse 1.4s ease-in-out infinite',
+          }} />
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>API</span>
+        </span>
+
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ width: 32, height: 32, padding: 0 }}
+          onClick={() => setDark(v => !v)}
+          title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {dark ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
+      </div>
     </nav>
   )
 }
@@ -76,95 +131,74 @@ export default function Navbar() {
 const styles = {
   nav: {
     position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 48,
+    top: 0, left: 0, right: 0,
+    height: 'var(--nav-h)',
     zIndex: 1000,
     display: 'flex',
     alignItems: 'center',
-    padding: '0 20px',
-    background: 'rgba(10,12,16,0.96)',
+    padding: '0 18px',
+    background: 'var(--bg-glass)',
     borderBottom: '1px solid var(--border)',
-    backdropFilter: 'blur(12px)',
-    gap: 0,
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    gap: 12,
   },
-
-  // Brand
   brand: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    marginRight: 28,
+    gap: 10,
+    marginRight: 20,
     flexShrink: 0,
-  },
-  brandDot: {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: 'var(--accent)',
-    boxShadow: '0 0 8px var(--accent-glow)',
+    textDecoration: 'none',
   },
   brandName: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: 700,
     color: 'var(--text)',
-    letterSpacing: '.1em',
+    letterSpacing: '0.12em',
   },
   brandSub: {
-    fontSize: 10,
+    fontSize: 8.5,
     color: 'var(--text-muted)',
-    letterSpacing: '.04em',
-    // hide on very small screens if needed
+    letterSpacing: '0.14em',
+    fontFamily: 'var(--font-mono)',
   },
-
-  // Links
   links: {
     display: 'flex',
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
     flex: 1,
+    overflowX: 'auto',
   },
-  link: {
+  right: {
     display: 'flex',
     alignItems: 'center',
-    gap: 6,
-    padding: '5px 12px',
-    borderRadius: 'var(--radius)',
-    fontSize: 11,
-    fontFamily: 'var(--font-mono)',
-    fontWeight: 700,
-    letterSpacing: '.06em',
-    textDecoration: 'none',
-    transition: 'var(--transition)',
-  },
-  uploadBadge: {
-    fontSize: 8,
-    fontFamily: 'var(--font-mono)',
-    fontWeight: 700,
-    letterSpacing: '.06em',
-    background: 'var(--accent)',
-    color: '#0a0c10',
-    borderRadius: 3,
-    padding: '1px 4px',
-    marginLeft: 2,
-  },
-
-  // Theme toggle
-  themeBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 32,
-    height: 32,
-    background: 'transparent',
-    border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)',
-    color: 'var(--text-muted)',
-    cursor: 'pointer',
+    gap: 12,
     flexShrink: 0,
-    transition: 'var(--transition)',
     marginLeft: 'auto',
+  },
+  jobBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '4px 10px',
+    borderRadius: 999,
+    background: 'var(--accent-dim)',
+    border: '1px solid var(--border-accent)',
+    color: 'var(--accent)',
+    fontSize: 9.5,
+    fontFamily: 'var(--font-mono)',
+    fontWeight: 700,
+    letterSpacing: '0.1em',
+  },
+  clock: {
+    fontSize: 11.5,
+    color: 'var(--text-dim)',
+    letterSpacing: '0.04em',
+  },
+  health: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
   },
 }

@@ -1,47 +1,52 @@
+/**
+ * frontend/src/pages/ExplorerPage.jsx — Detection audit table.
+ *
+ * Server-side filtering / sorting / pagination via GET /api/detections.
+ * Row actions: view on map, copy GPS, mark repaired, bulk delete, CSV export.
+ */
+
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, X, Download, MapPin, Copy, Check } from 'lucide-react'
-import { fetchDetections, updateDetectionStatus, deleteDetectionsBulk } from '../utils/api'
-import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS } from '../utils/constants'
+import {
+  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, X, Download,
+  MapPin, Copy, Check, Trash2, Wrench, RotateCcw, Table as TableIcon,
+  AlertTriangle,
+} from 'lucide-react'
+import { fetchDetections, updateDetectionStatus, deleteDetectionsBulk, downloadCsv } from '../utils/api'
+import { CLASS_LABELS, SEVERITY_COLORS, ALL_CLASSES } from '../utils/constants'
+import { fmtDate } from '../utils/format'
+import { SevBadge, ClassDot, SectionTitle, Spinner, CenterState, EmptyState } from '../components/ui'
 
-const DAMAGE_TYPES = [
-  'longitudinal_crack','transverse_crack','alligator_crack','repaired_crack',
-  'pothole','pedestrian_crossing_blur','lane_line_blur','manhole_cover',
-  'patchy_road','rutting',
-]
+const PAGE_SIZE = 25
 
 function SortIcon({ col, sortCol, sortDir }) {
   if (sortCol !== col) return <ChevronUp size={11} style={{ opacity: 0.2 }} />
   return sortDir === 'desc'
     ? <ChevronDown size={11} style={{ color: 'var(--accent)' }} />
-    : <ChevronUp   size={11} style={{ color: 'var(--accent)' }} />
+    : <ChevronUp size={11} style={{ color: 'var(--accent)' }} />
 }
 
 export default function ExplorerPage() {
   const navigate = useNavigate()
 
-  // Pagination
-  const [page,     setPage]     = useState(1)
-  const PAGE_SIZE = 25
-
-  // Filters
-  const [damageType,  setDamageType]  = useState('')
+  // Pagination + filters + sort (all server-side)
+  const [page, setPage] = useState(1)
+  const [damageType, setDamageType] = useState('')
   const [severityMin, setSeverityMin] = useState('')
   const [severityMax, setSeverityMax] = useState('')
-  const [dateFrom,    setDateFrom]    = useState('')
-  const [dateTo,      setDateTo]      = useState('')
-
-  // Sort (client-side on the fetched page)
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [sortCol, setSortCol] = useState('priority_score')
   const [sortDir, setSortDir] = useState('desc')
 
-  // Data
-  const [data,    setData]    = useState(null)
+  // Data + UI state
+  const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState(null)
+  const [error, setError] = useState(null)
   const [selectedIds, setSelectedIds] = useState([])
-  const [deleteSurveyLog, setDeleteSurveyLog] = useState(true)
+  const [deleteSurveyLog, setDeleteSurveyLog] = useState(false)
   const [copiedId, setCopiedId] = useState(null)
+  const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -50,18 +55,19 @@ export default function ExplorerPage() {
       const params = {
         page,
         page_size: PAGE_SIZE,
-        ...(damageType  && { damage_type:  damageType  }),
+        ...(damageType && { damage_type: damageType }),
         ...(severityMin && { severity_min: Number(severityMin) }),
         ...(severityMax && { severity_max: Number(severityMax) }),
-        ...(dateFrom    && { date_from:    dateFrom    }),
-        ...(dateTo      && { date_to:      dateTo      }),
+        ...(dateFrom && { date_from: dateFrom }),
+        ...(dateTo && { date_to: dateTo }),
         sort_by: sortCol,
         sort_order: sortDir,
       }
       const result = await fetchDetections(params)
       setData(result)
+      setSelectedIds([])
     } catch (e) {
-      setError(e.message)
+      setError(e?.response?.data?.detail || e.message)
     } finally {
       setLoading(false)
     }
@@ -69,618 +75,319 @@ export default function ExplorerPage() {
 
   useEffect(() => { load() }, [load])
 
-  useEffect(() => {
-    setSelectedIds([])
-  }, [page, damageType, severityMin, severityMax, dateFrom, dateTo, sortCol, sortDir])
+  const toggleSort = (col) => {
+    if (sortCol === col) setSortDir(d => (d === 'desc' ? 'asc' : 'desc'))
+    else { setSortCol(col); setSortDir('desc') }
+    setPage(1)
+  }
 
-  // Reset to page 1 when filters change
-  const applyFilter = () => { setSelectedIds([]); setPage(1); load() }
-  const clearFilters = () => {
-    setSelectedIds([])
+  const resetFilters = () => {
     setDamageType(''); setSeverityMin(''); setSeverityMax('')
     setDateFrom(''); setDateTo(''); setPage(1)
   }
 
+  const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo
+
   const items = data?.items || []
+  const total = data?.total || 0
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1
+  const allChecked = items.length > 0 && selectedIds.length === items.length
+  const toggleAll = () =>
+    setSelectedIds(allChecked ? [] : items.map(d => d.id))
+  const toggleOne = (id) =>
+    setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
 
-  const toggleSort = (col) => {
-    setSelectedIds([])
-    setPage(1) // Reset to page 1 on sort change
-    if (sortCol === col) {
-      setSortDir(d => d === 'desc' ? 'asc' : 'desc')
-    } else {
-      setSortCol(col); setSortDir('desc')
+  const copyGps = (d) => {
+    navigator.clipboard?.writeText(`${d.latitude.toFixed(6)}, ${d.longitude.toFixed(6)}`)
+    setCopiedId(d.id)
+    setTimeout(() => setCopiedId(null), 1200)
+  }
+
+  const bulkDelete = async () => {
+    if (selectedIds.length === 0) return
+    if (!window.confirm(`Delete ${selectedIds.length} detection(s)? This cannot be undone.`)) return
+    setBusy(true)
+    try {
+      await deleteDetectionsBulk(selectedIds, deleteSurveyLog)
+      await load()
+    } catch (e) {
+      alert(`Delete failed: ${e?.response?.data?.detail || e.message}`)
+    } finally {
+      setBusy(false)
     }
   }
 
-  const handleToggleFixed = async (id, currentFixed) => {
+  const toggleFixed = async (d) => {
+    setBusy(true)
     try {
-      const updated = await updateDetectionStatus(id, !currentFixed)
+      const updated = await updateDetectionStatus(d.id, !d.is_fixed)
       setData(prev => ({
         ...prev,
-        items: prev.items.map(item => item.id === id ? { ...item, is_fixed: updated.is_fixed } : item)
+        items: prev.items.map(x => (x.id === d.id ? { ...x, is_fixed: updated.is_fixed } : x)),
       }))
     } catch (e) {
-      console.error("Failed to update status:", e)
-    }
-  }
-
-  // Copy "lat, lon" to the clipboard so a repair crew can paste the exact
-  // location into a maps app / work order. 6 decimals ≈ 0.1 m precision.
-  const handleCopyCoords = async (item) => {
-    if (item.latitude == null || item.longitude == null) return
-    const text = `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopiedId(item.id)
-      setTimeout(() => setCopiedId(c => (c === item.id ? null : c)), 1500)
-    } catch (e) {
-      console.error('Failed to copy coordinates:', e)
-    }
-  }
-
-  const toggleSelected = (id) => {
-    setSelectedIds(prev => (
-      prev.includes(id)
-        ? prev.filter(selectedId => selectedId !== id)
-        : [...prev, id]
-    ))
-  }
-
-  const selectAllVisible = () => {
-    const visibleIds = items.map(item => item.id)
-    if (!visibleIds.length) return
-
-    const allVisibleSelected = visibleIds.every(id => selectedIds.includes(id))
-    setSelectedIds(prev => (
-      allVisibleSelected
-        ? prev.filter(id => !visibleIds.includes(id))
-        : Array.from(new Set([...prev, ...visibleIds]))
-    ))
-  }
-
-  const handleBulkDelete = async () => {
-    if (!selectedIds.length) return
-
-    const confirmMessage = deleteSurveyLog
-      ? `Delete ${selectedIds.length} selected detections and matching survey_log rows?`
-      : `Delete ${selectedIds.length} selected detections?`
-
-    if (!window.confirm(confirmMessage)) return
-
-    try {
-      setLoading(true)
-      await deleteDetectionsBulk(selectedIds, deleteSurveyLog)
-      setSelectedIds([])
-      await load()
-    } catch (e) {
-      setError(e.message)
+      alert(`Update failed: ${e?.response?.data?.detail || e.message}`)
     } finally {
-      setLoading(false)
+      setBusy(false)
     }
   }
 
-  const handleSingleDelete = async (id) => {
-    const item = items.find(entry => entry.id === id)
-    const confirmMessage = deleteSurveyLog
-      ? `Delete this detection and matching survey_log row?`
-      : `Delete this detection?`
-
-    if (!window.confirm(confirmMessage)) return
-
-    try {
-      setLoading(true)
-      await deleteDetectionsBulk([id], deleteSurveyLog)
-      setSelectedIds(prev => prev.filter(selectedId => selectedId !== id))
-      await load()
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const hasFilters = damageType || severityMin || severityMax || dateFrom || dateTo
-  const visibleIds = items.map(item => item.id)
-  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id))
-  const selectedCount = selectedIds.length
+  const headers = [
+    { key: '_check', label: '', sortable: false, width: 34 },
+    { key: 'damage_type', label: 'Type', sortable: true },
+    { key: 'severity', label: 'Severity', sortable: true },
+    { key: 'confidence', label: 'Conf', sortable: true },
+    { key: 'priority_score', label: 'Priority', sortable: true },
+    { key: 'detection_count', label: 'Seen', sortable: true },
+    { key: 'latitude', label: 'GPS', sortable: true },
+    { key: 'last_detected', label: 'Last seen', sortable: true },
+    { key: '_status', label: 'Status', sortable: false },
+    { key: '_actions', label: '', sortable: false, width: 120 },
+  ]
 
   return (
-    <div style={styles.page}>
-      {/* ── Header ────────────────────────────────────────────────── */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <button style={styles.backBtn} onClick={() => navigate('/')}>
-            <ArrowLeft size={14} /> MAP
-          </button>
-          <div>
-            <h1 style={styles.title}>Explorer</h1>
-            <p style={styles.subtitle}>
-              {data ? `${data.total.toLocaleString()} detections` : 'Loading…'}
-              {hasFilters && <span style={{ color: 'var(--accent)', marginLeft: 6 }}>· filtered</span>}
-            </p>
-          </div>
-        </div>
-        <div style={styles.headerRight}>
-          <a href="/api/export/csv" download style={styles.exportBtn}>
-            <Download size={13} /> EXPORT CSV
-          </a>
-        </div>
-      </div>
-
-      <div style={styles.body}>
-        {/* ── Filter bar ─────────────────────────────────────────── */}
-        <div style={styles.filterBar}>
-          <div style={styles.filterBarLeft}>
-            <Filter size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-
-            {/* Damage type */}
-            <select
-              value={damageType}
-              onChange={e => { setDamageType(e.target.value); setPage(1) }}
-              style={styles.select}
-            >
-              <option value="">All classes</option>
-              {DAMAGE_TYPES.map(t => (
-                <option key={t} value={t}>{CLASS_LABELS[t] || t}</option>
-              ))}
-            </select>
-
-            {/* Severity range */}
-            <select
-              value={severityMin}
-              onChange={e => { setSeverityMin(e.target.value); setPage(1) }}
-              style={styles.select}
-            >
-              <option value="">Sev ≥</option>
-              {[1,2,3,4,5].map(s => <option key={s} value={s}>S{s}+</option>)}
-            </select>
-            <select
-              value={severityMax}
-              onChange={e => { setSeverityMax(e.target.value); setPage(1) }}
-              style={styles.select}
-            >
-              <option value="">Sev ≤</option>
-              {[1,2,3,4,5].map(s => <option key={s} value={s}>S{s}-</option>)}
-            </select>
-
-            {/* Date range */}
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={e => { setDateFrom(e.target.value); setPage(1) }}
-              style={styles.dateInput}
-              placeholder="From"
-            />
-            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>→</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={e => { setDateTo(e.target.value); setPage(1) }}
-              style={styles.dateInput}
-              placeholder="To"
-            />
-
-          </div>
-
-          <div style={styles.filterActions}>
-            {selectedCount > 0 && (
-              <div style={styles.bulkActions}>
-                <span style={styles.bulkCount}>{selectedCount} selected</span>
-                <label style={styles.bulkCheckLabel}>
-                  <input
-                    type="checkbox"
-                    checked={deleteSurveyLog}
-                    onChange={e => setDeleteSurveyLog(e.target.checked)}
-                    style={styles.bulkCheckbox}
-                  />
-                  Delete survey_log too
-                </label>
-                <button style={styles.deleteBtn} onClick={handleBulkDelete}>
-                  Delete selected
-                </button>
-              </div>
-            )}
-
-            {hasFilters && (
-              <button style={styles.clearBtn} onClick={clearFilters}>
-                <X size={12} /> Clear
+    <div style={styles.page} className="page-grid-bg">
+      <div style={styles.inner}>
+        <SectionTitle
+          overline="Audit"
+          title="Detection explorer"
+          right={
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-sm" onClick={downloadCsv}>
+                <Download size={13} /> Export CSV
               </button>
-            )}
-          </div>
-        </div>
-
-        {/* ── Table ──────────────────────────────────────────────── */}
-        <div style={styles.tableWrap}>
-          {/* Head */}
-          <div style={styles.tableHead}>
-            <div style={{ ...styles.th, justifyContent: 'center' }}>Select</div>
-            {[
-              { key: 'damage_type',     label: 'Class'          },
-              { key: 'severity',        label: 'Severity'       },
-              { key: 'confidence',      label: 'Confidence'     },
-              { key: 'priority_score',  label: 'Priority'       },
-              { key: 'detection_count', label: 'Seen'           },
-              { key: 'latitude',        label: 'GPS (Lat, Lon)' },
-            ].map(col => (
-              <div
-                key={col.key}
-                style={{ ...styles.th, cursor: 'pointer', userSelect: 'none' }}
-                onClick={() => toggleSort(col.key)}
-              >
-                {col.label}
-                <SortIcon col={col.key} sortCol={sortCol} sortDir={sortDir} />
-              </div>
-            ))}
-            <div style={{ ...styles.th, justifyContent: 'center' }}>Fixed</div>
-            <div style={{ ...styles.th, justifyContent: 'center' }}>Delete</div>
-          </div>
-
-          {/* Body */}
-          {loading && (
-            <div style={styles.tableLoading}>
-              <div style={styles.spinner} />
-              <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Loading…</span>
             </div>
-          )}
+          }
+        />
 
-          {!loading && error && (
-            <div style={styles.tableError}>
-              Could not load detections: {error}
-            </div>
-          )}
+        {/* ── Filter bar ─────────────────────────────────────────────── */}
+        <div className="card anim-fade-up" style={styles.filterBar}>
+          <select className="select" value={damageType} onChange={e => { setDamageType(e.target.value); setPage(1) }}>
+            <option value="">All classes</option>
+            {ALL_CLASSES.map(c => <option key={c} value={c}>{CLASS_LABELS[c]}</option>)}
+          </select>
 
-          {!loading && !error && items.map((item, i) => {
-            const clsColor = CLASS_COLORS[item.damage_type] || '#888'
-            const sevColor = SEVERITY_COLORS[item.severity] || '#888'
-            const hasCoords = item.latitude != null && item.longitude != null
-            return (
-              <div
-                key={item.id}
-                style={{
-                  ...styles.tableRow,
-                  background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)',
-                  boxShadow: selectedIds.includes(item.id) ? 'inset 0 0 0 1px var(--accent)' : 'none',
-                }}
-              >
-                <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(item.id)}
-                    onChange={() => toggleSelected(item.id)}
-                    style={styles.rowCheckbox}
-                    aria-label={`Select detection ${item.id}`}
-                  />
-                </div>
+          <select className="select" value={severityMin} onChange={e => { setSeverityMin(e.target.value); setPage(1) }}>
+            <option value="">Min severity</option>
+            {[1, 2, 3, 4, 5].map(s => <option key={s} value={s}>S{s}+</option>)}
+          </select>
 
-                {/* Class */}
-                <div style={{ ...styles.td, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{
-                    width: 8, height: 8, borderRadius: '50%',
-                    background: clsColor, flexShrink: 0,
-                  }} />
-                  <span style={{ fontSize: 12 }}>
-                    {CLASS_LABELS[item.damage_type] || item.damage_type}
-                  </span>
-                </div>
+          <select className="select" value={severityMax} onChange={e => { setSeverityMax(e.target.value); setPage(1) }}>
+            <option value="">Max severity</option>
+            {[1, 2, 3, 4, 5].map(s => <option key={s} value={s}>≤ S{s}</option>)}
+          </select>
 
-                {/* Severity */}
-                <div style={styles.td}>
-                  <span style={{
-                    background: `${sevColor}20`, color: sevColor,
-                    border: `1px solid ${sevColor}45`,
-                    borderRadius: 4, padding: '2px 7px',
-                    fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700,
-                  }}>
-                    S{item.severity}
-                  </span>
-                </div>
+          <input className="input" type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(1) }} title="From date" />
+          <input className="input" type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(1) }} title="To date" />
 
-                {/* Confidence */}
-                <div style={styles.td}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{
-                      width: 48, height: 4, borderRadius: 2,
-                      background: 'var(--border-bright)', overflow: 'hidden',
-                    }}>
-                      <div style={{
-                        width: `${(item.confidence || 0) * 100}%`,
-                        height: '100%', background: clsColor,
-                      }} />
-                    </div>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-                      {((item.confidence || 0) * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-
-                {/* Priority */}
-                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontSize: 12 }}>
-                  {(item.priority_score || 0).toFixed(4)}
-                </div>
-
-                {/* Seen */}
-                <div style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                  {item.detection_count}×
-                </div>
-
-                {/* GPS coordinates (click to copy) */}
-                <div style={styles.td}>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyCoords(item)}
-                    style={styles.gpsCell}
-                    title={hasCoords ? 'Click to copy coordinates' : 'No GPS for this detection'}
-                    disabled={!hasCoords}
-                  >
-                    <MapPin size={12} style={{ color: clsColor, flexShrink: 0 }} />
-                    <span style={styles.gpsCoords}>
-                      {hasCoords
-                        ? `${item.latitude.toFixed(6)}, ${item.longitude.toFixed(6)}`
-                        : '—'}
-                    </span>
-                    {hasCoords && (copiedId === item.id
-                      ? <Check size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-                      : <Copy  size={12} style={{ color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />)}
-                  </button>
-                </div>
-
-                {/* Fixed Checkbox */}
-                <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                  <input
-                    type="checkbox"
-                    checked={item.is_fixed}
-                    onChange={() => handleToggleFixed(item.id, item.is_fixed)}
-                    style={styles.rowCheckbox}
-                  />
-                </div>
-
-                {/* Delete action */}
-                <div style={{ ...styles.td, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => handleSingleDelete(item.id)}
-                    style={styles.rowDeleteBtn}
-                    aria-label={`Delete detection ${item.id}`}
-                    title="Delete detection"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-
-          {!loading && !error && items.length === 0 && (
-            <div style={styles.tableEmpty}>No detections match the current filters.</div>
-          )}
-        </div>
-
-        {/* ── Pagination ─────────────────────────────────────────── */}
-        {data && data.total > PAGE_SIZE && (
-          <div style={styles.pagination}>
-            <button
-              style={styles.pageBtn}
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              <ChevronLeft size={14} />
+          {hasFilters && (
+            <button className="btn btn-sm btn-ghost" onClick={resetFilters}>
+              <X size={12} /> Clear
             </button>
+          )}
 
-            <div style={styles.pageInfo}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                Page {page} of {totalPages}
-              </span>
-              <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-                ({data.total.toLocaleString()} total)
-              </span>
-            </div>
+          <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-muted)' }}>
+            <span className="mono" style={{ color: 'var(--accent)' }}>{total.toLocaleString()}</span> records
+          </span>
+        </div>
 
-            <button
-              style={styles.pageBtn}
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-            >
-              <ChevronRight size={14} />
+        {/* ── Bulk action bar ───────────────────────────────────────── */}
+        {selectedIds.length > 0 && (
+          <div className="glass anim-fade-in" style={styles.bulkBar}>
+            <span style={{ fontSize: 12.5 }}>
+              <span className="mono" style={{ color: 'var(--accent)', fontWeight: 700 }}>{selectedIds.length}</span> selected
+            </span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-muted)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={deleteSurveyLog} onChange={e => setDeleteSurveyLog(e.target.checked)} />
+              also delete affected survey-log rows
+            </label>
+            <button className="btn btn-sm btn-danger" onClick={bulkDelete} disabled={busy}>
+              <Trash2 size={13} /> Delete selected
             </button>
           </div>
         )}
+
+        {/* ── Table ─────────────────────────────────────────────────── */}
+        <div className="card anim-fade-up delay-1" style={{ overflow: 'hidden' }}>
+          {error ? (
+            <EmptyState icon={AlertTriangle} title="Could not load detections" sub={error}
+              action={<button className="btn" onClick={load}>Retry</button>} />
+          ) : loading && !data ? (
+            <CenterState><Spinner label="Loading records…" /></CenterState>
+          ) : items.length === 0 ? (
+            <EmptyState icon={TableIcon} title="No records match"
+              sub={hasFilters ? 'Try clearing some filters.' : 'Upload a survey to create detections.'} />
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    {headers.map(h => (
+                      <th
+                        key={h.key}
+                        style={{ ...styles.th, width: h.width, cursor: h.sortable ? 'pointer' : 'default' }}
+                        onClick={h.sortable ? () => toggleSort(h.key) : undefined}
+                      >
+                        {h.key === '_check' ? (
+                          <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+                        ) : (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            {h.label}
+                            {h.sortable && <SortIcon col={h.key} sortCol={sortCol} sortDir={sortDir} />}
+                          </span>
+                        )}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map(d => (
+                    <tr key={d.id} className="table-row-hover" style={{ opacity: d.is_fixed ? 0.55 : 1 }}>
+                      <td style={styles.td}>
+                        <input type="checkbox" checked={selectedIds.includes(d.id)} onChange={() => toggleOne(d.id)} />
+                      </td>
+                      <td style={styles.td}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                          <ClassDot cls={d.damage_type} size={24} />
+                          <span style={{ fontWeight: 600, fontSize: 12.5 }}>{CLASS_LABELS[d.damage_type] || d.damage_type}</span>
+                        </span>
+                      </td>
+                      <td style={styles.td}><SevBadge s={d.severity} compact /></td>
+                      <td style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>
+                        {(d.confidence * 100).toFixed(0)}%
+                      </td>
+                      <td style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--accent)' }}>
+                        {(d.priority_score || 0).toFixed(3)}
+                      </td>
+                      <td style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>
+                        {d.detection_count}×
+                      </td>
+                      <td style={{ ...styles.td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                        {d.latitude.toFixed(4)}, {d.longitude.toFixed(4)}
+                      </td>
+                      <td style={{ ...styles.td, fontSize: 11.5, color: 'var(--text-dim)' }}>
+                        {fmtDate(d.last_detected)}
+                      </td>
+                      <td style={styles.td}>
+                        {d.is_fixed ? (
+                          <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>REPAIRED</span>
+                        ) : (
+                          <span style={{ color: SEVERITY_COLORS[d.severity] || 'var(--text-muted)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>OPEN</span>
+                        )}
+                      </td>
+                      <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                        <span style={{ display: 'inline-flex', gap: 4 }}>
+                          <IconBtn title="Show on map" onClick={() => navigate('/map')}>
+                            <MapPin size={12} />
+                          </IconBtn>
+                          <IconBtn title="Copy GPS" onClick={() => copyGps(d)}>
+                            {copiedId === d.id ? <Check size={12} style={{ color: 'var(--green)' }} /> : <Copy size={12} />}
+                          </IconBtn>
+                          <IconBtn title={d.is_fixed ? 'Reopen' : 'Mark repaired'} onClick={() => toggleFixed(d)} disabled={busy}>
+                            {d.is_fixed ? <RotateCcw size={12} /> : <Wrench size={12} />}
+                          </IconBtn>
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── Pagination footer ───────────────────────────────────── */}
+          {items.length > 0 && (
+            <div style={styles.pager}>
+              <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                Page <span className="mono" style={{ color: 'var(--text)' }}>{page}</span> of{' '}
+                <span className="mono">{pageCount}</span>
+              </span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-sm" disabled={page <= 1 || loading} onClick={() => setPage(p => p - 1)}>
+                  <ChevronLeft size={13} /> Prev
+                </button>
+                <button className="btn btn-sm" disabled={page >= pageCount || loading} onClick={() => setPage(p => p + 1)}>
+                  Next <ChevronRight size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
-// Explicit per-column widths give every column its own breathing room and keep
-// the wide GPS column from being squeezed by the narrow numeric ones.
-// Order: Select · Class · Severity · Confidence · Priority · Seen · GPS · Fixed · Delete
-const COL = '56px minmax(150px,1.6fr) 96px 150px 110px 80px minmax(190px,1.5fr) 72px 96px'
+function IconBtn({ children, title, onClick, disabled }) {
+  return (
+    <button
+      className="btn btn-sm btn-ghost"
+      style={{ width: 26, height: 26, padding: 0, border: '1px solid var(--border)' }}
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  )
+}
 
 const styles = {
-  page: { paddingTop: 48, minHeight: '100vh', background: 'var(--bg)' },
-  header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '24px 32px 0',
+  page: {
+    minHeight: '100%',
+    paddingTop: 'calc(var(--nav-h) + 26px)',
+    paddingBottom: 40,
   },
-  headerLeft: { display: 'flex', alignItems: 'center', gap: 16 },
-  backBtn: {
-    display: 'flex', alignItems: 'center', gap: 5,
-    padding: '6px 12px', background: 'transparent',
-    border: '1px solid var(--border-bright)', borderRadius: 'var(--radius)',
-    color: 'var(--text-muted)', fontSize: 11, fontFamily: 'var(--font-mono)',
-    fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em',
+  inner: {
+    maxWidth: 1160,
+    margin: '0 auto',
+    padding: '0 26px',
   },
-  headerRight: { display: 'flex', alignItems: 'center' },
-  filterActions: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 8,
-    flexWrap: 'wrap',
-    marginLeft: 'auto',
-  },
-  exportBtn: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '6px 14px', background: 'var(--accent-dim)',
-    border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
-    color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--font-mono)',
-    fontWeight: 700, cursor: 'pointer', letterSpacing: '.08em', textDecoration: 'none',
-    transition: 'var(--transition)',
-  },
-  title: { fontSize: 26, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.5px' },
-  subtitle: { fontSize: 12, color: 'var(--text-muted)', marginTop: 2 },
-  body: { padding: '20px 32px 48px' },
-
   filterBar: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    gap: 8, padding: '12px 16px',
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)', marginBottom: 16,
-    flexWrap: 'wrap',
-  },
-  filterBarLeft: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1 },
-  select: {
-    background: 'var(--bg-card2)', border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)', color: 'var(--text)',
-    fontSize: 12, padding: '5px 10px', cursor: 'pointer',
-    fontFamily: 'var(--font-sans)',
-  },
-  dateInput: {
-    background: 'var(--bg-card2)', border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)', color: 'var(--text)',
-    fontSize: 12, padding: '5px 10px',
-    fontFamily: 'var(--font-sans)',
-  },
-  searchWrap: { position: 'relative', display: 'flex', alignItems: 'center' },
-  clearBtn: {
-    display: 'flex', alignItems: 'center', gap: 5,
-    padding: '4px 9px', background: 'rgba(255,68,68,0.08)',
-    border: '1px solid rgba(255,68,68,0.24)', borderRadius: 'var(--radius)',
-    color: 'var(--text)', fontSize: 10, cursor: 'pointer',
-    fontFamily: 'var(--font-mono)', fontWeight: 700,
-  },
-  bulkActions: {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    padding: '5px 8px',
-    borderRadius: 'var(--radius)',
-    background: 'rgba(255,68,68,0.05)',
-    border: '1px solid rgba(255,68,68,0.16)',
     flexWrap: 'wrap',
-    maxWidth: '100%',
+    padding: '12px 14px',
+    marginBottom: 12,
   },
-  bulkCount: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: 10,
-    fontWeight: 700,
-    color: 'var(--text-muted)',
-    whiteSpace: 'nowrap',
+  bulkBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    padding: '10px 16px',
+    marginBottom: 12,
+    borderColor: 'var(--border-accent)',
   },
-  bulkCheckLabel: {
-    display: 'flex', alignItems: 'center', gap: 5,
-    fontSize: 10, color: 'var(--text-muted)',
-    cursor: 'pointer', userSelect: 'none',
-    whiteSpace: 'nowrap',
-  },
-  bulkCheckbox: {
-    width: 13, height: 13,
-    cursor: 'pointer', accentColor: 'var(--accent)',
-  },
-  deleteBtn: {
-    display: 'flex', alignItems: 'center', gap: 5,
-    padding: '4px 9px', background: 'rgba(255,68,68,0.1)',
-    border: '1px solid rgba(255,68,68,0.28)', borderRadius: 'var(--radius)',
-    color: 'var(--text)', fontSize: 10, cursor: 'pointer',
-    fontFamily: 'var(--font-mono)', fontWeight: 700,
-    whiteSpace: 'nowrap',
-  },
-
-  tableWrap: {
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)', overflowX: 'auto',
-  },
-  tableHead: {
-    display: 'grid', gridTemplateColumns: COL, columnGap: 10,
-    background: 'var(--bg-card2)', borderBottom: '1px solid var(--border)',
-    minWidth: 'fit-content',
-  },
-  tableRow: {
-    display: 'grid', gridTemplateColumns: COL, columnGap: 10,
-    borderBottom: '1px solid var(--border)',
-    transition: 'background 0.1s',
-    minWidth: 'fit-content',
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
   },
   th: {
-    padding: '12px 16px', fontSize: 10, fontFamily: 'var(--font-mono)',
-    fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '.08em',
-    textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4,
-  },
-  td: { padding: '12px 16px', fontSize: 13, color: 'var(--text)', alignSelf: 'center' },
-  rowCheckbox: {
-    width: 15,
-    height: 15,
-    cursor: 'pointer',
-    accentColor: 'var(--accent)',
-  },
-  gpsCell: {
-    display: 'inline-flex', alignItems: 'center', gap: 7,
-    maxWidth: '100%', padding: '4px 8px',
-    background: 'var(--bg-card2)', border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)', cursor: 'pointer',
-    fontFamily: 'var(--font-mono)',
-  },
-  gpsCoords: {
-    fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-dim)',
-    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-    letterSpacing: '.02em',
-  },
-  rowDeleteBtn: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 56,
-    height: 28,
-    padding: '0 10px',
-    borderRadius: 'var(--radius)',
-    border: '1px solid rgba(255,68,68,0.18)',
-    background: 'rgba(255,68,68,0.05)',
-    color: 'var(--red)',
-    cursor: 'pointer',
-    flexShrink: 0,
-    fontFamily: 'var(--font-mono)',
+    textAlign: 'left',
+    padding: '11px 12px',
     fontSize: 10,
+    fontFamily: 'var(--font-mono)',
     fontWeight: 700,
-    letterSpacing: '.06em',
+    letterSpacing: '0.1em',
+    textTransform: 'uppercase',
+    color: 'var(--text-muted)',
+    borderBottom: '1px solid var(--border-bright)',
+    background: 'var(--bg-card2)',
+    whiteSpace: 'nowrap',
+    userSelect: 'none',
   },
-
-  tableLoading: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: 12, padding: 48,
+  td: {
+    padding: '9px 12px',
+    fontSize: 12.5,
+    borderBottom: '1px solid var(--border)',
+    verticalAlign: 'middle',
   },
-  tableError: {
-    padding: 32, textAlign: 'center', color: 'var(--red)', fontSize: 13,
+  pager: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '12px 16px',
   },
-  tableEmpty: {
-    padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13,
-  },
-  spinner: {
-    width: 18, height: 18, border: '2px solid var(--border)',
-    borderTop: '2px solid var(--accent)', borderRadius: '50%',
-    animation: 'spin 0.8s linear infinite',
-  },
-
-  pagination: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: 16, padding: '20px 0 0',
-  },
-  pageBtn: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    width: 32, height: 32,
-    background: 'var(--bg-card)', border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)', color: 'var(--text)', cursor: 'pointer',
-    transition: 'var(--transition)',
-  },
-  pageInfo: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 },
 }

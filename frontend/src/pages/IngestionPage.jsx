@@ -1,68 +1,44 @@
 /**
- * frontend/src/pages/IngestionPage.jsx
+ * frontend/src/pages/IngestionPage.jsx — Survey upload + live pipeline tracker.
  *
- * Survey ingestion page for RIDS.
- * Allows the operator to upload a dashcam .mp4 and an optional .gpx GPS log,
- * then tracks the pipeline execution stage-by-stage via polling.
- *
- * Architecture:
- *   1. Upload phase  — POST /api/ingest/upload (multipart, with progress bar)
- *   2. Polling phase — GET  /api/ingest/status/{job_id}  every POLL_INTERVAL_MS
- *      Polling stops automatically when status becomes "complete" or "failed".
- *
- * No WebSocket is needed: the orchestrator writes session.json after every
- * stage, and the status endpoint reads it. 10-second polling is fine for a
- * pipeline that takes ~60 minutes end-to-end.
+ * Contract with the backend (do not break):
+ *  - POST /api/ingest/upload (multipart) → { job_id } (202) or 409 while busy
+ *  - GET  /api/ingest/status/{job_id} polled every POLL_INTERVAL_MS
+ *  - stage keys must match orchestrator session.json: see PIPELINE_STAGES
+ *  - localStorage['rids_active_job'] is the cross-page "pipeline running" flag
+ *    (MapPage live-refreshes while it is set; we clear it on terminal states)
  */
 
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Upload, FileVideo, FileText as FileGps,
-  CheckCircle, XCircle, Loader, AlertTriangle, Map, RefreshCw,
-  ChevronRight, Clock,
+  FileVideo, MapPin, CheckCircle, XCircle, ChevronRight, Clock,
+  AlertTriangle, Map, Play, RotateCcw, UploadCloud, Satellite,
 } from 'lucide-react'
 import { uploadSurvey, fetchJobStatus } from '../utils/api'
+import { PIPELINE_STAGES } from '../utils/constants'
+import { SectionTitle } from '../components/ui'
 
-// ── Constants ─────────────────────────────────────────────────────────────
+const POLL_INTERVAL_MS = 10_000
 
-const POLL_INTERVAL_MS = 10_000   // poll every 10 s while pipeline is running
+const STAGE_META = Object.fromEntries(PIPELINE_STAGES.map(s => [s.key, s]))
+const STAGE_ORDER = PIPELINE_STAGES.map(s => s.key)
 
-// Human-readable stage names matching orchestrator stage keys
-const STAGE_META = {
-  preprocessor:        { label: 'Preprocessor',        sub: 'Frame extraction · GPS sync · Lighting' },
-  detector:            { label: 'RT-DETR Detector',     sub: 'RT-DETR-L inference · Confidence filter' },
-  segmentor:           { label: 'SAM Segmentor',        sub: 'SAM 2.1 Tiny · 4 geometry features' },
-  depth_estimator:     { label: 'Depth Estimator',      sub: 'Monodepth2 · Relative disparity' },
-  severity_classifier: { label: 'Severity Classifier',  sub: 'Rule-based S1–S5 · Weighted multi-signal' },
-  deduplicator:        { label: 'Deduplicator',         sub: 'DBSCAN · Haversine · 2 m radius' },
-  db_writer:           { label: 'DB Writer',            sub: 'PostGIS upsert · Priority score update' },
-}
-
-// Ordered stage keys — used to render the pipeline track in order
-const STAGE_ORDER = [
-  'preprocessor', 'detector', 'segmentor',
-  'depth_estimator', 'severity_classifier', 'deduplicator', 'db_writer',
-]
-
-// ── Helper: format elapsed seconds ───────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 function fmtElapsed(s) {
   if (s == null || s === 0) return null
-  if (s < 60)  return `${s.toFixed(1)} s`
+  if (s < 60) return `${s.toFixed(1)} s`
   const m = Math.floor(s / 60)
-  const rem = Math.round(s % 60)
-  return `${m}m ${rem}s`
+  return `${m}m ${Math.round(s % 60)}s`
 }
-
-// ── Helper: format ISO timestamp to locale string ─────────────────────────
 
 function fmtTs(iso) {
   if (!iso) return '—'
   try { return new Date(iso).toLocaleTimeString() } catch { return iso }
 }
 
-// ── File drop zone ────────────────────────────────────────────────────────
+// ── File drop zone ─────────────────────────────────────────────────────────
 
 function DropZone({ label, accept, file, onFile, icon: Icon, color, hint }) {
   const inputRef = useRef(null)
@@ -75,11 +51,6 @@ function DropZone({ label, accept, file, onFile, icon: Icon, color, hint }) {
     if (f) onFile(f)
   }, [onFile])
 
-  const handleChange = (e) => {
-    const f = e.target.files?.[0]
-    if (f) onFile(f)
-  }
-
   return (
     <div
       onClick={() => inputRef.current?.click()}
@@ -88,18 +59,8 @@ function DropZone({ label, accept, file, onFile, icon: Icon, color, hint }) {
       onDrop={handleDrop}
       style={{
         ...styles.dropZone,
-        borderColor: dragOver
-          ? color
-          : file
-            ? `${color}80`
-            : 'var(--border-bright)',
-        background: dragOver
-          ? `${color}10`
-          : file
-            ? `${color}08`
-            : 'var(--bg-card2)',
-        cursor: 'pointer',
-        transition: 'var(--transition)',
+        borderColor: dragOver ? color : file ? `${color}80` : 'var(--border-bright)',
+        background: dragOver ? `${color}10` : file ? `${color}08` : 'var(--bg-card2)',
       }}
     >
       <input
@@ -107,44 +68,41 @@ function DropZone({ label, accept, file, onFile, icon: Icon, color, hint }) {
         type="file"
         accept={accept}
         style={{ display: 'none' }}
-        onChange={handleChange}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f) }}
       />
-      <div style={{ ...styles.dropIcon, color: file ? color : 'var(--text-muted)', background: file ? `${color}18` : 'var(--border)' }}>
+      <div style={{
+        ...styles.dropIcon,
+        color: file ? color : 'var(--text-muted)',
+        background: file ? `${color}18` : 'var(--border)',
+      }}>
         <Icon size={20} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: file ? 'var(--text)' : 'var(--text-muted)' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: file ? 'var(--text)' : 'var(--text-muted)' }}>
           {label}
         </div>
         {file ? (
-          <div style={{ fontSize: 11, color, fontFamily: 'var(--font-mono)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div className="mono" style={{ fontSize: 11, color, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB
           </div>
         ) : (
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{hint}</div>
         )}
       </div>
-      {file && (
-        <CheckCircle size={16} style={{ color, flexShrink: 0 }} />
-      )}
+      {file && <CheckCircle size={16} style={{ color, flexShrink: 0 }} />}
     </div>
   )
 }
 
-// ── Stage row ─────────────────────────────────────────────────────────────
+// ── Stage row ──────────────────────────────────────────────────────────────
 
 function StageRow({ name, stageData, index, totalCompleted }) {
   const meta = STAGE_META[name] || { label: name, sub: '' }
 
-  // Determine visual state
-  // stageData is null → not yet reached
-  // stageData.skipped → resumed from cache
-  // stageData.error   → failed
-  // otherwise         → completed
-
+  // stageData null → not reached · .skipped → resumed/cached · .error → failed
   let state = 'pending'
   if (stageData) {
-    if (stageData.error)   state = 'error'
+    if (stageData.error) state = 'error'
     else if (stageData.skipped) state = 'skipped'
     else state = 'done'
   } else if (index === totalCompleted) {
@@ -154,32 +112,36 @@ function StageRow({ name, stageData, index, totalCompleted }) {
   const stateColor = {
     pending: 'var(--border-bright)',
     running: 'var(--accent)',
-    done:    'var(--green)',
+    done: 'var(--green)',
     skipped: 'var(--text-muted)',
-    error:   'var(--red)',
+    error: 'var(--red)',
   }[state]
 
   const StateIcon = {
     pending: () => <span style={{ width: 14, height: 14, borderRadius: '50%', border: '1.5px solid var(--border-bright)', display: 'inline-block' }} />,
-    running: () => <div style={{ width: 14, height: 14, border: '2px solid var(--border)', borderTop: `2px solid var(--accent)`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />,
-    done:    () => <CheckCircle size={14} style={{ color: 'var(--green)' }} />,
+    running: () => <div style={{ width: 14, height: 14, border: '2px solid var(--border)', borderTop: '2px solid var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />,
+    done: () => <CheckCircle size={14} style={{ color: 'var(--green)' }} />,
     skipped: () => <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />,
-    error:   () => <XCircle size={14} style={{ color: 'var(--red)' }} />,
+    error: () => <XCircle size={14} style={{ color: 'var(--red)' }} />,
   }[state]
 
   return (
     <div style={{
       ...styles.stageRow,
-      opacity: state === 'pending' ? 0.4 : 1,
+      opacity: state === 'pending' ? 0.45 : 1,
       borderLeft: `3px solid ${stateColor}`,
+      background: state === 'running' ? 'var(--accent-dim)' : 'var(--bg-card2)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+        <span className="mono" style={{ fontSize: 9.5, color: 'var(--text-muted)', width: 16 }}>
+          {String(index + 1).padStart(2, '0')}
+        </span>
         <StateIcon />
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>
             {meta.label}
             {state === 'skipped' && (
-              <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>RESUMED</span>
+              <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, color: 'var(--text-muted)' }}>SKIPPED / CACHED</span>
             )}
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{meta.sub}</div>
@@ -187,13 +149,13 @@ function StageRow({ name, stageData, index, totalCompleted }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
         {stageData?.elapsed_s > 0 && (
-          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+          <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
             <Clock size={9} style={{ display: 'inline', marginRight: 3 }} />
             {fmtElapsed(stageData.elapsed_s)}
           </span>
         )}
         {state === 'error' && stageData?.error && (
-          <span style={{ fontSize: 10, color: 'var(--red)', maxWidth: 160, textAlign: 'right', lineHeight: 1.3 }}>
+          <span style={{ fontSize: 10, color: 'var(--red)', maxWidth: 170, textAlign: 'right', lineHeight: 1.3 }}>
             {stageData.error.slice(0, 80)}{stageData.error.length > 80 ? '…' : ''}
           </span>
         )}
@@ -202,26 +164,26 @@ function StageRow({ name, stageData, index, totalCompleted }) {
   )
 }
 
-// ── Pipeline tracker panel ────────────────────────────────────────────────
+// ── Pipeline tracker panel ─────────────────────────────────────────────────
 
 function PipelineTracker({ job }) {
   if (!job) return null
 
   const stageMap = {}
   ;(job.stages || []).forEach(s => { stageMap[s.name] = s })
-
   const completedCount = (job.stages || []).filter(s => !s.error).length
 
   const statusColor = {
-    initialising: 'var(--text-muted)',
-    running:      'var(--accent)',
-    complete:     'var(--green)',
-    failed:       'var(--red)',
-    unknown:      'var(--text-muted)',
+    pending: 'var(--text-muted)',
+    initialising: 'var(--cyan)',
+    running: 'var(--accent)',
+    complete: 'var(--green)',
+    failed: 'var(--red)',
+    unknown: 'var(--text-muted)',
   }[job.status] || 'var(--text-muted)'
 
   return (
-    <div style={styles.tracker}>
+    <div className="card anim-fade-up" style={{ overflow: 'hidden' }}>
       {/* Header */}
       <div style={styles.trackerHeader}>
         <div>
@@ -230,26 +192,26 @@ function PipelineTracker({ job }) {
               width: 8, height: 8, borderRadius: '50%',
               background: statusColor,
               boxShadow: job.status === 'running' ? `0 0 8px ${statusColor}` : 'none',
-              animation: job.status === 'running' ? 'pulse 1.5s ease-in-out infinite' : 'none',
+              animation: (job.status === 'running' || job.status === 'initialising') ? 'pulse 1.5s ease-in-out infinite' : 'none',
               flexShrink: 0,
             }} />
-            <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 700, color: statusColor, letterSpacing: '.08em', textTransform: 'uppercase' }}>
+            <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: statusColor, letterSpacing: '.08em', textTransform: 'uppercase' }}>
               {job.status}
             </span>
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
-            session: {job.job_id}
+          <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+            session {job.job_id}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 20 }}>
           {[
-            ['Frames',     job.n_frames],
+            ['Frames', job.n_frames],
             ['Detections', job.n_detections],
-            ['Inserted',   job.n_inserted],
-            ['Updated',    job.n_updated],
+            ['Inserted', job.n_inserted],
+            ['Updated', job.n_updated],
           ].map(([label, val]) => (
             <div key={label} style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{val ?? 0}</div>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{val ?? 0}</div>
               <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
             </div>
           ))}
@@ -258,14 +220,14 @@ function PipelineTracker({ job }) {
 
       {/* Timestamps */}
       {job.started_at && (
-        <div style={{ padding: '0 16px 8px', display: 'flex', gap: 16, fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-          <span>Started: {fmtTs(job.started_at)}</span>
-          {job.finished_at && <span>Finished: {fmtTs(job.finished_at)}</span>}
+        <div className="mono" style={{ padding: '0 18px 8px', display: 'flex', gap: 16, fontSize: 10, color: 'var(--text-muted)' }}>
+          <span>Started {fmtTs(job.started_at)}</span>
+          {job.finished_at && <span>Finished {fmtTs(job.finished_at)}</span>}
         </div>
       )}
 
       {/* Progress bar */}
-      <div style={{ height: 3, background: 'var(--border)', margin: '0 16px 12px' }}>
+      <div style={{ height: 3, background: 'var(--border)', margin: '0 18px 14px', borderRadius: 2 }}>
         <div style={{
           height: '100%',
           width: `${Math.round((completedCount / STAGE_ORDER.length) * 100)}%`,
@@ -276,7 +238,7 @@ function PipelineTracker({ job }) {
       </div>
 
       {/* Stage rows */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '0 16px 16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '0 18px 18px' }}>
         {STAGE_ORDER.map((name, idx) => (
           <StageRow
             key={name}
@@ -304,27 +266,23 @@ function PipelineTracker({ job }) {
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────
+// ── Main page ──────────────────────────────────────────────────────────────
 
 export default function IngestionPage() {
   const navigate = useNavigate()
 
-  // File selection state
   const [videoFile, setVideoFile] = useState(null)
-  const [gpsFile,   setGpsFile]   = useState(null)
+  const [gpsFile, setGpsFile] = useState(null)
 
-  // Upload phase
-  const [uploading,    setUploading]    = useState(false)
-  const [uploadPct,    setUploadPct]    = useState(0)
-  const [uploadError,  setUploadError]  = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadPct, setUploadPct] = useState(0)
+  const [uploadError, setUploadError] = useState(null)
 
-  // Poll phase
-  const [jobId,        setJobId]        = useState(null)
-  const [jobStatus,    setJobStatus]    = useState(null)   // full status object
+  const [jobId, setJobId] = useState(null)
+  const [jobStatus, setJobStatus] = useState(null)
   const pollRef = useRef(null)
 
-  // ── Start polling ───────────────────────────────────────────────────────
-
+  // ── Polling ──────────────────────────────────────────────────────────────
   const startPolling = useCallback((jid) => {
     if (pollRef.current) clearInterval(pollRef.current)
 
@@ -332,18 +290,15 @@ export default function IngestionPage() {
       try {
         const data = await fetchJobStatus(jid)
         setJobStatus(data)
-        // Stop when terminal state reached. Clear the cross-page "active job"
-        // key on terminal status too (MapPage already does this), so navigating
-        // back here after a finished run doesn't rehydrate a stale tracker.
+        // Terminal state → stop and clear the cross-page flag so a finished
+        // run doesn't rehydrate a stale tracker on the next visit.
         if (data.status === 'complete' || data.status === 'failed') {
           clearInterval(pollRef.current)
           pollRef.current = null
           localStorage.removeItem('rids_active_job')
         }
       } catch (err) {
-        // A 404 means the job_id no longer exists on the backend (e.g. a stale
-        // id rehydrated from localStorage after the session was cleaned up).
-        // Stop polling and drop the saved id so we don't spin forever.
+        // 404 → the job no longer exists on the backend (stale localStorage id)
         if (err?.response?.status === 404) {
           clearInterval(pollRef.current)
           pollRef.current = null
@@ -352,35 +307,23 @@ export default function IngestionPage() {
           setJobStatus(null)
           return
         }
-        // Otherwise it's a transient network blip — keep polling.
         console.warn('[RIDS] Status poll error:', err.message)
       }
     }
 
-    // Fire immediately, then repeat
     poll()
     pollRef.current = setInterval(poll, POLL_INTERVAL_MS)
   }, [])
 
-  // Clean up poll on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [])
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
-  // ── Rehydrate an in-flight job after navigation / refresh ─────────────────
-  // The pipeline runs on the host and keeps writing session.json regardless of
-  // whether this page is mounted. handleSubmit persists the job_id to
-  // localStorage, so on mount we reconnect to that job and resume polling —
-  // otherwise leaving and returning to the page would lose the live tracker
-  // even though the pipeline is still running.
+  // Rehydrate an in-flight job after navigation / refresh. The pipeline runs
+  // on the host and keeps writing session.json regardless of this page being
+  // mounted, so reconnect to the saved job_id and resume the live tracker.
   useEffect(() => {
     const savedJobId = localStorage.getItem('rids_active_job')
     if (!savedJobId) return
     setJobId(savedJobId)
-    // Optimistic placeholder until the first poll returns; the 404 guard in
-    // startPolling clears it if the job no longer exists on the backend.
     setJobStatus({
       job_id: savedJobId, status: 'running', stages: [],
       n_frames: 0, n_detections: 0, n_inserted: 0, n_updated: 0,
@@ -389,11 +332,9 @@ export default function IngestionPage() {
     startPolling(savedJobId)
   }, [startPolling])
 
-  // ── Submit handler ──────────────────────────────────────────────────────
-
+  // ── Submit ───────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!videoFile) return
-
     setUploading(true)
     setUploadError(null)
     setUploadPct(0)
@@ -402,15 +343,17 @@ export default function IngestionPage() {
 
     try {
       const result = await uploadSurvey(videoFile, gpsFile, setUploadPct)
-      // Persist job_id so MapPage can start live-polling even if the user
-      // navigates away from IngestionPage before the pipeline completes.
+      // Persist so MapPage live-refreshes even if the user navigates away.
       localStorage.setItem('rids_active_job', result.job_id)
       setJobId(result.job_id)
-      setJobStatus({ job_id: result.job_id, status: 'running', stages: [], n_frames: 0, n_detections: 0, n_inserted: 0, n_updated: 0, error_message: null, started_at: null, finished_at: null })
+      setJobStatus({
+        job_id: result.job_id, status: 'pending', stages: [],
+        n_frames: 0, n_detections: 0, n_inserted: 0, n_updated: 0,
+        error_message: null, started_at: null, finished_at: null,
+      })
       startPolling(result.job_id)
     } catch (err) {
-      const detail = err?.response?.data?.detail || err.message || 'Upload failed'
-      setUploadError(detail)
+      setUploadError(err?.response?.data?.detail || err.message || 'Upload failed')
     } finally {
       setUploading(false)
       setUploadPct(0)
@@ -429,48 +372,31 @@ export default function IngestionPage() {
     localStorage.removeItem('rids_active_job')
   }
 
-  const isRunning  = jobStatus?.status === 'running' || jobStatus?.status === 'initialising'
+  const isRunning = jobStatus?.status === 'running' || jobStatus?.status === 'initialising' || jobStatus?.status === 'pending'
   const isComplete = jobStatus?.status === 'complete'
-  const isFailed   = jobStatus?.status === 'failed'
-  const hasJob     = jobId !== null
+  const hasJob = jobId !== null
 
   return (
-    <div style={styles.page}>
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <button style={styles.backBtn} onClick={() => navigate('/')}>
-            <ArrowLeft size={14} /> MAP
-          </button>
-          <div>
-            <h1 style={styles.title}>New Survey</h1>
-            <p style={styles.subtitle}>
-              Upload dashcam footage · Run the RIDS inference pipeline
-            </p>
-          </div>
-        </div>
-        {isComplete && (
-          <button
-            style={{ ...styles.backBtn, color: 'var(--accent)', borderColor: 'var(--accent)' }}
-            onClick={() => navigate('/')}
-          >
-            <Map size={13} /> View on Map
-          </button>
-        )}
-      </div>
+    <div style={styles.page} className="page-grid-bg">
+      <div style={styles.inner}>
+        <SectionTitle
+          overline="Ingest"
+          title="New survey"
+          right={isComplete && (
+            <button className="btn btn-accent btn-sm" onClick={() => navigate('/map')}>
+              <Map size={13} /> View results on map
+            </button>
+          )}
+        />
 
-      <div style={styles.body}>
         <div style={styles.grid}>
-
           {/* ── Left column: upload form ──────────────────────────────── */}
-          <div style={styles.column}>
-
-            {/* Section: file selection */}
-            <div style={styles.section}>
-              <div style={styles.sectionTitle}>1 — SELECT FILES</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div className="card anim-fade-up" style={{ padding: 20 }}>
+              <div className="overline" style={{ marginBottom: 14 }}>01 — Select files</div>
 
               <DropZone
-                label="Dashcam Footage"
+                label="Dashcam footage"
                 accept=".mp4,video/mp4"
                 file={videoFile}
                 onFile={setVideoFile}
@@ -481,28 +407,28 @@ export default function IngestionPage() {
 
               <div style={{ marginTop: 10 }}>
                 <DropZone
-                  label="GPS Log (optional)"
+                  label="GPS log (optional)"
                   accept=".gpx"
                   file={gpsFile}
                   onFile={setGpsFile}
-                  icon={FileGps}
-                  color="var(--blue)"
+                  icon={Satellite}
+                  color="var(--cyan)"
                   hint="Drag & drop .gpx · Required for map placement"
                 />
               </div>
 
               {!gpsFile && (
                 <div style={styles.hint}>
-                  <AlertTriangle size={11} style={{ flexShrink: 0 }} />
-                  Without a GPS file, frames will have no coordinates. Stages 6–7
-                  (deduplication + DB write) will be skipped.
+                  <AlertTriangle size={11} style={{ flexShrink: 0, marginTop: 1 }} />
+                  Without a GPS file, frames have no coordinates: stages 6–7
+                  (dedup + DB write) are skipped and nothing appears on the map.
+                  The run still completes with detection artifacts.
                 </div>
               )}
             </div>
 
-            {/* Section: submit */}
-            <div style={styles.section}>
-              <div style={styles.sectionTitle}>2 — RUN PIPELINE</div>
+            <div className="card anim-fade-up delay-1" style={{ padding: 20 }}>
+              <div className="overline" style={{ marginBottom: 14 }}>02 — Run pipeline</div>
 
               {uploadError && (
                 <div style={styles.errorBanner}>
@@ -513,16 +439,14 @@ export default function IngestionPage() {
 
               {uploading && (
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                  <div className="mono" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 11, color: 'var(--text-muted)' }}>
                     <span>Uploading…</span>
                     <span>{uploadPct}%</span>
                   </div>
                   <div style={{ height: 4, background: 'var(--border)', borderRadius: 2 }}>
                     <div style={{
-                      height: '100%',
-                      width: `${uploadPct}%`,
-                      background: 'var(--accent)',
-                      borderRadius: 2,
+                      height: '100%', width: `${uploadPct}%`,
+                      background: 'var(--accent)', borderRadius: 2,
                       transition: 'width 0.2s ease',
                     }} />
                   </div>
@@ -531,107 +455,57 @@ export default function IngestionPage() {
 
               <div style={{ display: 'flex', gap: 10 }}>
                 <button
-                  style={{
-                    ...styles.submitBtn,
-                    opacity: (!videoFile || uploading || isRunning) ? 0.4 : 1,
-                    cursor: (!videoFile || uploading || isRunning) ? 'not-allowed' : 'pointer',
-                  }}
+                  className="btn btn-accent"
+                  style={{ flex: 1, padding: '11px 0' }}
                   disabled={!videoFile || uploading || isRunning}
                   onClick={handleSubmit}
                 >
-                  {uploading ? (
-                    <><Loader size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> Uploading…</>
-                  ) : isRunning ? (
-                    <><Loader size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> Pipeline running…</>
-                  ) : (
-                    <><Upload size={14} /> Start Pipeline</>
-                  )}
+                  {uploading
+                    ? <><UploadCloud size={15} /> Uploading…</>
+                    : isRunning
+                      ? <><Play size={15} /> Pipeline running…</>
+                      : <><Play size={15} /> Start pipeline</>}
                 </button>
-
-                {(hasJob || videoFile || gpsFile) && (
-                  <button style={styles.resetBtn} onClick={handleReset} disabled={isRunning}>
-                    <RefreshCw size={13} /> Reset
+                {(hasJob || videoFile) && (
+                  <button className="btn" onClick={handleReset} disabled={uploading}>
+                    <RotateCcw size={14} /> Reset
                   </button>
                 )}
               </div>
 
-              {isRunning && (
-                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
-                  Pipeline is running. This page auto-updates every {POLL_INTERVAL_MS / 1000}s — you can leave and come back.
-                </div>
-              )}
-            </div>
-
-            {/* Section: info */}
-            <div style={styles.infoBox}>
-              <div style={styles.sectionTitle}>PIPELINE STAGES</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-                {STAGE_ORDER.map((name, i) => (
-                  <div key={name} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                    <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', width: 16, flexShrink: 0, paddingTop: 1 }}>
-                      S{i + 1}
-                    </span>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>
-                        {STAGE_META[name].label}
-                      </div>
-                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                        {STAGE_META[name].sub}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              <div style={{ marginTop: 14, fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                The upload is handed to the GPU worker on the host
+                (<span className="mono">pipeline/job_watcher.py</span> must be running).
+                One survey is processed at a time — a second upload is rejected
+                with 409 until the current run finishes.
               </div>
             </div>
           </div>
 
-          {/* ── Right column: live tracker ────────────────────────────── */}
-          <div style={styles.column}>
-            <div style={styles.section}>
-              <div style={styles.sectionTitle}>3 — PIPELINE STATUS</div>
-
-              {!hasJob && !uploading && (
-                <div style={styles.emptyTracker}>
-                  <Upload size={28} style={{ color: 'var(--border-bright)', marginBottom: 12 }} />
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                    No active job
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                    Upload a video to start the pipeline
-                  </div>
+          {/* ── Right column: tracker ─────────────────────────────────── */}
+          <div>
+            {hasJob ? (
+              <PipelineTracker job={jobStatus} />
+            ) : (
+              <div className="card anim-fade-up delay-2" style={styles.placeholder}>
+                <MapPin size={22} style={{ color: 'var(--accent)', marginBottom: 10 }} />
+                <div className="display" style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
+                  The 7-stage pipeline will appear here
                 </div>
-              )}
-
-              {(uploading && !hasJob) && (
-                <div style={styles.emptyTracker}>
-                  <div style={{ width: 28, height: 28, border: '3px solid var(--border)', borderTop: '3px solid var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginBottom: 12 }} />
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Uploading video…</div>
-                  <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>{uploadPct}%</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.7, maxWidth: 330 }}>
+                  Frame extraction → RT-DETR detection → SAM segmentation →
+                  Monodepth2 depth → severity scoring → spatial dedup → PostGIS write.
+                  Live progress updates every {POLL_INTERVAL_MS / 1000} seconds.
                 </div>
-              )}
-
-              {hasJob && <PipelineTracker job={jobStatus} />}
-            </div>
-
-            {/* Success summary */}
-            {isComplete && jobStatus && (
-              <div style={styles.successBox}>
-                <CheckCircle size={20} style={{ color: 'var(--green)', flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
-                    Pipeline complete
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
-                    {jobStatus.n_inserted} new detections inserted ·{' '}
-                    {jobStatus.n_updated} updated ·{' '}
-                    {jobStatus.n_frames} frames processed
-                  </div>
-                  <button
-                    style={{ ...styles.backBtn, marginTop: 10, color: 'var(--accent)', borderColor: 'var(--accent)' }}
-                    onClick={() => navigate('/')}
-                  >
-                    <Map size={13} /> View on Map
-                  </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 18, width: '100%' }}>
+                  {PIPELINE_STAGES.map((s, i) => (
+                    <div key={s.key} style={{ ...styles.ghostStage }}>
+                      <span className="mono" style={{ fontSize: 9.5, color: 'var(--text-muted)', width: 16 }}>{String(i + 1).padStart(2, '0')}</span>
+                      <span style={{ width: 12, height: 12, borderRadius: '50%', border: '1.5px solid var(--border-bright)' }} />
+                      <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{s.label}</span>
+                      <span style={{ fontSize: 9.5, color: 'var(--text-muted)', marginLeft: 'auto' }}>{s.sub}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -642,223 +516,101 @@ export default function IngestionPage() {
   )
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────
-
 const styles = {
   page: {
-    paddingTop: 48,
-    minHeight: '100vh',
-    background: 'var(--bg)',
+    minHeight: '100%',
+    paddingTop: 'calc(var(--nav-h) + 26px)',
+    paddingBottom: 40,
   },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '24px 32px 0',
-  },
-  headerLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 16,
-  },
-  backBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 5,
-    padding: '6px 12px',
-    background: 'transparent',
-    border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)',
-    color: 'var(--text-muted)',
-    fontSize: 11,
-    fontFamily: 'var(--font-mono)',
-    fontWeight: 700,
-    cursor: 'pointer',
-    letterSpacing: '.08em',
-    transition: 'var(--transition)',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: 700,
-    color: 'var(--text)',
-    letterSpacing: '-0.5px',
-  },
-  subtitle: {
-    fontSize: 12,
-    color: 'var(--text-muted)',
-    marginTop: 2,
-  },
-  body: {
-    padding: '24px 32px 48px',
+  inner: {
+    maxWidth: 1060,
+    margin: '0 auto',
+    padding: '0 26px',
   },
   grid: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 20,
+    gridTemplateColumns: 'minmax(300px, 5fr) minmax(340px, 6fr)',
+    gap: 14,
     alignItems: 'start',
   },
-  column: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16,
-  },
-  section: {
-    background: 'var(--bg-card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    padding: '20px 20px',
-  },
-  sectionTitle: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: 10,
-    fontWeight: 700,
-    color: 'var(--text-muted)',
-    letterSpacing: '.12em',
-    marginBottom: 14,
-  },
 
-  // Drop zone
   dropZone: {
     display: 'flex',
     alignItems: 'center',
     gap: 14,
-    padding: '14px 16px',
-    borderRadius: 'var(--radius)',
+    padding: '16px 16px',
+    borderRadius: 'var(--radius-lg)',
     border: '1.5px dashed var(--border-bright)',
-    userSelect: 'none',
-  },
-  dropIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 'var(--radius)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-
-  hint: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 6,
-    marginTop: 10,
-    padding: '8px 12px',
-    background: 'rgba(255,140,66,0.08)',
-    border: '1px solid rgba(255,140,66,0.2)',
-    borderRadius: 'var(--radius)',
-    fontSize: 11,
-    color: 'var(--orange)',
-    lineHeight: 1.4,
-  },
-
-  // Buttons
-  submitBtn: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    padding: '10px 20px',
-    background: 'var(--accent)',
-    border: 'none',
-    borderRadius: 'var(--radius)',
-    color: '#0a0c10',
-    fontSize: 13,
-    fontWeight: 700,
-    transition: 'var(--transition)',
-  },
-  resetBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '10px 16px',
-    background: 'transparent',
-    border: '1px solid var(--border-bright)',
-    borderRadius: 'var(--radius)',
-    color: 'var(--text-muted)',
-    fontSize: 12,
-    fontWeight: 600,
     cursor: 'pointer',
     transition: 'var(--transition)',
   },
-
-  // Error banner
-  errorBanner: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: '10px 14px',
-    background: 'rgba(255,68,68,0.08)',
-    border: '1px solid rgba(255,68,68,0.3)',
-    borderRadius: 'var(--radius)',
-    fontSize: 12,
-    color: 'var(--red)',
-    marginBottom: 12,
-    lineHeight: 1.4,
-  },
-
-  // Info box
-  infoBox: {
-    background: 'var(--bg-card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    padding: '16px 20px',
-    opacity: 0.8,
-  },
-
-  // Empty tracker
-  emptyTracker: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '48px 20px',
-    color: 'var(--text-muted)',
-    textAlign: 'center',
-  },
-
-  // Pipeline tracker
-  tracker: {
-    background: 'var(--bg-card2)',
-    borderRadius: 'var(--radius)',
-    overflow: 'hidden',
-  },
-  trackerHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    padding: '14px 16px',
-    borderBottom: '1px solid var(--border)',
-  },
-
-  // Stage row
-  stageRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '8px 10px',
-    borderRadius: 4,
-    background: 'var(--bg-card)',
+  dropIcon: {
+    width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
     transition: 'var(--transition)',
   },
-
-  // Error box inside tracker
-  errorBox: {
-    margin: '0 16px 16px',
-    padding: '10px 14px',
-    background: 'rgba(255,68,68,0.06)',
-    border: '1px solid rgba(255,68,68,0.25)',
+  hint: {
+    display: 'flex',
+    gap: 7,
+    marginTop: 12,
+    padding: '9px 12px',
     borderRadius: 'var(--radius)',
+    background: 'rgba(255,159,67,0.08)',
+    border: '1px solid rgba(255,159,67,0.25)',
+    color: 'var(--orange)',
+    fontSize: 10.5,
+    lineHeight: 1.55,
+  },
+  errorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    padding: '9px 12px',
+    borderRadius: 'var(--radius)',
+    background: 'rgba(255,93,93,0.1)',
+    border: '1px solid rgba(255,93,93,0.35)',
+    color: 'var(--red)',
+    fontSize: 11.5,
   },
 
-  // Success box
-  successBox: {
+  trackerHeader: {
     display: 'flex',
     alignItems: 'flex-start',
-    gap: 14,
-    padding: '18px 20px',
-    background: 'rgba(74,222,128,0.06)',
-    border: '1px solid rgba(74,222,128,0.25)',
-    borderRadius: 'var(--radius-lg)',
+    justifyContent: 'space-between',
+    padding: '16px 18px 12px',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  stageRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    padding: '9px 12px',
+    borderRadius: 8,
+    transition: 'var(--transition)',
+  },
+  errorBox: {
+    margin: '0 18px 18px',
+    padding: '12px 14px',
+    borderRadius: 'var(--radius)',
+    background: 'rgba(255,93,93,0.07)',
+    border: '1px solid rgba(255,93,93,0.3)',
+  },
+  placeholder: {
+    padding: '26px 24px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  ghostStage: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '7px 10px',
+    borderRadius: 7,
+    background: 'var(--bg-card2)',
+    opacity: 0.75,
   },
 }

@@ -43,6 +43,28 @@ export const fetchHeatmap = () =>
 export const fetchPriority = (limit = 50) =>
   api.get('/priority-list', { params: { limit } }).then(r => r.data)
 
+// ── Export ────────────────────────────────────────────────────────────────
+
+/** Trigger a browser download of the full CSV export. */
+export const downloadCsv = () => {
+  window.open('/api/export/csv', '_blank')
+}
+
+// ── Health ────────────────────────────────────────────────────────────────
+
+/**
+ * Backend + DB health probe.
+ * The bare `/health` route is NOT proxied by nginx (only `/api/` is), so we
+ * probe a cheap real API route: 200 → API + DB reachable.
+ */
+export const fetchHealth = () =>
+  api.get('/stats', { timeout: 5000 })
+    .then(() => ({ status: 'ok', database: 'connected' }))
+    .catch((e) => ({
+      status: 'down',
+      database: e?.response ? 'unreachable' : 'api offline',
+    }))
+
 // ── Ingest ────────────────────────────────────────────────────────────────
 
 /**

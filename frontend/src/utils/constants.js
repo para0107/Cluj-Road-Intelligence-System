@@ -1,12 +1,12 @@
 // ── Damage class colours ──────────────────────────────────────────────────
 export const CLASS_COLORS = {
-  longitudinal_crack:        '#60a5fa',   // blue
+  longitudinal_crack:        '#6ea8ff',   // blue
   transverse_crack:          '#f472b6',   // pink
-  alligator_crack:           '#fb923c',   // orange
-  repaired_crack:            '#4ade80',   // green
-  pothole:                   '#f87171',   // red
-  pedestrian_crossing_blur:  '#a78bfa',   // purple
-  lane_line_blur:            '#fbbf24',   // amber
+  alligator_crack:           '#ff9f43',   // orange
+  repaired_crack:            '#3ddc84',   // green
+  pothole:                   '#ff5d5d',   // red
+  pedestrian_crossing_blur:  '#b388ff',   // purple
+  lane_line_blur:            '#ffd60a',   // amber
   manhole_cover:             '#2dd4bf',   // teal
   patchy_road:               '#e879f9',   // fuchsia
   rutting:                   '#94a3b8',   // slate
@@ -38,13 +38,15 @@ export const CLASS_ICONS = {
   rutting:                   '∿',
 }
 
+export const ALL_CLASSES = Object.keys(CLASS_LABELS)
+
 // ── Severity ──────────────────────────────────────────────────────────────
 export const SEVERITY_COLORS = {
-  1: '#4ade80',   // S1 — green
-  2: '#fbbf24',   // S2 — amber
-  3: '#fb923c',   // S3 — orange
-  4: '#f87171',   // S4 — red
-  5: '#a21caf',   // S5 — purple/critical
+  1: '#3ddc84',   // S1 — green
+  2: '#ffd60a',   // S2 — amber
+  3: '#ff9f43',   // S3 — orange
+  4: '#ff5d5d',   // S4 — red
+  5: '#c026d3',   // S5 — magenta / critical
 }
 
 export const SEVERITY_LABELS = {
@@ -55,15 +57,78 @@ export const SEVERITY_LABELS = {
   5: 'S5 · Emergency',
 }
 
-export const SEVERITY_SHORT = {
-  1: 'S1', 2: 'S2', 3: 'S3', 4: 'S4', 5: 'S5',
+export const SEVERITY_ACTIONS = {
+  1: 'Monitor — log and re-inspect at the next survey.',
+  2: 'Schedule — add to the routine maintenance plan.',
+  3: 'Priority repair — schedule within the current cycle.',
+  4: 'Urgent repair — dispatch a crew this week.',
+  5: 'Emergency — close the lane and repair immediately.',
 }
 
+export const SEVERITY_SHORT = { 1: 'S1', 2: 'S2', 3: 'S3', 4: 'S4', 5: 'S5' }
+
 // ── Map defaults ──────────────────────────────────────────────────────────
-// Cluj-Napoca city centre
+// Cluj-Napoca city centre (Piața Unirii)
 export const CLUJ_CENTER = [46.7712, 23.6236]
 export const CLUJ_ZOOM   = 13
 
-// Map tile — dark Carto tile, no API key required
-export const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-export const TILE_ATTR = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>'
+// Landmarks used for map fly-to shortcuts and demo context
+export const CLUJ_LANDMARKS = [
+  { name: 'Piața Unirii',        lat: 46.7694, lon: 23.5899 },
+  { name: 'Gara CFR',            lat: 46.7847, lon: 23.5867 },
+  { name: 'Cluj Arena',          lat: 46.7686, lon: 23.5725 },
+  { name: 'UBB — FSEGA',         lat: 46.7734, lon: 23.6193 },
+  { name: 'Iulius Mall',         lat: 46.7735, lon: 23.6320 },
+  { name: 'Aeroport Intl. Cluj', lat: 46.7852, lon: 23.6862 },
+  { name: 'Mănăștur',            lat: 46.7568, lon: 23.5567 },
+  { name: 'Mărăști',             lat: 46.7830, lon: 23.6180 },
+]
+
+// ── Basemaps (all key-free) ───────────────────────────────────────────────
+export const BASEMAPS = {
+  dark: {
+    label: 'Dark',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attr: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+  },
+  voyager: {
+    label: 'Streets',
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    attr: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/">CARTO</a>',
+  },
+  satellite: {
+    label: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attr: '© <a href="https://www.esri.com/">Esri</a> — World Imagery',
+  },
+}
+
+export const TILE_URL  = BASEMAPS.dark.url
+export const TILE_ATTR = BASEMAPS.dark.attr
+
+// ── Pipeline stages (must match orchestrator + backend session.json) ─────
+export const PIPELINE_STAGES = [
+  { key: 'preprocessor',        label: 'Preprocessor',        sub: 'Frame extraction · GPS sync · Lighting' },
+  { key: 'detector',            label: 'RT-DETR Detector',    sub: 'RT-DETR-L inference · Confidence filter' },
+  { key: 'segmentor',           label: 'SAM Segmentor',       sub: 'SAM 2.1 Tiny · 4 geometry features' },
+  { key: 'depth_estimator',     label: 'Depth Estimator',     sub: 'Monodepth2 · Relative disparity' },
+  { key: 'severity_classifier', label: 'Severity Classifier', sub: 'Rule-based S1–S5 · Weighted multi-signal' },
+  { key: 'deduplicator',        label: 'Deduplicator',        sub: 'DBSCAN · Haversine clustering' },
+  { key: 'db_writer',           label: 'DB Writer',           sub: 'PostGIS upsert · Priority score update' },
+]
+
+// ── Repair planning heuristics (client-side estimates, RON) ──────────────
+// Rough unit costs for a repair plan sketch — presentation aid, not a quote.
+export const REPAIR_COST_RON = {
+  pothole:                   950,
+  alligator_crack:           1400,
+  longitudinal_crack:        420,
+  transverse_crack:          420,
+  patchy_road:               1800,
+  rutting:                   2200,
+  repaired_crack:            120,
+  manhole_cover:             600,
+  lane_line_blur:            260,
+  pedestrian_crossing_blur:  340,
+}
+export const SEVERITY_COST_FACTOR = { 1: 0.5, 2: 0.8, 3: 1.0, 4: 1.45, 5: 2.1 }

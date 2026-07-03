@@ -7,7 +7,7 @@ data
 rtdetr-l.pt
 ml/weights
 frontend/node_modules
-CLAUDE.md
+frontend/dist
 # 1. Ignore everything in runs
 runs/*
 scripts/*

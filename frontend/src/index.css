@@ -1,47 +1,90 @@
+/* ════════════════════════════════════════════════════════════════════════
+   RIDS — Cluj-Napoca Road Intelligence · Design System
+   Dark "asphalt command-center" theme. Accent = road-marking yellow.
+   ════════════════════════════════════════════════════════════════════════ */
+
 /* ─── Design tokens ─────────────────────────────────────────────────────── */
 :root {
-  --bg:          #0a0c10;
-  --bg-card:     #111318;
-  --bg-card2:    #16191f;
-  --border:      #1f2330;
-  --border-bright: #2a3040;
-  --text:        #e8eaf0;
-  --text-muted:  #6b7280;
-  --text-dim:    #9ca3af;
-  --accent:      #e8ff47;
-  --accent-dim:  rgba(232, 255, 71, 0.12);
-  --accent-glow: rgba(232, 255, 71, 0.25);
-  --red:         #ff4444;
-  --orange:      #ff8c42;
-  --yellow:      #ffc107;
-  --green:       #4ade80;
-  --blue:        #60a5fa;
-  --purple:      #a78bfa;
-  --teal:        #2dd4bf;
-  --pink:        #f472b6;
-  --font-mono:   'Space Mono', monospace;
-  --font-sans:   'DM Sans', sans-serif;
-  --radius:      6px;
-  --radius-lg:   12px;
-  --shadow:      0 4px 24px rgba(0,0,0,0.4);
-  --shadow-lg:   0 8px 48px rgba(0,0,0,0.6);
-  --transition:  all 0.18s cubic-bezier(0.4,0,0.2,1);
+  /* Surfaces */
+  --bg:            #05070b;
+  --bg-elev:       #0a0d13;
+  --bg-card:       #0e1118;
+  --bg-card2:      #131722;
+  --bg-glass:      rgba(14, 17, 24, 0.82);
+  --bg-glass-soft: rgba(14, 17, 24, 0.62);
+  --border:        #1c212e;
+  --border-bright: #2a3144;
+  --border-accent: rgba(234, 255, 61, 0.35);
+
+  /* Text */
+  --text:          #eef1f8;
+  --text-dim:      #a8b0c2;
+  --text-muted:    #626b80;
+
+  /* Brand */
+  --accent:        #eaff3d;              /* road-marking yellow  */
+  --accent-strong: #d4ec1a;
+  --accent-ink:    #0a0d05;              /* text on accent       */
+  --accent-dim:    rgba(234, 255, 61, 0.10);
+  --accent-glow:   rgba(234, 255, 61, 0.28);
+  --cyan:          #4cc9f0;              /* telemetry blue       */
+  --cyan-dim:      rgba(76, 201, 240, 0.12);
+
+  /* Status ramp */
+  --red:    #ff5d5d;
+  --orange: #ff9f43;
+  --yellow: #ffd60a;
+  --green:  #3ddc84;
+  --blue:   #6ea8ff;
+  --purple: #b388ff;
+  --teal:   #2dd4bf;
+  --pink:   #f472b6;
+
+  /* Severity S1→S5 */
+  --s1: #3ddc84;
+  --s2: #ffd60a;
+  --s3: #ff9f43;
+  --s4: #ff5d5d;
+  --s5: #c026d3;
+
+  /* Type */
+  --font-display: 'Space Grotesk', 'Inter', sans-serif;
+  --font-sans:    'Inter', sans-serif;
+  --font-mono:    'JetBrains Mono', monospace;
+
+  /* Geometry */
+  --radius:     8px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+  --nav-h:      54px;
+
+  /* Effects */
+  --shadow:    0 4px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 56px rgba(0, 0, 0, 0.65);
+  --glow:      0 0 24px var(--accent-glow);
+  --transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 :root.light {
-  --bg:          #f3f4f6;
-  --bg-card:     #ffffff;
-  --bg-card2:    #f9fafb;
-  --border:      #e5e7eb;
-  --border-bright: #d1d5db;
-  --text:        #111827;
-  --text-muted:  #6b7280;
-  --text-dim:    #9ca3af;
-  --accent:      #0ea5e9;
-  --accent-dim:  rgba(14, 165, 233, 0.12);
-  --accent-glow: rgba(14, 165, 233, 0.25);
-  --shadow:      0 4px 24px rgba(0,0,0,0.06);
-  --shadow-lg:   0 8px 48px rgba(0,0,0,0.12);
+  --bg:            #f2f4f8;
+  --bg-elev:       #ffffff;
+  --bg-card:       #ffffff;
+  --bg-card2:      #f7f8fb;
+  --bg-glass:      rgba(255, 255, 255, 0.88);
+  --bg-glass-soft: rgba(255, 255, 255, 0.72);
+  --border:        #e3e7ef;
+  --border-bright: #cdd4e0;
+  --border-accent: rgba(163, 178, 0, 0.45);
+  --text:          #10141c;
+  --text-dim:      #3d4557;
+  --text-muted:    #7a8296;
+  --accent:        #99a800;
+  --accent-strong: #7e8b00;
+  --accent-ink:    #ffffff;
+  --accent-dim:    rgba(153, 168, 0, 0.10);
+  --accent-glow:   rgba(153, 168, 0, 0.22);
+  --shadow:        0 4px 24px rgba(15, 20, 40, 0.08);
+  --shadow-lg:     0 12px 56px rgba(15, 20, 40, 0.14);
 }
 
 /* ─── Reset ─────────────────────────────────────────────────────────────── */
@@ -53,57 +96,276 @@ html, body, #root {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* ─── Scrollbars ─────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
 
-/* ─── Leaflet overrides ──────────────────────────────────────────────────── */
-:root.light .leaflet-tile-pane {
-  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+/* Subtle blueprint grid on page backgrounds */
+.page-grid-bg {
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  background-position: -1px -1px;
 }
+
+/* ─── Scrollbars ────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ─── Keyframes ─────────────────────────────────────────────────────────── */
+@keyframes spin    { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes pulse   { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@keyframes fadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeUp  {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(32px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
+}
+@keyframes dashMove {
+  from { background-position-x: 0; }
+  to   { background-position-x: 56px; }
+}
+@keyframes ping {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  100% { transform: scale(2.6); opacity: 0;   }
+}
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%      { box-shadow: 0 0 26px 4px var(--accent-glow); }
+}
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+
+.anim-fade-up      { animation: fadeUp 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.anim-fade-in      { animation: fadeIn 0.4s ease both; }
+.anim-slide-right  { animation: slideInRight 0.35s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+.delay-1 { animation-delay: 0.06s; }
+.delay-2 { animation-delay: 0.12s; }
+.delay-3 { animation-delay: 0.18s; }
+.delay-4 { animation-delay: 0.24s; }
+.delay-5 { animation-delay: 0.30s; }
+.delay-6 { animation-delay: 0.36s; }
+
+/* Animated road divider — a moving dashed centre line */
+.road-divider {
+  height: 3px;
+  border-radius: 2px;
+  background-image: linear-gradient(90deg, var(--accent) 0 34px, transparent 34px 56px);
+  background-size: 56px 3px;
+  animation: dashMove 1.6s linear infinite;
+  opacity: 0.85;
+}
+
+/* Skeleton loading bar */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card2) 37%, var(--bg-card) 63%);
+  background-size: 600px 100%;
+  animation: shimmer 1.6s infinite linear;
+  border-radius: var(--radius);
+}
+
+/* ─── Cards / glass panels ──────────────────────────────────────────────── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  transition: var(--transition);
+}
+.card-hover:hover {
+  border-color: var(--border-bright);
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
+}
+.card-accent-hover:hover {
+  border-color: var(--border-accent);
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg), 0 0 32px rgba(234, 255, 61, 0.07);
+}
+.glass {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-bright);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+/* ─── Buttons ───────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-bright);
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+  text-decoration: none;
+  user-select: none;
+}
+.btn:hover { border-color: var(--text-muted); background: var(--bg-card2); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+.btn-accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.btn-accent:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  box-shadow: var(--glow);
+}
+.btn-ghost { background: transparent; }
+.btn-danger { color: var(--red); border-color: rgba(255, 93, 93, 0.4); }
+.btn-danger:hover { background: rgba(255, 93, 93, 0.08); border-color: var(--red); }
+.btn-sm { padding: 6px 11px; font-size: 11.5px; border-radius: 6px; }
+.btn-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ─── Chips / pills ─────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+.chip:hover { border-color: var(--border-bright); color: var(--text-dim); }
+
+/* ─── Inputs ────────────────────────────────────────────────────────────── */
+.input, .select {
+  background: var(--bg-elev);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  padding: 8px 12px;
+  outline: none;
+  transition: var(--transition);
+}
+.input:focus, .select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.select { cursor: pointer; }
+.select option { background: var(--bg-card); color: var(--text); }
+
+/* ─── Tables ────────────────────────────────────────────────────────────── */
+.table-row-hover { transition: background 0.12s ease; }
+.table-row-hover:hover { background: var(--bg-card2) !important; }
+
+/* ─── Nav links ─────────────────────────────────────────────────────────── */
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  transition: var(--transition);
+  text-transform: uppercase;
+}
+.nav-link:hover { color: var(--text-dim); background: var(--bg-card2); }
+.nav-link.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: var(--border-accent);
+}
+
+/* ─── Leaflet overrides ─────────────────────────────────────────────────── */
 .leaflet-container {
-  background: var(--bg-card) !important;
+  background: var(--bg-elev) !important;
   font-family: var(--font-sans) !important;
 }
 .leaflet-popup-content-wrapper {
-  background: var(--bg-card) !important;
+  background: var(--bg-glass) !important;
   border: 1px solid var(--border-bright) !important;
   border-radius: var(--radius-lg) !important;
   box-shadow: var(--shadow-lg) !important;
   color: var(--text) !important;
+  backdrop-filter: blur(12px);
 }
 .leaflet-popup-tip { background: var(--bg-card) !important; }
 .leaflet-popup-close-button { color: var(--text-muted) !important; }
 .leaflet-control-zoom a {
-  background: var(--bg-card) !important;
+  background: var(--bg-glass) !important;
   border-color: var(--border-bright) !important;
   color: var(--text) !important;
+  backdrop-filter: blur(8px);
 }
 .leaflet-control-zoom a:hover { background: var(--bg-card2) !important; }
 .leaflet-control-attribution {
-  background: rgba(10,12,16,0.85) !important;
+  background: rgba(5, 7, 11, 0.8) !important;
   color: var(--text-muted) !important;
   font-size: 10px !important;
 }
+:root.light .leaflet-control-attribution { background: rgba(255, 255, 255, 0.8) !important; }
 .leaflet-control-attribution a { color: var(--accent) !important; }
 
-/* ─── Heatmap Blob Effect ────────────────────────────────────────────────── */
-.heatmap-blob {
-  filter: blur(6px);
-  mix-blend-mode: screen;
-}
-:root.light .heatmap-blob {
-  mix-blend-mode: multiply;
-  filter: blur(5px);
-}
+/* Pulsing critical marker (applied to CircleMarker via className) */
+.marker-critical { animation: pulse 1.6s ease-in-out infinite; }
 
-/* ─── Utility classes ────────────────────────────────────────────────────── */
-.mono { font-family: var(--font-mono); }
-.text-accent { color: var(--accent); }
-.text-muted { color: var(--text-muted); }
-.text-dim { color: var(--text-dim); }
+/* Heatmap blob */
+.heatmap-blob { filter: blur(7px); mix-blend-mode: screen; }
+:root.light .heatmap-blob { mix-blend-mode: multiply; filter: blur(6px); }
+
+/* ─── Utility ───────────────────────────────────────────────────────────── */
+.mono         { font-family: var(--font-mono); }
+.display      { font-family: var(--font-display); }
+.text-accent  { color: var(--accent); }
+.text-muted   { color: var(--text-muted); }
+.text-dim     { color: var(--text-dim); }
+.overline {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
