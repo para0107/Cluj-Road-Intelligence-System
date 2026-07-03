@@ -1,7 +1,13 @@
 import axios from 'axios'
 
+// When the frontend is hosted separately from the backend (e.g. Vercel +
+// Oracle VM), set VITE_API_URL to the backend origin at BUILD time, e.g.
+//   VITE_API_URL=https://rids-api.example.duckdns.org
+// Unset (default) keeps same-origin relative /api — the nginx/Vite proxy path.
+export const API_ORIGIN = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: `${API_ORIGIN}/api`,
   timeout: 15000,
 })
 

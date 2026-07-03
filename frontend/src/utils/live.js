@@ -8,7 +8,7 @@
  *    fetchLiveEvents() polling while the socket is down.
  */
 
-import api from './api'
+import api, { API_ORIGIN } from './api'
 
 // ── Device identity ─────────────────────────────────────────────────────────
 
@@ -62,7 +62,13 @@ export function openLiveSocket({ onHello, onUpsert, onRemoved, onStatus }) {
   let retryMs = 1000
   let pingTimer = null
 
-  const url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/live/ws`
+  // Same-origin by default; when the frontend is hosted elsewhere (Vercel),
+  // VITE_API_URL points the socket straight at the backend origin. Vercel
+  // rewrites cannot proxy WebSockets, so this direct path is what keeps the
+  // Live page on push instead of the polling fallback.
+  const url = API_ORIGIN
+    ? `${API_ORIGIN.replace(/^http/, 'ws')}/api/live/ws`
+    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/live/ws`
 
   const connect = () => {
     if (closed) return
