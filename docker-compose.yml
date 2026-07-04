@@ -50,6 +50,9 @@ services:
       # Optional free Google OAuth client id (console.cloud.google.com);
       # leave empty to hide the Google button in the UI.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      # Allowed CORS origins, comma-separated (e.g. https://rids.vercel.app).
+      # "*" keeps local dev friction-free; tighten when deploying split-host.
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
 
     ports:
       - "8000:8000"
