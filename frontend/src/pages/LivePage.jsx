@@ -13,6 +13,7 @@ import { MapContainer, TileLayer, CircleMarker, useMapEvents, useMap } from 'rea
 import {
   Radio, WifiOff, Plus, X, ThumbsUp, ThumbsDown, CheckCircle2, ShieldCheck,
   Shield, ShieldAlert, Car, Activity, Users, MapPin, Crosshair,
+  Smartphone, Copy, Trash2, Gauge, Link2,
 } from 'lucide-react'
 import {
   CLASS_COLORS, CLASS_LABELS, CLASS_ICONS, ALL_CLASSES,
@@ -22,7 +23,9 @@ import {
   getDeviceId, fetchLiveEvents, fetchLiveStats,
   postLiveReport, confirmLiveEvent, disputeLiveEvent, resolveLiveEvent,
   openLiveSocket,
+  pairThisDevice, createPairCode, fetchMyDevices, disconnectDevice,
 } from '../utils/live'
+import { startDriveMode } from '../utils/driveMode'
 import { ClassDot } from '../components/ui'
 import { useIsDark } from '../hooks/useTheme'
 
@@ -96,6 +99,14 @@ export default function LivePage() {
   const [flyTarget, setFlyTarget] = useState(null)
   const knownIds = useRef(new Set())
   const pollRef = useRef(null)
+
+  // Paired devices + phone drive mode
+  const [devicesOpen, setDevicesOpen] = useState(false)
+  const [devices, setDevices] = useState(null)
+  const [pairInfo, setPairInfo] = useState(null)          // pending device w/ code
+  const [driveOn, setDriveOn] = useState(false)
+  const [driveStats, setDriveStats] = useState({ jolt: 0, speed: null, hasFix: false, sent: 0 })
+  const driveStopRef = useRef(null)
 
   const deviceId = useMemo(getDeviceId, [])
 
@@ -221,6 +232,88 @@ export default function LivePage() {
     }
   }
 
+  // ── Paired devices & phone drive mode ────────────────────────────────────
+  const loadDevices = useCallback(async () => {
+    try { setDevices((await fetchMyDevices()).items || []) } catch { /* backend down */ }
+  }, [])
+
+  const toggleDevicesPanel = () => {
+    setDevicesOpen(v => !v)
+    if (!devicesOpen) loadDevices()
+  }
+
+  const connectPhone = async () => {
+    try {
+      await pairThisDevice('This phone / browser', 'phone')
+      pushToast('This device is now connected to your account')
+      loadDevices()
+    } catch (e) {
+      pushToast(`Connect failed: ${e?.response?.data?.detail || e.message}`, 'var(--red)')
+    }
+  }
+
+  const makePairCode = async () => {
+    try {
+      const dev = await createPairCode('Dashcam / PC', 'dashcam')
+      setPairInfo(dev)
+      loadDevices()
+    } catch (e) {
+      pushToast(`Pairing failed: ${e?.response?.data?.detail || e.message}`, 'var(--red)')
+    }
+  }
+
+  const removeDevice = async (d) => {
+    if (d.device_id && !window.confirm(`Disconnect "${d.name}"? Its future uploads will be rejected.`)) return
+    try {
+      const res = await disconnectDevice(d.id)
+      setDevices(res.items || [])
+      if (pairInfo?.id === d.id) setPairInfo(null)
+    } catch (e) {
+      pushToast(`Disconnect failed: ${e?.response?.data?.detail || e.message}`, 'var(--red)')
+    }
+  }
+
+  const stopDrive = useCallback(() => {
+    driveStopRef.current?.()
+    driveStopRef.current = null
+    setDriveOn(false)
+  }, [])
+
+  const toggleDrive = async () => {
+    if (driveOn) { stopDrive(); return }
+    try { await pairThisDevice('This phone / browser', 'phone') } catch { /* keep going — reporting still works */ }
+    let failed = false
+    const stop = await startDriveMode({
+      onHit: async (hit) => {
+        try {
+          const res = await postLiveReport({
+            latitude: hit.latitude,
+            longitude: hit.longitude,
+            damage_type: 'pothole',
+            confidence: hit.confidence,
+            severity: hit.severity,
+            note: `phone-motion:jolt=${hit.jolt}m/s2`,
+          })
+          if (res.event) upsertEvent(res.event)
+          setDriveStats(s => ({ ...s, sent: s.sent + 1 }))
+          pushToast(`Impact detected (${hit.jolt} m/s²) — pothole auto-reported`)
+        } catch (e) {
+          pushToast(`Auto-report failed: ${e?.response?.data?.detail || e.message}`, 'var(--red)')
+        }
+      },
+      onTick: (t) => setDriveStats(s => ({ ...s, ...t })),
+      onError: (msg) => { failed = true; pushToast(msg, 'var(--red)'); stopDrive() },
+    })
+    if (failed) { stop?.(); return }
+    driveStopRef.current = stop
+    setDriveOn(true)
+    setDevicesOpen(true)
+    pushToast('Drive mode ON — impacts auto-report as potholes')
+  }
+
+  // Stop sensors when leaving the page
+  useEffect(() => () => { driveStopRef.current?.() }, [])
+
   const eventList = useMemo(
     () => Object.values(events).sort((a, b) => new Date(b.last_reported) - new Date(a.last_reported)),
     [events],
@@ -303,6 +396,99 @@ export default function LivePage() {
         <div className="mono" style={{ fontSize: 9.5, color: 'var(--text-muted)', paddingLeft: 4 }}>
           you are <span style={{ color: 'var(--accent)' }}>{deviceId}</span>
         </div>
+
+        <button className="btn btn-sm" onClick={toggleDevicesPanel}
+                style={{ gap: 6, borderColor: devicesOpen ? 'var(--border-accent)' : undefined }}>
+          <Smartphone size={12} /> Devices
+          {driveOn && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)' }} />}
+        </button>
+
+        {/* ── Devices panel: connect a phone / dashcam so damage auto-uploads ── */}
+        {devicesOpen && (
+          <div className="glass anim-fade-up" style={styles.devicesPanel}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span className="overline">My sensors</span>
+              <button className="btn btn-sm btn-ghost" style={{ width: 24, height: 24, padding: 0 }}
+                      onClick={() => setDevicesOpen(false)}>
+                <X size={12} />
+              </button>
+            </div>
+
+            {/* Phone drive mode */}
+            <button className={`btn btn-sm ${driveOn ? 'btn-danger' : 'btn-accent'}`}
+                    style={{ width: '100%', gap: 8, padding: '9px 0' }} onClick={toggleDrive}>
+              <Gauge size={13} />
+              {driveOn ? 'Stop drive mode' : 'Start drive mode (this phone)'}
+            </button>
+            {driveOn && (
+              <div className="mono" style={styles.driveReadout}>
+                <span>jolt <b style={{ color: driveStats.jolt > 9 ? 'var(--red)' : 'var(--text)' }}>{driveStats.jolt}</b> m/s²</span>
+                <span>gps <b style={{ color: driveStats.hasFix ? 'var(--green)' : 'var(--orange)' }}>{driveStats.hasFix ? 'fix' : '—'}</b></span>
+                <span>sent <b style={{ color: 'var(--accent)' }}>{driveStats.sent}</b></span>
+              </div>
+            )}
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', margin: '6px 2px 10px', lineHeight: 1.5 }}>
+              Mount the phone in the car and drive — impacts are detected with the
+              motion sensor + GPS and uploaded automatically.
+            </div>
+
+            {/* Dashcam / PC pairing */}
+            <button className="btn btn-sm" style={{ width: '100%', gap: 8 }} onClick={makePairCode}>
+              <Link2 size={12} /> Pair a dashcam / PC
+            </button>
+            {pairInfo?.pair_code && (
+              <div style={styles.pairBox} className="anim-fade-in">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span className="mono" style={{ fontSize: 18, fontWeight: 800, letterSpacing: '0.2em', color: 'var(--accent)' }}>
+                    {pairInfo.pair_code}
+                  </span>
+                  <button className="btn btn-sm btn-ghost" title="Copy pairing command"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(`python pipeline/live_pipeline.py --pair ${pairInfo.pair_code}`)
+                            pushToast('Pairing command copied')
+                          }}>
+                    <Copy size={12} />
+                  </button>
+                </div>
+                <div className="mono" style={{ fontSize: 9.5, color: 'var(--text-muted)', marginTop: 4 }}>
+                  python pipeline/live_pipeline.py --pair {pairInfo.pair_code}
+                </div>
+                <div style={{ fontSize: 9.5, color: 'var(--text-muted)', marginTop: 4 }}>
+                  Single-use, expires in ~15 min. The agent then detects damage with the
+                  RT-DETR lite pipeline and uploads it under your account.
+                </div>
+              </div>
+            )}
+
+            {/* Device list */}
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
+              {devices === null && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading…</span>}
+              {devices?.length === 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No connected devices yet.</span>}
+              {devices?.map(d => (
+                <div key={d.id} style={styles.deviceRow}>
+                  <span style={{
+                    width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                    background: !d.device_id ? 'var(--orange)' : d.is_active ? 'var(--green)' : 'var(--text-muted)',
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {d.name} <span className="mono" style={{ fontSize: 9, color: 'var(--text-muted)' }}>· {d.kind}</span>
+                    </div>
+                    <div className="mono" style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                      {!d.device_id ? `code ${d.pair_code || '…'} — waiting`
+                        : !d.is_active ? 'disconnected'
+                        : `${d.reports_sent} reports · ${fmtAgo(d.last_seen_at, now)}`}
+                    </div>
+                  </div>
+                  <button className="btn btn-sm btn-ghost" title="Disconnect" style={{ width: 24, height: 24, padding: 0 }}
+                          onClick={() => removeDevice(d)}>
+                    <Trash2 size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Report button ────────────────────────────────────────────── */}
@@ -498,6 +684,40 @@ const styles = {
     display: 'flex',
     gap: 16,
     padding: '10px 16px',
+  },
+
+  devicesPanel: {
+    width: 292,
+    padding: 14,
+    marginTop: 2,
+  },
+  driveReadout: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 10,
+    fontSize: 10.5,
+    color: 'var(--text-dim)',
+    padding: '7px 10px',
+    marginTop: 6,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: 'var(--bg-card2)',
+  },
+  pairBox: {
+    marginTop: 8,
+    padding: '10px 12px',
+    border: '1px dashed var(--border-accent)',
+    borderRadius: 10,
+    background: 'var(--accent-dim)',
+  },
+  deviceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '7px 9px',
+    border: '1px solid var(--border)',
+    borderRadius: 9,
+    background: 'var(--bg-card2)',
   },
 
   reportWrap: {

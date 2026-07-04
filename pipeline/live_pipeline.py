@@ -36,7 +36,9 @@ ST_DWithin query. Nothing here calls a paid service.
 
 Auth
 ----
-Live reporting requires an account (see backend/routes/auth.py). Provide:
+Live reporting requires an account (see backend/routes/auth.py). Options:
+  --pair <CODE>                              # code from Live page → Devices panel;
+                                             # saves a token to ~/.rids_live_token
   --token <jwt>                              # or env RIDS_TOKEN
   --email x@y.z --password ...               # or env RIDS_EMAIL / RIDS_PASSWORD
 
@@ -77,6 +79,7 @@ _WEIGHTS_DIR = Path(os.getenv("WEIGHTS_DIR", "ml/weights"))
 _DEFAULT_PT = _WEIGHTS_DIR / os.getenv("RTDETR_WEIGHTS", "best.pt")
 _DEFAULT_API = os.getenv("LIVE_API_URL", "http://localhost:8000")
 _DEVICE_ID_FILE = Path.home() / ".rids_device_id"
+_TOKEN_FILE = Path.home() / ".rids_live_token"   # written by --pair, reused on later runs
 
 
 # ── Small helpers ───────────────────────────────────────────────────────────
@@ -134,6 +137,41 @@ class GpsTrack:
         return pts[-1][1], pts[-1][2]
 
 
+def _saved_token() -> str | None:
+    """Token persisted by a previous `--pair <CODE>` run (see LivePage → Devices)."""
+    try:
+        if _TOKEN_FILE.exists():
+            return _TOKEN_FILE.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        pass
+    return None
+
+
+def pair_with_code(base: str, code: str, device_id: str) -> str:
+    """
+    Exchange a Live-page pairing code for a JWT — the vehicle machine never
+    needs the account password. The token is persisted for later runs.
+    """
+    r = requests.post(
+        f"{base.rstrip('/')}/api/live/devices/claim",
+        json={"code": code.strip().upper(), "device_id": device_id},
+        timeout=8,
+    )
+    if r.status_code != 200:
+        print(f"[x] Pairing failed ({r.status_code}): {r.text[:200]}")
+        raise SystemExit(1)
+    data = r.json()
+    token = data["access_token"]
+    try:
+        _TOKEN_FILE.write_text(token, encoding="utf-8")
+        saved = f" (token saved to {_TOKEN_FILE})"
+    except OSError:
+        saved = " (could not persist token — pass --token on future runs)"
+    dev = data.get("device") or {}
+    print(f"[pair] connected as device '{dev.get('name', device_id)}' [{device_id}]{saved}")
+    return token
+
+
 class LiveApi:
     """Tiny authenticated client for the live endpoints (auto re-login once)."""
 
@@ -141,13 +179,15 @@ class LiveApi:
         self.base = base.rstrip("/")
         self.email = email
         self.password = password
-        self.token = token or self._login()
+        self.token = token or _saved_token() or self._login()
 
     def _login(self) -> str:
         if not (self.email and self.password):
             print(
                 "[x] Live reporting requires an account.\n"
-                "    Pass --token, or --email/--password (or set RIDS_TOKEN / "
+                "    Easiest: open the Live page → Devices → 'Pair a dashcam / PC'\n"
+                "    and run:  python pipeline/live_pipeline.py --pair <CODE>\n"
+                "    Or pass --token, or --email/--password (or set RIDS_TOKEN / "
                 "RIDS_EMAIL / RIDS_PASSWORD in the environment)."
             )
             raise SystemExit(1)
@@ -171,9 +211,15 @@ class LiveApi:
                     headers={"Authorization": f"Bearer {self.token}"},
                     timeout=5,
                 )
-                if r.status_code == 401 and attempt == 1 and self.email:
-                    self.token = self._login()   # expired token → one retry
-                    continue
+                if r.status_code == 401 and attempt == 1:
+                    if self.email:
+                        self.token = self._login()   # expired token → one retry
+                        continue
+                    print(
+                        "  [!] token expired/revoked — re-pair from the Live page "
+                        "(Devices → Pair a dashcam / PC → --pair <CODE>)"
+                    )
+                    return None
                 r.raise_for_status()
                 return r.json()
             except requests.RequestException as exc:
@@ -259,6 +305,9 @@ def main() -> int:
     ap.add_argument("--cooldown-s", type=float, default=30.0, help="Local dedup: seconds between same-class reports nearby")
     ap.add_argument("--realtime", action="store_true", help="Replay at native speed")
 
+    ap.add_argument("--pair", metavar="CODE",
+                    help="Pairing code from the Live page (Devices panel); claims a token, "
+                         "saves it to ~/.rids_live_token, and exits unless a source is given")
     ap.add_argument("--export-onnx", action="store_true", help="Export best.pt to ONNX and exit")
     ap.add_argument("--quantize", action="store_true", help="With --export-onnx: also write dynamic-INT8 model")
     args = ap.parse_args()
@@ -266,8 +315,14 @@ def main() -> int:
     if args.export_onnx:
         return export_onnx(Path(args.weights), args.imgsz, args.quantize)
 
+    if args.pair:
+        pair_with_code(args.api, args.pair, args.device_id or stable_device_id())
+        if args.video is None and args.camera is None:
+            print("[pair] done — run again with --video/--camera to start reporting.")
+            return 0
+
     if args.video is None and args.camera is None:
-        ap.error("Provide --video or --camera (or --export-onnx).")
+        ap.error("Provide --video or --camera (or --export-onnx / --pair).")
     if not args.gps and (args.lat is None or args.lon is None):
         ap.error("Provide --gps, or --lat and --lon for a fixed position.")
 

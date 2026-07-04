@@ -44,6 +44,22 @@ export const disputeLiveEvent = (id, note = null) =>
 export const resolveLiveEvent = (id) =>
   api.post(`/live/events/${id}/resolve`).then(r => r.data)
 
+// ── Paired devices (phone drive mode / dashcam edge agents) ─────────────────
+
+/** Register THIS browser/phone as a device (instant, no code). */
+export const pairThisDevice = (name, kind = 'phone') =>
+  api.post('/live/devices/pair', { name, kind, device_id: getDeviceId() }).then(r => r.data)
+
+/** Create a pending device + single-use pairing code for an external agent. */
+export const createPairCode = (name, kind = 'dashcam') =>
+  api.post('/live/devices/pair', { name, kind }).then(r => r.data)
+
+export const fetchMyDevices = () =>
+  api.get('/live/devices').then(r => r.data)
+
+export const disconnectDevice = (id) =>
+  api.delete(`/live/devices/${id}`).then(r => r.data)
+
 // ── WebSocket ───────────────────────────────────────────────────────────────
 
 /**

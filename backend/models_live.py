@@ -83,6 +83,49 @@ class LiveEvent(Base):
         )
 
 
+class LiveDevice(Base):
+    """
+    A sensor paired to an account: the user's phone (browser drive mode), a
+    dashcam PC running pipeline/live_pipeline.py, or the fleet simulator.
+
+    Pairing flows
+    -------------
+    * Self-registration (phone/browser): the logged-in client calls
+      POST /live/devices/pair with its device_id — claimed instantly.
+    * Pairing code (edge agent): POST /live/devices/pair without a device_id
+      returns a short-lived single-use code; the agent exchanges it via
+      POST /live/devices/claim (no password typed on the vehicle machine).
+
+    Reports whose device_id matches a revoked device are rejected, and every
+    accepted signal bumps last_seen_at / reports_sent, so the Live page can
+    show "your dashcam uploaded 12 hazards, last seen 2 min ago".
+    """
+
+    __tablename__ = "live_devices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    device_id = Column(String(64), unique=True)      # NULL until a pair code is claimed
+    name = Column(String(80), nullable=False)
+    kind = Column(String(16), nullable=False, default="dashcam")  # phone|dashcam|browser|simulator
+
+    pair_code = Column(String(12), unique=True)      # single-use, short-lived
+    pair_code_expires_at = Column(DateTime(timezone=True))
+
+    is_active = Column(Boolean, nullable=False, default=True)
+    last_seen_at = Column(DateTime(timezone=True))
+    reports_sent = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        Index("idx_live_devices_user", "user_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<LiveDevice {self.name} kind={self.kind} device_id={self.device_id} active={self.is_active}>"
+
+
 class LiveReport(Base):
     __tablename__ = "live_reports"
 

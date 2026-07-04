@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 # ─────────────────────────────────────────────
@@ -75,3 +75,59 @@ class LiveStatsResponse(BaseModel):
     verified_events: int
     reports_last_hour: int
     devices_last_hour: int
+
+
+# ─────────────────────────────────────────────
+# Paired devices (phone drive mode / dashcam edge agents)
+# ─────────────────────────────────────────────
+
+class DevicePairRequest(BaseModel):
+    """
+    Register a sensor on the caller's account.
+    With device_id → instant self-registration (phone/browser drive mode).
+    Without device_id → returns a single-use pairing code for an edge agent.
+    """
+    name: str = Field(..., min_length=1, max_length=80)
+    kind: str = Field("dashcam")
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+
+    @field_validator("kind")
+    @classmethod
+    def kind_must_be_known(cls, v: str) -> str:
+        if v not in ("phone", "dashcam", "browser", "simulator"):
+            raise ValueError("kind must be phone, dashcam, browser, or simulator.")
+        return v
+
+
+class DeviceClaimRequest(BaseModel):
+    """Edge agent exchanges a pairing code for a token (no password on the car PC)."""
+    code: str = Field(..., min_length=4, max_length=12)
+    device_id: str = Field(..., min_length=3, max_length=64)
+    name: Optional[str] = Field(None, max_length=80)
+
+
+class LiveDeviceRead(BaseModel):
+    id: UUID
+    name: str
+    kind: str
+    device_id: Optional[str]
+    is_active: bool
+    last_seen_at: Optional[datetime]
+    reports_sent: int
+    created_at: Optional[datetime]
+    pair_code: Optional[str]                 # only present while unclaimed
+    pair_code_expires_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DeviceListResponse(BaseModel):
+    total: int
+    items: List[LiveDeviceRead]
+
+
+class DeviceClaimResponse(BaseModel):
+    """The claimed device plus a JWT the edge agent reports with."""
+    access_token: str
+    token_type: str = "bearer"
+    device: LiveDeviceRead

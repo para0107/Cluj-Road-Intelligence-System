@@ -1,6 +1,7 @@
 # RIDS — Road Infrastructure Detection System
 
-> **Automated urban road-damage detection, classification, and prioritization from dashcam footage — built for Cluj-Napoca, Romania.**
+> **Automated urban road-damage detection, classification, prioritization, and real-time
+> crowd-sensing from dashcam footage — built for Cluj-Napoca, Romania.**
 
 <div align="center">
 
@@ -27,15 +28,22 @@
 - [System architecture](#system-architecture)
 - [The two-context execution model](#the-two-context-execution-model)
 - [Job lifecycle](#job-lifecycle-end-to-end)
-- [The 7-stage inference pipeline](#the-7-stage-inference-pipeline)
+- [The 7-stage survey pipeline](#the-7-stage-survey-pipeline)
 - [Severity model](#severity-model)
+- [Live mode — crowd-validated hazards](#live-mode--crowd-validated-hazards)
+- [The lite pipeline — per-user edge agent](#the-lite-pipeline--per-user-edge-agent)
+- [Connected devices & phone drive mode](#connected-devices--phone-drive-mode)
+- [Accounts, roles & notifications](#accounts-roles--notifications)
 - [Database schema](#database-schema)
 - [REST API](#rest-api)
 - [Frontend](#frontend)
+- [Scalability model](#scalability-model)
 - [Repository layout](#repository-layout)
 - [Getting started](#getting-started)
 - [Configuration](#configuration)
 - [Running a survey](#running-a-survey)
+- [Running the live stack](#running-the-live-stack)
+- [Deployment (free)](#deployment-free)
 - [Validation utilities](#validation-utilities)
 - [Tech stack](#tech-stack)
 - [Known limitations](#known-limitations)
@@ -45,10 +53,11 @@
 
 ## Overview
 
-RIDS is an end-to-end urban infrastructure monitoring platform that automatically
-detects, classifies, and prioritizes road damage from smartphone / dashcam video.
-A raw `.mp4` survey of city streets (optionally accompanied by a `.gpx` GPS log) is
-pushed through a seven-stage computer-vision pipeline that:
+RIDS is an end-to-end urban infrastructure monitoring platform with **two complementary
+workflows**:
+
+**1 — Survey mode (deep analysis).** A raw `.mp4` drive video (optionally with a `.gpx`
+GPS log) is pushed through a seven-stage computer-vision pipeline that:
 
 1. extracts frames and synchronises each one to a GPS coordinate,
 2. detects 10 classes of road damage and road features with a fine-tuned **RT-DETR-L** model,
@@ -58,12 +67,22 @@ pushed through a seven-stage computer-vision pipeline that:
 6. spatially de-duplicates repeated sightings of the same physical damage with **DBSCAN**, and
 7. upserts the surviving detections into a **PostGIS** spatial database with a computed priority score.
 
-The results are served through a **FastAPI** REST API and visualised in a **React + Leaflet**
-single-page app: a live detection map, a statistics dashboard, a tabular explorer, and an
-ingestion page that streams real-time, stage-by-stage pipeline progress.
+**2 — Live mode (real-time crowd-sensing, Waze-style).** Every user is a sensor: hazards
+reported by phones, dashcam edge agents, or manual map taps are clustered server-side into
+events, appear on everyone's map within milliseconds over a WebSocket, and escalate
+**UNVERIFIED → CONFIRMED → VERIFIED** as independent devices re-sight them. Users can pair
+their **phone (drive mode — motion-sensor pothole detection in the browser)** or a
+**dashcam PC (the lite RT-DETR pipeline)** to their account so detected damage uploads
+automatically. Stale hazards expire on their own; operators resolve repaired ones.
 
-The goal is to replace expensive, infrequent, and subjective manual road inspections with a
-low-cost automated alternative — a dashcam, an optional GPS logger, and an overnight processing run.
+Everything is served through a **FastAPI** REST + WebSocket API and visualised in a
+**React + Leaflet** SPA: live hazard map, survey detection map, statistics dashboards,
+tabular explorer, ranked repair queue with cost sketches, ingestion tracker, and an admin
+console. Access is controlled by **JWT auth with three roles** (citizen / municipality
+operator / admin).
+
+**Zero-cost by construction:** open-source models, free map tiles, OpenStreetMap/Nominatim
+geocoding, stdlib-SMTP e-mail, optional free Google OAuth — no paid API anywhere.
 
 ---
 
@@ -75,37 +94,42 @@ in Cluj-Napoca rely on manual inspection — expensive, infrequent, and subjecti
 city-wide survey can take months.
 
 RIDS proposes an automated alternative that any municipality can adopt with minimal hardware
-investment. Footage collected during normal vehicle operation can be processed automatically,
-producing a continuously updated georeferenced damage map with severity scores and a ranked
-repair list.
+investment. Footage collected during normal vehicle operation is processed automatically into
+a continuously updated georeferenced damage map with severity scores and a ranked repair
+list — and the live mode turns every participating driver into a real-time road sensor at
+zero marginal server cost.
 
 ---
 
 ## System architecture
 
-The system is split into four layers:
-
 | Layer | Runs in | Responsibility |
 |-------|---------|----------------|
-| **Frontend** | Docker (Nginx) | React SPA — map, stats, explorer, ingestion |
-| **Backend API** | Docker (Uvicorn) | FastAPI REST + job hand-off; **no ML, no GPU** |
-| **Database** | Docker (PostGIS) | Spatial store for detections + survey log |
-| **Inference pipeline** | Windows host (GPU) | The 7-stage CV pipeline (PyTorch + CUDA) |
+| **Frontend** | Docker (Nginx) | React SPA — live map, survey map, stats, explorer, priority, ingest, admin |
+| **Backend API** | Docker (Uvicorn) | FastAPI REST + WebSocket + job hand-off + auth; **no ML, no GPU** |
+| **Database** | Docker (PostGIS) | Spatial store: detections, survey log, live events/reports, users, devices |
+| **Survey pipeline** | Windows host (GPU) | The 7-stage CV pipeline (PyTorch + CUDA) |
+| **Edge agents** | Each user's hardware | Lite pipeline / phone drive mode — real-time detection, POSTs to the API |
 
 ```
-┌──────────────────────────── Docker (Linux) ────────────────────────────┐
+┌──────────────────────────── Docker (Linux) ───────────────────────────────┐
 │  db        postgis/postgis:15-3.3        cluj_monitor_db                  │
-│  backend   FastAPI + Uvicorn             cluj_monitor_backend             │
-│  frontend  React build served by Nginx   cluj_monitor_frontend           │
-└──────────────────────────────────────────────────────────────────────────┘
-                                   │
-                  shared bind mount   ./data  ⇄  /app/data
-                                   │
-┌─────────────────────────── Windows HOST (GPU) ──────────────────────────┐
-│  pipeline/job_watcher.py    long-running daemon, watches data/jobs/       │
-│  pipeline/orchestrator.py   spawned per job with --device cuda            │
-│  RTX 2050 GPU · host Python venv (.venv) · PyTorch+CUDA · model weights   │
-└──────────────────────────────────────────────────────────────────────────┘
+│  backend   FastAPI + Uvicorn (WS)        cluj_monitor_backend             │
+│  frontend  React build served by Nginx   cluj_monitor_frontend            │
+└───────────────────────────────┬───────────────────────────────────────────┘
+                                │ shared bind mount  ./data ⇄ /app/data
+┌───────────────────────────────┴──────────────────────────┐
+│  Windows HOST (GPU)                                       │
+│  pipeline/job_watcher.py    daemon, watches data/jobs/    │
+│  pipeline/orchestrator.py   spawned per job, --device cuda│
+│  RTX 2050 · .venv · PyTorch+CUDA · ml/weights/            │
+└───────────────────────────────────────────────────────────┘
+        ▲ HTTPS/WS (JWT)                    ▲ HTTPS (JWT)
+┌───────┴───────────────┐   ┌───────────────┴───────────────────────────────┐
+│ Phones (drive mode in │   │ Vehicle PCs: pipeline/live_pipeline.py        │
+│ the browser: motion + │   │ same RT-DETR weights, fp16/ONNX, motion gate, │
+│ GPS auto-reports)     │   │ lite severity → POST /api/live/reports        │
+└───────────────────────┘   └───────────────────────────────────────────────┘
 ```
 
 ---
@@ -115,18 +139,21 @@ The system is split into four layers:
 This is the single most important thing to understand about RIDS.
 
 The backend container **cannot** run the ML pipeline: it has no GPU, no PyTorch/Ultralytics/
-SAM/Monodepth2 in its image, and no access to the Windows weight paths. So the backend never
-executes the pipeline directly. Instead it **drops a job file** into the shared `data/jobs/`
-directory; a host-side watcher (`job_watcher.py`) picks it up and runs the orchestrator on the
-GPU.
+SAM/Monodepth2 in its image (`backend/requirements.backend.txt` is runtime-only), and no
+access to the Windows weight paths. So the backend never executes the survey pipeline
+directly. Instead it **drops a job file** into the shared `data/jobs/` directory; a
+host-side watcher (`job_watcher.py`) picks it up and runs the orchestrator on the GPU.
 
-The two sides communicate **only through files under `data/`** — there is no socket, queue, or
-RPC between them. This boundary is intentional and load-bearing:
+The two sides communicate **only through files under `data/`** — there is no socket, queue,
+or RPC between them. This boundary is intentional and load-bearing:
 
 - The backend writes container-side paths (`/app/data/...`) into the job file.
-- `job_watcher._container_to_host()` rewrites the `/app/data` prefix to the host `data/` path
-  before invoking the orchestrator.
+- `job_watcher._container_to_host()` rewrites the `/app/data` prefix to the host `data/`
+  path before invoking the orchestrator.
 - The orchestrator writes `session.json`, which the backend reads back to report progress.
+
+(Live mode is different by design: edge agents talk to the API directly over HTTP/JWT —
+the server does no inference for them, only storage and fan-out.)
 
 ---
 
@@ -134,7 +161,7 @@ RPC between them. This boundary is intentional and load-bearing:
 
 ```
 Frontend IngestionPage
-   │ POST /api/ingest/upload   (multipart: video .mp4 [+ gps .gpx])
+   │ POST /api/ingest/upload   (multipart: video .mp4 [+ gps .gpx], JWT required)
    ▼
 backend/routes/ingest.py
    • saves video → data/raw/footage/<job_id>_<name>.mp4
@@ -161,39 +188,43 @@ Frontend polls GET /api/ingest/status/<job_id> every 10 s
    • MapPage silently refreshes detections while a job is running
 ```
 
-`job_id` and `session_id` are the **same value**, format `YYYYMMDD_HHMMSS` (UTC), generated by
-the backend and reused as the orchestrator session id so every path lines up.
+`job_id` and `session_id` are the **same value**, format `YYYYMMDD_HHMMSS` (UTC), generated
+by the backend and reused as the orchestrator session id so every path lines up.
 
-Status values the frontend understands:
-`pending` → `initialising` → `running` → `complete` | `failed`.
+Status values: `pending` → `initialising` → `running` → `complete` | `failed`.
+One job at a time — the upload route returns **409** while a job is pending/running; a job
+silent for `JOB_STALE_TIMEOUT_S` (default 2 h) is treated as stale and stops blocking.
 
 ---
 
-## The 7-stage inference pipeline
+## The 7-stage survey pipeline
 
-The canonical order and stage keys are defined by `orchestrator.run()`:
+The canonical order and stage keys are defined by `orchestrator.run()`. A stage key must
+stay in sync in three places: `pipeline/orchestrator.py`, the `stages` array in
+session.json (consumed via `backend/routes/ingest.py`), and the stage maps in
+`frontend/src/pages/IngestionPage.jsx`.
 
 | # | Stage key | Module | What it does |
 |---|-----------|--------|--------------|
-| 1 | `preprocessor` | `preprocessor.py` | Extract frames (~2 fps), sync GPS from `.gpx` (timestamp interpolation), solar elevation (pysolar), lighting class (HSV) |
-| 2 | `detector` | `detector.py` | **RT-DETR-L** inference (N-RDD2024 fine-tuned `best.pt`), per-class confidence filter |
-| 3 | `segmentor` | `segmentor.py` | **SAM 2.1 Tiny** masks + 4 geometry features (area, edge sharpness, interior contrast, compactness) |
-| 4 | `depth_estimator` | `depth_estimator.py` | **Monodepth2** (mono_640x192) relative disparity → depth proxy, with geometry-proxy fallback |
-| 5 | `severity_classifier` | `severity_classifier.py` | Rule-based **S1–S5** weighted multi-signal score |
-| 6 | `deduplicator` | `deduplicator.py` | **DBSCAN** + Haversine spatial clustering (radius `DEDUP_CLUSTER_RADIUS_M`) |
+| 1 | `preprocessor` | `preprocessor.py` | Extract frames (`PIPELINE_FPS`, default 2/s), sync GPS from `.gpx` (timestamp interpolation), solar elevation (pysolar), lighting class (HSV) |
+| 2 | `detector` | `detector.py` | **RT-DETR-L** inference (N-RDD2024 fine-tuned `best.pt`): global conf 0.001, then per-class thresholds (0.35 all classes, 0.50 `lane_line_blur`); **batched** (`DETECTOR_BATCH`, auto 8 on CUDA) + **fp16** (`DETECTOR_HALF`, auto on CUDA); `DETECTOR_IMGSZ` overrides input size; TTA disabled (measured zero gain) |
+| 3 | `segmentor` | `segmentor.py` | **SAM 2.1 Tiny** box-prompted masks + 4 geometry features (area, edge sharpness, interior contrast, compactness) |
+| 4 | `depth_estimator` | `depth_estimator.py` | **Monodepth2** (mono_640x192) relative disparity → depth proxy, geometry-proxy fallback, low-light skip |
+| 5 | `severity_classifier` | `severity_classifier.py` | Rule-based **S1–S5** weighted multi-signal score (below) |
+| 6 | `deduplicator` | `deduplicator.py` | **DBSCAN** + Haversine clustering (eps `DEDUP_CLUSTER_RADIUS_M`, default 2 m); keeps the highest-severity member; computes `surrounding_density` (`SURROUNDING_DENSITY_RADIUS_M`, 50 m); HTML before/after report |
 | 7 | `db_writer` | `db_writer.py` | **PostGIS** upsert + priority-score update |
 
-**10 damage / feature classes** (N-RDD2024 schema): `longitudinal_crack`, `transverse_crack`,
-`alligator_crack`, `repaired_crack`, `pothole`, `pedestrian_crossing_blur`, `lane_line_blur`,
-`manhole_cover`, `patchy_road`, `rutting`.
+**10 damage / feature classes** (N-RDD2024 schema, Kaya & Codur 2024): `longitudinal_crack
+(D00)`, `transverse_crack (D10)`, `alligator_crack (D20)`, `repaired_crack (D30)`,
+`pothole (D40)`, `pedestrian_crossing_blur (D50)`, `lane_line_blur (D60)`,
+`manhole_cover (D70)`, `patchy_road (D80)`, `rutting (D90)`.
 
 ### GPS guard — GPS-less runs are valid
 
-Stages 6 and 7 require coordinates. If no `.gpx` is supplied and embedded-GPS extraction fails,
-frames have `latitude/longitude = None`; the orchestrator **skips stages 6 & 7 and still finishes
-`complete`** (nothing is written to the DB). Detection / segmentation / depth / severity artifacts
-are still produced, and the frontend marks the skipped stages accordingly. A GPS-less run is **not**
-a failure.
+Stages 6 and 7 require coordinates. If no `.gpx` is supplied and embedded-GPS extraction
+fails, frames have `latitude/longitude = None`; the orchestrator **skips stages 6 & 7 and
+still finishes `complete`** (nothing is written to the DB). Detection / segmentation /
+depth / severity artifacts are still produced. A GPS-less run is **not** a failure.
 
 ### Per-stage artifacts
 
@@ -209,22 +240,25 @@ data/processed/sessions/<job_id>/
     session.json        ← live status source of truth
 ```
 
-Frontend-triggered runs force `--save_debug` (via `_SAVE_DEBUG` in `job_watcher.py`), writing
-overlay images under each `0X_*/debug/`. Non-detection frames are pruned from disk after Stage 2
-(`--keep_all_frames` to disable).
+Frontend-triggered runs force `--save_debug` (via `_SAVE_DEBUG` in `job_watcher.py`),
+writing overlay images under each `0X_*/debug/`. Non-detection frames are pruned from disk
+after Stage 2 (`--keep_all_frames` to disable).
 
 ### Enrichment is permanently removed
 
 An earlier "Enricher" stage (Nominatim / OSM Overpass / Open-Meteo, plus columns like
-`street_name`, `road_importance`, `weather`, etc.) was intentionally dropped from the pipeline,
+`street_name`, `road_importance`, `weather`) was intentionally dropped from the pipeline,
 the ORM, the schemas, and the DB. **GPS lat/lon is the only location metadata stored.**
+(The per-city landmark lookup used by the map's fly-to menu is UI sugar, not pipeline
+enrichment — see [Accounts, roles & notifications](#accounts-roles--notifications).)
 
 ---
 
 ## Severity model
 
-Severity is a transparent, rule-based score in `[0, 1]` mapped to five levels. It combines four
-normalised signals with **per-class weights**, then applies a **class-importance weight**:
+Severity is a transparent, rule-based score in `[0, 1]` mapped to five levels. It combines
+four normalised signals with **per-class signal weights**, then applies a
+**class-importance weight**:
 
 ```
 S_depth     = depth_norm                              (Monodepth2 relative depth)
@@ -244,88 +278,309 @@ severity_score = min(raw_score · class_weight · 2, 1) (class importance)
 | `[0.55, 0.75)` | **S4** | Urgent repair |
 | `[0.75, 1.00]` | **S5** | Emergency closure |
 
-By construction, marking classes (`lane_line_blur`, `pedestrian_crossing_blur`,
-`class_weight = 0.10`) can never exceed **S2**, and `repaired_crack` (`0.15`) is capped near S2 —
-no special-case branches needed. A `severity_confidence` value reflects measurement quality and
-is reduced when the geometry depth-proxy was substituted for Monodepth2.
+Per-class signal weights encode the physics: pothole severity is dominated by
+depth + contrast (bowl shape); alligator crack by area (fatigue-network spread);
+longitudinal crack by sharpness (active vs healed boundary). Marking classes
+(`lane_line_blur`, `pedestrian_crossing_blur`, `class_weight = 0.10`) can never exceed
+**S2** by construction — no special-case branches. A `severity_confidence` value reflects
+measurement quality and is reduced when the geometry depth-proxy substituted Monodepth2.
 
-**Priority score** (no enrichment inputs): `severity_weight · log(detection_count + 1)`.
+**Priority score** (`Detection.compute_priority_score`, no enrichment inputs):
+`priority = severity · ln(detection_count + 1)` — recurrence amplifies severity.
+
+---
+
+## Live mode — crowd-validated hazards
+
+Waze-style real-time layer, coexisting with Survey mode (full design:
+[`docs/LIVE_MODE.md`](docs/LIVE_MODE.md)).
+
+- **Reporting** — `POST /api/live/reports` (JWT) clusters a sighting into the nearest
+  active event of the same `damage_type` within `LIVE_CLUSTER_RADIUS_M` (default 25 m,
+  PostGIS `ST_DWithin` on geography), or creates a new event. Sources: manual map taps on
+  the Live page, phone drive mode, lite-pipeline edge agents, the fleet simulator.
+- **Validation by distinct device** — 1 device → `unverified`;
+  ≥ `LIVE_CONFIRM_DEVICES` (2) → `confirmed`; ≥ `LIVE_VERIFY_DEVICES` (3) → `verified`.
+  A device confirming twice is idempotent — no self-boosting.
+- **Dispute** — enough independent "not there" votes
+  (≥ max(`LIVE_DISPUTE_MIN`, reporter count)) deactivate the event.
+- **TTL expiry** — every supporting signal pushes `expires_at` forward by
+  `LIVE_EVENT_TTL_H` (72 h); reads lazily sweep expired rows. No cron.
+- **Resolve** — operators (municipality/admin) mark hazards repaired.
+- **Push channel** — WebSocket `/api/live/ws`: `hello` snapshot on connect, then every
+  mutation (`event_upsert` / `event_removed`). Sync REST handlers broadcast via
+  `live_manager.broadcast_from_thread()` (never `asyncio.run()` in a route). Nginx has the
+  Upgrade block; the Vite dev proxy sets `ws: true`. Clients auto-reconnect with capped
+  exponential backoff and fall back to polling `GET /api/live/events` every 5 s.
+
+All live state lives in PostGIS (`live_events` + `live_reports` audit trail), so REST
+handlers are stateless; only the WS fan-out is per-process (Redis/NATS pub/sub is the
+documented upgrade path in `backend/live_manager.py`).
+
+---
+
+## The lite pipeline — per-user edge agent
+
+`pipeline/live_pipeline.py` — one instance per vehicle/user, running on **their** hardware.
+Zero cloud cost: the shared backend only stores and fans out results.
+
+```
+dashcam/webcam ─► frame stride (--every, def. 10) ─► motion gate (64×36 gray diff —
+parked / red-light frames skip inference entirely) ─► RT-DETR (same best.pt, fp16,
+--imgsz 480) ─► same per-class confidence thresholds (imported from pipeline/detector.py)
+─► lite severity: the UNMODIFIED stage-5 formula fed by ~0.4 ms CV proxies
+(Otsu mask area, Sobel boundary sharpness, interior-vs-ring contrast, depth geometry
+proxy — pipeline/lite_severity.py) ─► local dedup (--min-gap-m 20, --cooldown-s 30)
+─► POST /api/live/reports (JWT)
+```
+
+- **Identical detection behaviour** to survey stage 2 — same checkpoint, same thresholds —
+  just on fewer, well-chosen frames; lite severity stays on the calibrated S1–S5 scale
+  with an honest ~0.5 `severity_confidence`.
+- **CPU-only users:** one-time free ONNX export — `--export-onnx [--quantize]` — then run
+  with `--weights ml/weights/best.onnx --device cpu`.
+- **Sources:** `--video file.mp4` (replay; `--realtime` for native speed) or `--camera 0`;
+  position from `--gps track.gpx` (time-interpolated) or fixed `--lat/--lon`.
+- **Auth:** `--pair <CODE>` (pairing code from the Live page → saves a JWT to
+  `~/.rids_live_token`; no password ever typed on the car PC), or `--token`, or
+  `--email/--password` (env `RIDS_TOKEN` / `RIDS_EMAIL` / `RIDS_PASSWORD`).
+- **Identity:** stable per-machine device id persisted in `~/.rids_device_id`.
+- `pipeline/simulate_fleet.py` — multi-vehicle live-mode demo, no GPU needed.
+
+---
+
+## Connected devices & phone drive mode
+
+Users pair sensors to their account **from the Live page (Devices panel)** so detected
+damage uploads automatically:
+
+- **Phone drive mode (browser, no app install):** the Live page registers the browser as a
+  `phone` device and turns on drive mode — DeviceMotion + geolocation
+  (`frontend/src/utils/driveMode.js`). A linear-acceleration jolt above ~9 m/s² while GPS
+  says the car is actually moving auto-posts a `pothole` report with confidence/severity
+  mapped from jolt strength (8 s cooldown; the classic smartphone-accelerometer
+  pothole-sensing technique). A live readout shows jolt / GPS fix / reports sent. iOS
+  motion permission is requested from the toggle tap.
+- **Dashcam / PC pairing:** the panel issues a single-use 8-character pairing code
+  (TTL `LIVE_PAIR_CODE_TTL_MIN`, default 15 min). On the vehicle machine:
+  `python pipeline/live_pipeline.py --pair <CODE>` exchanges it for a JWT; the full lite
+  CV pipeline then uploads under the owner's account.
+- **Device registry:** `live_devices` table — name, kind (`phone|dashcam|browser|
+  simulator`), device id, `last_seen_at`, `reports_sent`. The panel lists devices with
+  live status; **disconnecting revokes** the device (further reports from its device id
+  are rejected with 403). Unpaired/anonymous device ids keep working — pairing is opt-in.
+
+---
+
+## Accounts, roles & notifications
+
+- **Auth:** JWT (PyJWT HS256, `JWT_SECRET`, TTL `JWT_TTL_H`, default 7 days). Passwords:
+  stdlib **PBKDF2-HMAC-SHA256**, 200 000 iterations, per-user salt — no bcrypt/passlib
+  dependency. `backend/auth.py` provides the `get_current_user` / `require_operator` /
+  `require_admin` dependencies.
+- **Roles:**
+  | Role | Powers |
+  |------|--------|
+  | `user` (Citizen) | View everything, upload surveys, report/confirm/dispute live hazards, connect devices |
+  | `municipality` | Everything a user can do **plus** operator actions scoped to their city: resolve live hazards, mark detections repaired, delete detections |
+  | `admin` | Full control incl. user/role management (Admin page) |
+- **Registration** (`/register`): the user picks **Citizen or Municipality** via role
+  cards; municipality accounts must name their city. Login accepts username **or** e-mail.
+  A **seed admin** is created at startup from `ADMIN_USERNAME/EMAIL/PASSWORD` env
+  (`main.py::_seed_admin`).
+- **Welcome e-mail (free, optional):** on e-mail registration the backend sends a
+  notification via **stdlib smtplib** (`backend/notify.py`) — works with any free SMTP
+  relay (Gmail app password recommended). Configure `SMTP_HOST/PORT/USERNAME/PASSWORD/
+  FROM/STARTTLS`; when unset the feature silently no-ops. Sends run in a daemon thread and
+  can never block or fail registration.
+- **Google OAuth** (optional, free): set `GOOGLE_CLIENT_ID`; the ID token is verified
+  against Google's public tokeninfo endpoint; the account is auto-created on first login.
+  **Apple Sign-In is deliberately absent** (paid Apple Developer program — violates the
+  zero-cost rule).
+- **City landmarks:** `GET /api/cities/landmarks` powers the map's fly-to menu for any
+  city — free Nominatim lookups, rate-limited ≥1 s apart, **cached forever** in
+  `city_landmarks` (one lookup per city, ever), with a built-in offline fallback for
+  Cluj-Napoca. This is *not* the removed pipeline enrichment.
+- **Frontend session:** JWT in `localStorage['rids_token']`, attached by an axios
+  interceptor (`utils/api.js`); any 401 outside `/auth/*` clears the session and redirects
+  to `/login`. Every route except `/login` and `/register` is wrapped in `RequireAuth`.
+  After login the browser's (permission-based) geolocation is pushed once so the map can
+  open on the user's city.
 
 ---
 
 ## Database schema
 
-PostgreSQL 15 + PostGIS 3.3. Two tables, created by `scripts/setup_db.py` and mirrored by
-`backend/models.py`.
+PostgreSQL 15 + PostGIS 3.3. Fresh volumes bootstrap from `db/init/` (executed in order by
+the postgres entrypoint); on existing volumes the backend's startup
+`Base.metadata.create_all` creates missing **tables** (it never alters existing ones —
+keep the SQL files and ORM models in sync). `scripts/setup_db.py` is the idempotent manual
+equivalent for the core schema.
+
+| File | Tables |
+|------|--------|
+| `01_schema.sql` | `detections`, `survey_log` (+ extensions, indexes, trigger) |
+| `02_live_schema.sql` | `live_events`, `live_reports` |
+| `03_auth_schema.sql` | `users`, `city_landmarks` |
+| `04_live_devices.sql` | `live_devices` |
 
 ### `detections` — one row per de-duplicated damage instance
 
 `id` (UUID), `geom` (POINT/4326), `latitude`, `longitude`, `damage_type`, `confidence`,
-`frame_path`, segmentation geometry (`surface_area_cm2`, `edge_sharpness`, `interior_contrast`,
-`mask_compactness`), `depth_estimate_cm`, `depth_confidence`, `lighting_condition`,
-`severity` (1–5), `severity_confidence`, `surrounding_density`, temporal fields
-(`first_detected`, `last_detected`, `detection_count`, `deterioration_rate`), `priority_score`,
-`survey_date`, `survey_video_file`, `is_fixed`.
+`frame_path`, segmentation geometry (`surface_area_cm2`, `edge_sharpness`,
+`interior_contrast`, `mask_compactness`), `depth_estimate_cm`, `depth_confidence`,
+`lighting_condition`, `severity` (1–5), `severity_confidence`, `surrounding_density`,
+temporal fields (`first_detected`, `last_detected`, `detection_count`,
+`deterioration_rate`), `priority_score`, `survey_date`, `survey_video_file`, `is_fixed`.
 
-Indexes: GIST on `geom`, plus `severity`, `damage_type`, `survey_date`, `priority_score DESC`.
-An upsert matches an existing detection of the same `damage_type` within
-`DEDUP_CLUSTER_RADIUS_M` metres (PostGIS `ST_DWithin` on `geography`) and bumps its
+Indexes: GIST on `geom`, plus `severity`, `damage_type`, `survey_date`,
+`priority_score DESC`. The upsert matches an existing detection of the same `damage_type`
+within `DEDUP_CLUSTER_RADIUS_M` metres (`ST_DWithin` on `geography`) and bumps its
 `detection_count` / `deterioration_rate` instead of inserting a duplicate.
 
 ### `survey_log` — one row per `survey_date` (unique)
 
-Tracks a run's `status`, `started_at` / `finished_at`, `frames_processed`, `detections_found`,
+`status`, `started_at`/`finished_at`, `frames_processed`, `detections_found`,
 `new_detections`, `updated_detections`, `error_message`, `video_files` (JSONB).
+
+### Live & auth tables
+
+- `live_events` — one row per clustered, community-validated hazard: position
+  (geom + lat/lon), `damage_type`, `max_confidence`, max `severity`, validation state
+  (`status`, `report_count`, `reporter_devices`, `dispute_devices`, `is_active`,
+  `resolved`), timestamps (`first_reported`, `last_reported`, `expires_at`).
+- `live_reports` — one row per raw device signal (`sighting | confirm | dispute`) with
+  device id, position, confidence, severity, note — the audit trail behind
+  distinct-device counting.
+- `live_devices` — paired sensors: owner (`user_id` FK), `device_id`, `name`, `kind`,
+  single-use `pair_code` (+ expiry), `is_active` (revocation), `last_seen_at`,
+  `reports_sent`.
+- `users` — account identity, PBKDF2 `password_hash`, `role`, `city`, last known
+  position, `auth_provider` (`local | google`), `is_active`, `last_login_at`.
+- `city_landmarks` — permanent cache of Nominatim landmark lookups per city.
+
+> **GeoAlchemy2 gotcha:** never add an explicit `Index(..., "geom")` to a model — the
+> Geometry column auto-creates `idx_<table>_<col>`, and the name collision silently breaks
+> `create_all`.
 
 ### Port nuance (host vs container)
 
 - **Inside Docker** the backend reaches the DB by service name: `…@db:5432/…`.
-- **On the host** the DB container publishes `${POSTGRES_PORT:-5432}:5432` (`.env` sets
-  `POSTGRES_PORT=5433`), so host-run code (orchestrator `psycopg2`, `db_writer`, host-run
-  backend) connects via `localhost:5433`.
+- **On the host** the DB publishes `${POSTGRES_PORT:-5432}:5432` (`.env` sets `5433`), so
+  host-run code (pipeline, `db_writer`, dev backend) connects via `localhost:5433`.
 
 ---
 
 ## REST API
 
-All routes are under `/api` (Nginx proxies `/api/` → `backend:8000`; Vite dev proxies the same).
+All routes are under `/api` (Nginx proxies `/api/` → `backend:8000`, with a dedicated
+WebSocket-upgrade block for `/api/live/ws`; the Vite dev server proxies the same).
+Interactive docs: **http://localhost:8000/docs** (Swagger) · `/redoc`.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET`  | `/api/detections` | Paginated list with filters & sorting |
-| `GET`  | `/api/detections/nearby` | Radius search (lat, lon, radius_m, limit) |
-| `GET`  | `/api/detections/{id}` | Single detection |
-| `PATCH`| `/api/detections/{id}/status` | Set `is_fixed` |
-| `DELETE`| `/api/detections/bulk` | Delete by id list (optionally cascade `survey_log`) |
-| `GET`  | `/api/stats` | Aggregate stats for the dashboard |
-| `GET`  | `/api/heatmap` | Weighted points for the map heat layer |
-| `GET`  | `/api/priority-list` | Ranked repair list |
-| `GET`  | `/api/export/csv` | CSV export of all detections |
-| `POST` | `/api/ingest/upload` | Upload video (+gps), queue a job → 202 |
-| `GET`  | `/api/ingest/status/{job_id}` | Poll job / session status |
-| `GET`  | `/` , `/health` | Health checks |
+### Auth & accounts
 
-Interactive docs: **http://localhost:8000/docs** · CORS is currently `allow_origins=["*"]`
-(tighten before any real deployment).
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `POST` | `/api/auth/register` | — | Create account (**user or municipality**) → JWT; sends the optional welcome e-mail |
+| `POST` | `/api/auth/login` | — | Username-or-e-mail + password → JWT |
+| `POST` | `/api/auth/oauth/google` | — | Google ID token → JWT (when configured) |
+| `GET`  | `/api/auth/config` | — | Which optional providers are enabled |
+| `GET` / `PATCH` | `/api/auth/me` | user | Profile read / update (name, city) |
+| `PATCH`| `/api/auth/me/location` | user | Record browser geolocation |
+| `GET`  | `/api/auth/users` | admin | List accounts |
+| `PATCH`| `/api/auth/users/{id}/role` | admin | Change a role (city required for municipality) |
+
+### Survey data & analytics
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `GET`  | `/api/detections` | — | Paginated list; filters (type, severity range, dates), sorting |
+| `GET`  | `/api/detections/nearby` | — | Radius search (lat, lon, radius_m, limit) |
+| `GET`  | `/api/detections/{id}` | — | Single detection |
+| `PATCH`| `/api/detections/{id}/status` | operator | Set `is_fixed` |
+| `DELETE`| `/api/detections/bulk` | operator | Delete by id list (optionally cascade `survey_log`) |
+| `GET`  | `/api/stats` | — | Aggregate stats (totals, per-type/severity breakdowns, averages) |
+| `GET`  | `/api/heatmap` | — | Weighted points (severity·ln(count+1)) for the heat layer |
+| `GET`  | `/api/priority-list` | — | Ranked repair list |
+| `GET`  | `/api/export/csv` | — | CSV export of all detections |
+| `POST` | `/api/ingest/upload` | user | Upload video (+gps), queue a pipeline job → 202 |
+| `GET`  | `/api/ingest/status/{job_id}` | — | Poll job / session status |
+| `GET`  | `/api/cities/landmarks` | user | Per-city fly-to landmarks (cached Nominatim) |
+
+### Live mode & devices
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `POST` | `/api/live/reports` | user | Report a sighting (cluster-or-create) |
+| `GET`  | `/api/live/events` | — | Active events (polling fallback) |
+| `POST` | `/api/live/events/{id}/confirm` | user | "Still there" (distinct-device counted) |
+| `POST` | `/api/live/events/{id}/dispute` | user | "Not there" (enough votes remove it) |
+| `POST` | `/api/live/events/{id}/resolve` | operator | Hazard repaired / cleared |
+| `GET`  | `/api/live/stats` | — | Live counters for the UI header |
+| `WS`   | `/api/live/ws` | — | Push channel: hello snapshot + every mutation |
+| `POST` | `/api/live/devices/pair` | user | Register this device (with `device_id`) **or** issue a pairing code (without) |
+| `POST` | `/api/live/devices/claim` | code | Edge agent exchanges a pairing code → JWT |
+| `GET`  | `/api/live/devices` | user | List my paired devices |
+| `DELETE`| `/api/live/devices/{id}` | user | Disconnect / revoke a device |
+
+### Health
+
+`GET /` and `GET /health` (root health checks; note nginx only proxies `/api/`, so the
+frontend probes a cheap real API route instead).
+
+> CORS is currently `allow_origins=["*"]` — tighten before any real deployment.
 
 ---
 
 ## Frontend
 
-React 18 + Vite 5 + React Router 6; Leaflet / react-leaflet for the map, Recharts for charts,
-lucide-react icons, axios. **No global state library** — page-local `useState`/`useEffect` plus
-`localStorage['rids_active_job']` as the only cross-page "a pipeline is running" signal.
+React 18 + Vite 5 + React Router 6; Leaflet / react-leaflet for maps, Recharts for charts,
+lucide-react icons, axios. **One global context only** — `AuthContext` (session/user);
+everything else is page-local hooks. The only cross-page pipeline signal is
+`localStorage['rids_active_job']` (set by IngestionPage, polled by MapPage every 10 s).
 
 | Page | Route | Purpose |
 |------|-------|---------|
-| **MapPage** | `/` | Live detection map; box-select to inspect/delete; silent refresh while a job runs |
-| **StatsPage** | `/stats` | City-wide statistics dashboard |
-| **ExplorerPage** | `/explorer` | Sortable / filterable detection table |
+| **HomePage** | `/` | Landing dashboard: headline stats, quick links, system health |
+| **LivePage** | `/live` | Real-time hazard map: WS badge (polling fallback), tap-to-report with the 10-class picker, *Still there / Not there* voting, operator resolve, live feed with UNVERIFIED/CONFIRMED/VERIFIED chips, toasts, **Devices panel** (phone drive mode, dashcam pairing codes, device list + revoke) |
+| **MapPage** | `/map` | Survey detections: severity/type filters, basemap switcher (dark/streets/satellite), heatmap overlay, per-city landmark fly-to, popups, operator mark-repaired/delete, printable report; silent refresh while a job runs |
+| **StatsPage** | `/stats` | City-wide statistics dashboards (Recharts) |
+| **ExplorerPage** | `/explorer` | Sortable / filterable / paginated detection table, CSV download |
+| **PriorityPage** | `/priority` | Ranked repair queue with severity bands and repair-cost sketches (RON heuristics × severity factor) |
 | **IngestionPage** | `/ingest` | Upload + per-stage live pipeline tracker |
+| **AboutPage** | `/about` | Project description |
+| **LoginPage / RegisterPage** | `/login`, `/register` | Sessions; **role choice (Citizen / Municipality)** with city; optional Google button |
+| **AdminPage** | `/admin` | Accounts table + role management (admin only) |
 
-Styling is inline-`style`-object based (no Tailwind/CSS modules); colours come from CSS variables
-defined in `index.css`. The frontend is a **static production build** baked into the Nginx image —
-**rebuild the image after any `src/` change**: `docker compose up -d --build frontend`.
+Conventions:
+
+- Every route except `/login` / `/register` is wrapped in `RequireAuth`.
+- Styling is inline-`style`-objects + CSS design tokens (`--bg`, `--accent`, …) in
+  `index.css`; dark theme default, `:root.light` overrides. No Tailwind/CSS modules.
+- Map tiles follow the app theme via `hooks/useTheme.js` (dark → Carto dark, light →
+  Carto voyager); MapPage's switcher overrides per-session, LivePage always follows.
+- All API calls go through `frontend/src/utils/api.js` (axios, baseURL `/api`, JWT
+  interceptor); live-mode helpers in `utils/live.js`; drive-mode sensor logic in
+  `utils/driveMode.js`.
+- The production frontend is a **static build baked into the Nginx image** — rebuild after
+  any `src/` change: `docker compose up -d --build frontend`.
+
+---
+
+## Scalability model
+
+- **Compute scales with the users, not the server.** Every driver runs their own lite
+  pipeline / drive mode on their own hardware; the server does zero inference. Cost per
+  live report ≈ one indexed `ST_DWithin` query.
+- **Stateless REST** — all state in PostGIS, so API replicas scale horizontally without
+  session affinity.
+- **WS fan-out** is per-process by design; the documented upgrade path
+  (`backend/live_manager.py`) is a Redis/NATS pub/sub relay — all broadcasts already go
+  through one choke point. The polling fallback works regardless.
+- **Survey GPU work** is serialized (one job at a time) on the owner's machine; scale-out
+  means more host workers — the file-based contract stays identical.
+- **DB growth is bounded:** survey upsert collapses re-sightings into `detection_count`;
+  live events expire by TTL; dedup keeps one row per physical damage.
 
 ---
 
@@ -333,41 +588,52 @@ defined in `index.css`. The frontend is a **static production build** baked into
 
 ```
 backend/                 FastAPI app (Docker)
-  main.py                app factory, CORS, router registration, /health
+  main.py                app factory, CORS, router registration, startup (create_all + seed admin)
   database.py            SQLAlchemy engine/session, get_db(), check_connection()
+  auth.py                PBKDF2 hashing, JWT issue/verify, role dependencies
+  notify.py              zero-cost SMTP e-mail (welcome notification; optional)
+  live_manager.py        WebSocket fan-out singleton (thread→loop bridge)
   models.py              ORM: Detection, SurveyLog
-  schemas.py             Pydantic v2 request/response models
-  routes/                detections, stats, heatmap, priority, export, ingest
+  models_live.py         ORM: LiveEvent, LiveReport, LiveDevice
+  models_auth.py         ORM: User, CityLandmark
+  schemas*.py            Pydantic v2 request/response models (core / live / auth)
+  routes/                detections, stats, heatmap, priority, export, ingest,
+                         live (events + devices + WS), auth, cities
   Dockerfile             python:3.11-slim + exiftool/ffmpeg/libgl
   requirements.backend.txt   runtime-only deps (NO torch/ultralytics/etc.)
 
-pipeline/                Inference pipeline (Windows host + GPU)
+pipeline/                Inference pipelines (host)
   job_watcher.py         host daemon: data/jobs/ → orchestrator subprocess
   orchestrator.py        7-stage coordinator, writes session.json
   preprocessor.py        Stage 1 — frames, GPS sync, sun angle, lighting
-  detector.py            Stage 2 — RT-DETR-L inference
+  detector.py            Stage 2 — RT-DETR-L (batched, fp16, per-class thresholds)
   segmentor.py           Stage 3 — SAM 2.1 Tiny masks + geometry features
   depth_estimator.py     Stage 4 — Monodepth2 relative depth
   severity_classifier.py Stage 5 — rule-based S1–S5
   deduplicator.py        Stage 6 — DBSCAN spatial dedup
   db_writer.py           Stage 7 — PostGIS upsert
+  live_pipeline.py       LITE per-user edge agent (--pair, fp16/ONNX, motion gate)
+  lite_severity.py       stage-5 formula on ~0.4 ms CV proxies
+  simulate_fleet.py      multi-vehicle live-mode demo (no GPU)
   extract_gpx_from_video.py  embedded-GPS extraction fallback
 
 frontend/                React + Vite SPA (Nginx in Docker)
-  src/pages/             MapPage, StatsPage, ExplorerPage, IngestionPage
-  src/components/        Navbar
-  src/hooks/             useApi
-  src/utils/             api.js (axios client), constants.js
-  nginx.conf             SPA fallback + /api/ reverse proxy
-  vite.config.js         dev server :3000, proxies /api → :8000
+  src/pages/             Home, Live, Map, Stats, Explorer, Priority, Ingestion,
+                         About, Login, Register, Admin
+  src/components/        Navbar, ui primitives
+  src/context/           AuthContext (the only global state)
+  src/hooks/             useApi, useTheme
+  src/utils/             api.js (axios+JWT), live.js, driveMode.js, constants.js, format.js
+  nginx.conf             SPA fallback + /api/ proxy + /api/live/ws upgrade block
+  vite.config.js         dev server :3000, proxies /api (ws: true) → :8000
 
-ml/                      Training/research layer (not part of inference runtime)
-  detection/ optimization/ segmentation/ depth/ severity/ evaluation/
-  weights/ best.pt  sam2.1_hiera_tiny.pt  mono_640x192/  networks/
-
-scripts/                 One-off + validation utilities (setup_db, run_survey,
-                         validate_*, dataset analysis, training notebooks)
-scheduler/daily_job.py   APScheduler cron — nightly pipeline run
+db/init/                 Fresh-volume schema: 01 core · 02 live · 03 auth · 04 live_devices
+ml/                      Training/research layer (never imported by the backend)
+  detection/ optimization/ segmentation/ evaluation/
+  weights/ best.pt  sam2.1_hiera_tiny.pt  mono_640x192/  networks/   (not in git)
+scripts/                 setup_db, run_survey, validate_*, dataset analysis
+scheduler/daily_job.py   APScheduler cron — optional nightly pipeline run
+docs/                    LIVE_MODE.md · FUNCTIONALITY.md · DEPLOYMENT_GUIDE.md · FREE_DEPLOYMENT.md
 data/                    SHARED bind mount (jobs/, raw/, processed/sessions/, datasets/)
 docker-compose.yml  .env  requirements.txt (full host/ML deps)  CLAUDE.md
 ```
@@ -380,46 +646,36 @@ docker-compose.yml  .env  requirements.txt (full host/ML deps)  CLAUDE.md
 
 The delivered ZIP contains everything needed to run, **except the `ml/` folder**:
 `backend/`, `frontend/`, `pipeline/`, `scripts/`, `db/`, `docker-compose.yml`,
-and a ready-to-use **`.env`** (no manual configuration needed for the
-containers).
+and a ready-to-use **`.env`** (no manual configuration needed for the containers).
 
-**Excluded from the ZIP (must be added separately to run the pipeline):**
-
-The entire **`ml/`** folder is not shipped. To run the host GPU pipeline you must
-recreate `ml/weights/` with the following, all at the **exact** paths shown in
-*Model weights* below:
+**Excluded from the ZIP (must be added separately to run the GPU pipeline):**
 
 - **`ml/weights/best.pt`** — RT-DETR-L detection checkpoint (download).
 - **`ml/weights/sam2.1_hiera_tiny.pt`** — SAM 2.1 Tiny checkpoint (download).
 - **`ml/weights/mono_640x192/`** — Monodepth2 depth weights (download + extract).
-- **`ml/weights/networks/`** — the Monodepth2 network definition `.py` files
-  (code, obtained from the Monodepth2 repo). The depth stage imports this as the
-  `networks` package.
+- **`ml/weights/networks/`** — Monodepth2 network definition `.py` files (from the
+  Monodepth2 repo). The depth stage imports this as the `networks` package.
 
-All four are documented with exact sources and placement in *Model weights*.
-
-> The **Docker stack (db + backend + frontend) runs without `ml/` at all** — the
-> web app, map, statistics, explorer, and database work out of the box with just
-> `docker compose up --build`. `ml/` is only needed by the **host GPU pipeline**
-> that processes uploaded videos.
+> The **Docker stack (db + backend + frontend) runs without `ml/` at all** — the web app,
+> live mode, maps, statistics, explorer, auth, and database work out of the box with just
+> `docker compose up --build`. `ml/` is only needed by the **host GPU pipeline** that
+> processes uploaded survey videos (and by lite-pipeline edge agents).
 
 ### Prerequisites
 
-- **Docker + Docker Compose** — for the db / backend / frontend stack. *This is
-  all you need to run the web application.*
-- For the **inference pipeline** only:
+- **Docker + Docker Compose** — for the db / backend / frontend stack. *This is all you
+  need to run the web application, including Live mode.*
+- For the **survey pipeline** only:
   - **Windows host with an NVIDIA GPU** + CUDA-capable PyTorch
   - A Python **venv** at `.venv/` with the host/ML deps from `requirements.txt`
-  - **Model weights** placed under `ml/weights/` (see below)
-  - The Monodepth2 `networks/` code at `ml/weights/networks/` **or** a cloned
-    Monodepth2 repo pointed to by `MONODEPTH_ROOT` — see *Model weights* below
+  - **Model weights** under `ml/weights/` (below)
+  - The Monodepth2 `networks/` code at `ml/weights/networks/` **or** a cloned Monodepth2
+    repo pointed to by `MONODEPTH_ROOT`
 
 ### Model weights (downloaded separately)
 
-None of the files below are in the ZIP. Create the `ml/weights/` directory and
-populate it so it matches this layout **exactly** — the pipeline reads these
-paths (relative to the project root) as configured in `.env`, so the names and
-nesting must match precisely:
+Create `ml/weights/` matching this layout **exactly** (paths are read from `.env`,
+relative to the project root):
 
 ```
 ml/weights/
@@ -450,15 +706,14 @@ ml/weights/
 #### 2. Monodepth2 network code → `ml/weights/networks/`
 
 The depth stage does `import networks` from `MONODEPTH_ROOT` (which `.env` sets to
-`ml/weights`). The code comes from the official repo
-**https://github.com/nianticlabs/monodepth2**. Choose **one** method:
+`ml/weights`). The code comes from **https://github.com/nianticlabs/monodepth2**. Choose
+**one** method:
 
 **Method A — populate `ml/weights/networks/` (keeps the default `.env`):**
 
 ```bash
 git clone https://github.com/nianticlabs/monodepth2.git
 mkdir -p ml/weights/networks
-# copy the package files + layers.py INTO the networks/ folder:
 cp monodepth2/networks/__init__.py        ml/weights/networks/
 cp monodepth2/networks/resnet_encoder.py  ml/weights/networks/
 cp monodepth2/networks/depth_decoder.py   ml/weights/networks/
@@ -468,69 +723,18 @@ cp monodepth2/layers.py                   ml/weights/networks/   # repo root →
 ```
 
 > **Important:** upstream `depth_decoder.py` imports `from layers import *` while
-> `layers.py` lives at the repo root. Because this project keeps `layers.py`
-> *inside* `networks/`, change that one import in
-> `ml/weights/networks/depth_decoder.py` to:
+> `layers.py` lives at the repo root. Because this project keeps `layers.py` *inside*
+> `networks/`, change that one import in `ml/weights/networks/depth_decoder.py` to:
 > ```python
 > from networks.layers import *
 > ```
-> No other edits are needed. (`__init__.py` already imports `ResnetEncoder`,
-> `DepthDecoder`, `PoseDecoder`, `PoseCNN`.)
+> No other edits are needed.
 
-**Method B — point `MONODEPTH_ROOT` at the clone (no file copying, no code edit):**
+**Method B — point `MONODEPTH_ROOT` at the clone (no copying, no code edit):**
 
-Leave `ml/weights/networks/` empty, clone the repo anywhere, and in `.env` set:
-```
-MONODEPTH_ROOT=C:\path\to\monodepth2
-```
-Upstream is self-consistent (`layers.py` at its root), so `import networks`
-resolves without modification. The depth **weights** still go in
+Leave `ml/weights/networks/` empty, clone the repo anywhere, and in `.env` set
+`MONODEPTH_ROOT=C:\path\to\monodepth2`. The depth **weights** still go in
 `ml/weights/mono_640x192/`.
-
-After setup, verify the layout matches the tree above. If a weight or the
-`networks/` package is missing or misplaced, the corresponding pipeline stage
-fails to load its model.
-
-### Running the pipeline on a new machine — checklist
-
-The **web app needs none of this** — it is only required to actually process
-uploaded videos on a GPU host. All paths in `.env` are now **relative to the
-project root**, and the watcher runs the orchestrator from the project root, so
-there are **no machine-specific paths to edit** for a standard layout.
-
-1. **Have an NVIDIA GPU + CUDA-capable PyTorch on a host** (the watcher forces
-   `--device cuda`). Set `PIPELINE_DEVICE=cpu` in `.env` only for CPU testing.
-2. **Create the venv and install host/ML deps:**
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\activate          # Windows  (source .venv/bin/activate on Linux/macOS)
-   pip install -r requirements.txt
-   ```
-3. **Download and place the model weights** under `ml/weights/` exactly as in the
-   *Model weights* tree above (`best.pt`, `sam2.1_hiera_tiny.pt`,
-   `mono_640x192/*.pth`). See *Model weights → Downloadable checkpoints*.
-4. **Provide the Monodepth2 `networks/` code** — see *Model weights →
-   Monodepth2 network code*. Either populate `ml/weights/networks/` (Method A,
-   keeps the default `MONODEPTH_ROOT=ml/weights`) or clone the repo and point
-   `MONODEPTH_ROOT` at it (Method B).
-5. **Verify `.env` paths** (defaults are already correct for the standard
-   layout):
-   - `PROJECT_ROOT` — leave commented out; `job_watcher.py` auto-detects it.
-   - `WEIGHTS_DIR=ml/weights`, `MONODEPTH_ROOT=ml/weights`,
-     `MONODEPTH_WEIGHTS_DIR=ml/weights/mono_640x192` (relative — no edit needed).
-   - DB: host-run pipeline connects to `localhost:${POSTGRES_PORT}` (the `.env`
-     `DATABASE_URL` already uses this); the container backend uses `db:5432`.
-6. **Start the stack and the watcher:**
-   ```bash
-   docker compose up -d --build       # db + backend + frontend (schema auto-creates)
-   python pipeline/job_watcher.py     # host daemon — must stay running for uploads
-   ```
-7. **Upload a video** on the IngestionPage (http://localhost:3000/ingest) and
-   watch the seven stages progress.
-
-> The legacy validation scripts under `scripts/` (e.g. `validate_depth.py`) still
-> contain hardcoded absolute paths; they are research tools, not part of the
-> runtime, and are not needed to run the pipeline.
 
 ### 1. Bring up the containerised stack
 
@@ -539,36 +743,27 @@ docker compose up -d                    # start db, backend, frontend
 docker compose up -d --build            # rebuild after Dockerfile/dep changes
 docker compose up -d --build frontend   # REQUIRED after editing frontend/src/**
 docker compose logs -f backend          # tail backend logs
-docker compose down                     # stop (keeps pgdata volume)
+docker compose down                     # stop (keeps pgdata volume); add -v to wipe the DB
 ```
 
 - Frontend: **http://localhost:3000** · Backend docs: **http://localhost:8000/docs**
 - Backend health: **http://localhost:8000/health**
+- First visit: **register an account** (Citizen or Municipality) at `/register`, or log in
+  with the seed admin (set `ADMIN_USERNAME/EMAIL/PASSWORD` in `.env`).
 
 ### 2. Database schema — created automatically
 
-The schema is bootstrapped **automatically** the first time the `db` container
-starts on an empty volume. `db/init/01_schema.sql` is mounted into
-`/docker-entrypoint-initdb.d/`, so PostGIS runs it once (extensions + tables +
-indexes + trigger) before the backend connects. **You do not need to run
-anything for a fresh setup.**
+On a **fresh** `pgdata` volume the postgres entrypoint runs `db/init/01…04.sql` in order
+(extensions + all tables + indexes + trigger) before the backend connects. On existing
+volumes the backend's startup `Base.metadata.create_all` adds any missing tables
+(live/auth/devices). Nothing to run manually.
 
-> The script only runs on a **fresh** `pgdata` volume. If you started the stack
-> before this file existed, reset the volume once:
-> ```bash
-> docker compose down -v && docker compose up -d --build
-> ```
-> (`-v` deletes the database volume — only do this when you want an empty DB.)
+> Started the stack before a schema file existed and want a clean slate?
+> `docker compose down -v && docker compose up -d --build` (`-v` deletes the DB volume).
 
-`scripts/setup_db.py` remains available and is **equivalent** (same schema, fully
-idempotent). Use it only when running the DB outside Docker, or to re-apply the
-schema to an existing volume from the host venv:
+`scripts/setup_db.py` remains available and is equivalent for the core schema (idempotent).
 
-```bash
-python scripts/setup_db.py    # postgis/pgcrypto extensions + tables + indexes + trigger
-```
-
-### 3. Start the host pipeline worker (must run for uploads to process)
+### 3. Start the host pipeline worker (required to process survey uploads)
 
 ```bash
 python pipeline/job_watcher.py          # foreground; watches data/jobs/, runs on GPU
@@ -576,41 +771,51 @@ python pipeline/job_watcher.py          # foreground; watches data/jobs/, runs o
 start /B pythonw pipeline\job_watcher.py
 ```
 
-Now upload a survey from the **IngestionPage** at http://localhost:3000/ingest, or run the
-pipeline manually (below).
+Now upload a survey from the **IngestionPage** at http://localhost:3000/ingest.
 
 ### Backend / frontend in dev mode (without Docker)
 
 ```bash
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000   # from project root
-cd frontend && npm install && npm run dev                       # Vite on :3000
+cd frontend && npm install && npm run dev                       # Vite :3000, proxies /api (incl. WS)
 ```
 
 ---
 
 ## Configuration
 
-A single `.env` at the project root is loaded by `python-dotenv` everywhere and by Docker Compose
-(`env_file`). Notable groups:
+A single `.env` at the project root is loaded by `python-dotenv` everywhere and by Docker
+Compose (`env_file`). Groups:
 
 - **Database**: `POSTGRES_DB / USER / PASSWORD / HOST / PORT`, `DATABASE_URL`
-  *(see the port nuance above — `5433` on the host, `5432` inside Docker)*.
-- **Host paths (relative to the project root)**: `MONODEPTH_ROOT=ml/weights`,
+  *(port nuance: `5433` on the host, `db:5432` inside Docker)*.
+- **Auth**: `JWT_SECRET` (**override for anything beyond local dev**), `JWT_TTL_H`,
+  `ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD` (seed admin),
+  `GOOGLE_CLIENT_ID` (optional free Google sign-in; empty hides the button).
+- **E-mail (optional, free)**: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`,
+  `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_STARTTLS` — unset ⇒ e-mail off. Gmail app
+  passwords work and are free.
+- **Live mode**: `LIVE_CLUSTER_RADIUS_M` (25), `LIVE_EVENT_TTL_H` (72),
+  `LIVE_CONFIRM_DEVICES` (2), `LIVE_VERIFY_DEVICES` (3), `LIVE_DISPUTE_MIN` (2),
+  `LIVE_PAIR_CODE_TTL_MIN` (15). Edge agents: `LIVE_API_URL`,
+  `RIDS_TOKEN / RIDS_EMAIL / RIDS_PASSWORD`.
+- **Host paths (relative to project root)**: `MONODEPTH_ROOT=ml/weights`,
   `MONODEPTH_WEIGHTS_DIR=ml/weights/mono_640x192`, `WEIGHTS_DIR=ml/weights`,
-  `RAW_FOOTAGE_DIR`, `RAW_GPS_DIR` — used only by the host pipeline (the watcher
-  runs the orchestrator from the project root so these resolve correctly), not
-  inside containers. `PROJECT_ROOT` is left **unset** so `job_watcher.py`
-  auto-detects it; set it only to override auto-detection.
-- **Container mount**: `PROJECT_DATA_DIR=/app/data` — must equal the compose bind-mount target;
-  it is the prefix `job_watcher` strips when translating container → host paths.
-- **Weights**: `RTDETR_WEIGHTS=best.pt`, SAM `sam2.1_hiera_tiny.pt`, `mono_640x192/`.
-- **Pipeline**: `PIPELINE_DEVICE` (watcher forces `cuda`), `PIPELINE_FPS`, `WATCHER_POLL_S`,
-  detection thresholds, `DEDUP_CLUSTER_RADIUS_M`.
-- **City**: `CITY_NAME / LAT / LON / BBOX` (Cluj-Napoca).
-- **Scheduler / logging**: `PIPELINE_RUN_HOUR/MINUTE`, `LOG_LEVEL`, `LOG_FILE`.
+  `RAW_FOOTAGE_DIR`, `RAW_GPS_DIR`. `PROJECT_ROOT` stays **unset** (the watcher
+  auto-detects it).
+- **Container mount**: `PROJECT_DATA_DIR=/app/data` — must equal the compose bind-mount
+  target; it is the prefix `job_watcher` strips when translating container → host paths.
+- **Survey pipeline**: `PIPELINE_DEVICE` (watcher forces `cuda`), `PIPELINE_FPS`,
+  `WATCHER_POLL_S`, `DEDUP_CLUSTER_RADIUS_M`, `SURROUNDING_DENSITY_RADIUS_M`,
+  `DETECTOR_BATCH`, `DETECTOR_HALF`, `DETECTOR_IMGSZ`, `JOB_STALE_TIMEOUT_S`.
+- **Frontend build**: `VITE_API_URL` — only when the frontend is hosted away from the API
+  (e.g. Vercel); unset keeps same-origin `/api` through the Nginx/Vite proxy.
+- **City / scheduler / logging**: `CITY_NAME / LAT / LON / BBOX`,
+  `PIPELINE_RUN_HOUR/MINUTE`, `LOG_LEVEL`, `LOG_FILE`.
 
-> `.env` contains real secrets (DB password) and is **git-ignored**. The `NOMINATIM_*`,
-> `OPEN_METEO_*`, `OSM_OVERPASS_*` vars are legacy/unused (enrichment removed).
+> `.env` contains real secrets (DB password, JWT secret, admin password, SMTP password)
+> and is **git-ignored**. The `OPEN_METEO_*` / `OSM_OVERPASS_*` vars are legacy/unused
+> (enrichment removed).
 
 ---
 
@@ -618,8 +823,8 @@ A single `.env` at the project root is loaded by `python-dotenv` everywhere and 
 
 ### Through the UI
 
-Upload an `.mp4` (and optional `.gpx`) on the IngestionPage; watch the seven stages update live;
-then open the MapPage to see the new detections.
+Upload an `.mp4` (and optional `.gpx`) on the IngestionPage; watch the seven stages update
+live; then open the MapPage to see the new detections.
 
 ### Manually (bypasses backend + watcher)
 
@@ -642,10 +847,48 @@ The scheduler (`scheduler/daily_job.py`, APScheduler) can fire a pipeline run ni
 
 ---
 
+## Running the live stack
+
+```bash
+# 1. Pair a dashcam / PC from the Live page (Devices → "Pair a dashcam / PC"), then:
+python pipeline/live_pipeline.py --pair ABCD2345
+
+# 2. Drive (or replay a recorded drive with its GPS track):
+python pipeline/live_pipeline.py --video data/raw/footage/drive.mp4 \
+    --gps data/raw/gps_logs/drive.gpx --realtime
+
+# CPU-only machine? One-time free ONNX export, then:
+python pipeline/live_pipeline.py --export-onnx
+python pipeline/live_pipeline.py --video drive.mp4 --lat 46.77 --lon 23.62 \
+    --weights ml/weights/best.onnx --device cpu
+
+# No GPU, no footage — demo the live map with virtual vehicles:
+python pipeline/simulate_fleet.py
+```
+
+On a phone: open the site, go to **Live → Devices → Start drive mode**, mount the phone,
+and drive — impacts auto-report as potholes with GPS position.
+
+---
+
+## Deployment (free)
+
+See [`FREE_DEPLOYMENT.md`](FREE_DEPLOYMENT.md) and
+[`DEPLOYMENT_GUIDE.md`](DEPLOYMENT_GUIDE.md) for the full walkthroughs:
+
+- **Frontend**: static Vite build on Vercel (`vercel.json` provides the SPA fallback);
+  set `VITE_API_URL` to the backend origin at build time.
+- **Backend + DB**: any free VM (e.g. Oracle Cloud free tier) running the same
+  docker-compose stack.
+- **WebSockets**: Vercel rewrites cannot proxy WS — the Live page connects the socket
+  directly to `VITE_API_URL`, falling back to REST polling automatically.
+
+---
+
 ## Validation utilities
 
-There is **no `pytest` suite**. Verification is done with stand-alone stage validators under
-`scripts/`, run individually:
+There is **no `pytest` suite and no linter**. Verification is done with stand-alone stage
+validators under `scripts/`, run individually:
 
 ```bash
 python scripts/validate_severity.py
@@ -656,52 +899,63 @@ python scripts/validate_nrdd2024.py
 python scripts/validate_chain_finetune.py
 ```
 
-Plus dataset/inspection helpers (`dataset_analysis.py`, `inspect_*.py`, `run_tokyo_validation.py`,
-`run_kitti_pipeline.py`) and training notebooks (`*.ipynb`).
+Plus dataset/inspection helpers (`dataset_analysis.py`, `inspect_*.py`,
+`run_tokyo_validation.py`, `run_kitti_pipeline.py`) and training notebooks (`*.ipynb`).
+The legacy `validate_*.py` scripts still hardcode absolute paths — research tools, not
+runtime.
 
 ---
 
 ## Tech stack
 
-- **Backend**: FastAPI 0.111, Uvicorn, SQLAlchemy 2.0, GeoAlchemy2, Pydantic v2, psycopg2, loguru.
-  Python 3.11-slim in Docker.
+- **Backend**: FastAPI 0.111, Uvicorn (+ `websockets`), SQLAlchemy 2.0, GeoAlchemy2,
+  Pydantic v2 (+ email-validator), psycopg2, PyJWT (HS256), httpx, loguru, stdlib
+  smtplib/PBKDF2. Python 3.11-slim in Docker.
 - **Database**: PostgreSQL 15 + PostGIS 3.3 (`postgis/postgis:15-3.3`).
-- **Frontend**: React 18, Vite 5, React Router 6, Leaflet / react-leaflet, Recharts, axios,
-  lucide-react. Built static, served by Nginx alpine.
-- **Pipeline / ML (host)**: PyTorch 2.2 + CUDA, Ultralytics RT-DETR-L, SAM 2.1 Tiny, Monodepth2,
-  scikit-learn (DBSCAN), xgboost, optuna / mealpy (PSO), pysolar, gpxpy, OpenCV. Python 3.12 venv.
-- **Orchestration**: APScheduler (nightly), file-based job queue, docker-compose.
+- **Frontend**: React 18, Vite 5, React Router 6, Leaflet / react-leaflet, Recharts,
+  axios, lucide-react; browser DeviceMotion + Geolocation APIs (drive mode). Built
+  static, served by Nginx alpine.
+- **Pipelines / ML (host & edge)**: PyTorch 2.2 + CUDA, Ultralytics RT-DETR-L, SAM 2.1
+  Tiny, Monodepth2, scikit-learn (DBSCAN), ONNX Runtime (optional CPU edge), xgboost,
+  optuna / mealpy (PSO), pysolar, gpxpy, OpenCV. Python 3.12 venv.
+- **Orchestration**: file-based job queue + host watcher, APScheduler (optional nightly),
+  docker-compose.
 
 ### Models
 
 | Role | Model | Notes |
 |------|-------|-------|
-| Detection | **RT-DETR-L** | Fine-tuned on N-RDD2024 (10-class), checkpoint `best.pt` |
-| Segmentation | **SAM 2.1 Tiny** | `sam2.1_hiera_tiny.pt`, mask geometry features |
-| Depth | **Monodepth2** | `mono_640x192`, KITTI-pretrained, relative disparity |
-| Severity | Rule-based | Weighted multi-signal, no learned model |
+| Detection | **RT-DETR-L** | Fine-tuned on N-RDD2024 (10-class), checkpoint `best.pt`; shared by survey stage 2 and the lite edge agent |
+| Segmentation | **SAM 2.1 Tiny** | `sam2.1_hiera_tiny.pt`, mask geometry features (survey only) |
+| Depth | **Monodepth2** | `mono_640x192`, KITTI-pretrained, relative disparity (survey only) |
+| Severity | Rule-based | Weighted multi-signal, no learned model; same formula in survey stage 5 and lite proxies |
 | Dedup | DBSCAN | Haversine metric, eps = `DEDUP_CLUSTER_RADIUS_M` |
+| Phone sensing | Accelerometer heuristic | Jolt-threshold pothole detection in the browser (drive mode) |
 
 ---
 
 ## Known limitations
 
-- **GPU required on the host.** The watcher forces `--device cuda`; CPU is only for explicit
-  testing (`PIPELINE_DEVICE=cpu`).
-- **One job at a time.** Concurrency is guarded by disk state (the backend rejects uploads with
-  `409` while a job file is `pending`/`running`, and the watcher processes one job synchronously).
-  A watcher crash can leave a job stuck in `running`; the job file must be cleared manually before
-  new uploads are accepted.
-- **`surface_area_cm2` currently stores pixel area.** The cm² conversion via `focal_length_px` is
-  plumbed but not yet applied; the value is raw mask pixel count.
-- **GPS accuracy depends on clock alignment** between the camera and the GPS logger. The
-  preprocessor resolves the video start time from explicit input → MP4 `creation_time` → first GPS
-  point, and includes heuristics for whole-hour/timezone drift.
-- **Pipeline paths are project-relative** and resolve from the project root (the
-  watcher runs the orchestrator with that working directory). The legacy
-  `scripts/validate_*.py` research tools still hardcode absolute paths, but they
-  are not part of the runtime.
-- **Enrichment stays gone** — no Nominatim/Overpass/Open-Meteo, no dropped columns.
+- **GPU required on the survey host.** The watcher forces `--device cuda`; CPU is only for
+  explicit testing (`PIPELINE_DEVICE=cpu`). (The lite edge agent *does* support CPU via
+  ONNX.)
+- **One survey job at a time.** Concurrency is guarded by disk state; a stale job stops
+  blocking uploads after `JOB_STALE_TIMEOUT_S` (default 2 h).
+- **`surface_area_cm2` currently stores pixel area.** The cm² conversion via
+  `focal_length_px` is plumbed but not yet applied.
+- **GPS accuracy depends on clock alignment** between camera and GPS logger. The
+  preprocessor resolves the video start time from explicit input → MP4 `creation_time` →
+  first GPS point, with whole-hour/timezone drift heuristics.
+- **Live-mode device identity is self-declared** for anonymous devices; distinct-device
+  validation is honest-majority, not Sybil-proof. Paired devices (registry + revocation)
+  mitigate but don't eliminate this.
+- **WS fan-out is per-process** — fine for one backend replica; use the documented Redis
+  pub/sub path to scale out.
+- **Phone drive mode is a heuristic sensor** — jolt spikes correlate with potholes but
+  also speed bumps and rough patches; reports enter the same crowd-validation funnel as
+  everything else, which is the point.
+- **Enrichment stays gone** — no Nominatim/Overpass/Open-Meteo in the pipeline, no
+  dropped columns. (City landmarks are a UI-only cache.)
 
 ---
 
@@ -717,6 +971,7 @@ Computer Science (Artificial Intelligence specialization), **Paraschiv Tudor, 20
 - SAM — Kirillov et al., 2023. [arXiv:2304.02643](https://arxiv.org/abs/2304.02643)
 - Monodepth2 — Godard et al., 2019. [arXiv:1806.01260](https://arxiv.org/abs/1806.01260)
 - DBSCAN — Ester, Kriegel, Sander, Xu, KDD 1996.
+- Smartphone pothole sensing — Eriksson et al., *The Pothole Patrol*, MobiSys 2008.
 
-> See [`CLAUDE.md`](CLAUDE.md) for the in-depth engineering guide (execution boundaries, gotchas,
-> and conventions) used when developing this repository.
+> See [`CLAUDE.md`](CLAUDE.md) for the condensed engineering guide and
+> [`docs/FUNCTIONALITY.md`](docs/FUNCTIONALITY.md) for the full functionality reference.

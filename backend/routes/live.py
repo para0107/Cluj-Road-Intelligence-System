@@ -42,12 +42,14 @@ from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID, ST_Distance
 
 from backend.database import get_db, SessionLocal
-from backend.models_live import LiveEvent, LiveReport
+from backend.models_live import LiveEvent, LiveReport, LiveDevice
 from backend.models_auth import User
-from backend.auth import get_current_user, require_operator
+from backend.auth import get_current_user, require_operator, create_token
 from backend.schemas_live import (
     LiveReportCreate, LiveVoteRequest, LiveEventRead,
     LiveEventListResponse, LiveActionResponse, LiveStatsResponse,
+    DevicePairRequest, DeviceClaimRequest, LiveDeviceRead,
+    DeviceListResponse, DeviceClaimResponse,
 )
 from backend.live_manager import manager
 
@@ -151,6 +153,26 @@ def _get_active_event(db: Session, event_id: UUID) -> LiveEvent:
     return event
 
 
+def _touch_device(db: Session, device_id: str, counted: bool = False) -> None:
+    """
+    If the signalling device_id belongs to a paired device: reject it when the
+    owner revoked it, otherwise bump last_seen (and reports_sent for accepted
+    sightings). Unknown device ids stay allowed — pairing is opt-in, the
+    anonymous-device crowd flow keeps working unchanged.
+    """
+    device = db.query(LiveDevice).filter(LiveDevice.device_id == device_id).first()
+    if device is None:
+        return
+    if not device.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="This device was disconnected by its owner. Pair it again from the Live page.",
+        )
+    device.last_seen_at = _now()
+    if counted:
+        device.reports_sent = (device.reports_sent or 0) + 1
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /live/reports — sight damage (auto-cluster or create)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +184,7 @@ def create_report(
     _user: User = Depends(get_current_user),
 ):
     _sweep_expired(db)
+    _touch_device(db, payload.device_id, counted=True)
 
     point = ST_SetSRID(ST_MakePoint(payload.longitude, payload.latitude), 4326)
 
@@ -235,6 +258,7 @@ def confirm_event(
     _user: User = Depends(get_current_user),
 ):
     event = _get_active_event(db, event_id)
+    _touch_device(db, payload.device_id)
 
     # Idempotent per device — confirming twice does not double-count
     if not _has_vote(db, event.id, payload.device_id, ("sighting", "confirm")):
@@ -260,6 +284,7 @@ def dispute_event(
     _user: User = Depends(get_current_user),
 ):
     event = _get_active_event(db, event_id)
+    _touch_device(db, payload.device_id)
 
     if not _has_vote(db, event.id, payload.device_id, ("dispute",)):
         db.add(LiveReport(
@@ -346,6 +371,175 @@ def live_stats(db: Session = Depends(get_db)):
         reports_last_hour=reports_1h,
         devices_last_hour=devices_1h,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paired devices — connect a phone / dashcam so detections auto-upload
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PAIR_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I/L
+_PAIR_CODE_LEN = 8
+_PAIR_CODE_TTL_MIN = int(os.getenv("LIVE_PAIR_CODE_TTL_MIN", "15"))
+
+
+def _new_pair_code() -> str:
+    import secrets
+    return "".join(secrets.choice(_PAIR_CODE_ALPHABET) for _ in range(_PAIR_CODE_LEN))
+
+
+@router.post("/live/devices/pair", response_model=LiveDeviceRead, status_code=201)
+def pair_device(
+    payload: DevicePairRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Connect a sensor to the caller's account.
+
+    * body WITH device_id  → instant self-registration (the phone/browser
+      calling this IS the device — used by the Live page's drive mode).
+    * body WITHOUT device_id → creates a pending device and returns a
+      single-use pairing code; run
+      `python pipeline/live_pipeline.py --pair <CODE>` on the dashcam PC.
+    """
+    if payload.device_id:
+        existing = (
+            db.query(LiveDevice).filter(LiveDevice.device_id == payload.device_id).first()
+        )
+        if existing:
+            if existing.user_id != user.id:
+                raise HTTPException(409, "This device is already paired to another account.")
+            existing.name = payload.name
+            existing.kind = payload.kind
+            existing.is_active = True
+            existing.last_seen_at = _now()
+            db.commit()
+            db.refresh(existing)
+            return existing
+        device = LiveDevice(
+            user_id=user.id,
+            device_id=payload.device_id,
+            name=payload.name,
+            kind=payload.kind,
+            last_seen_at=_now(),
+        )
+        db.add(device)
+        db.commit()
+        db.refresh(device)
+        return device
+
+    # Pairing-code flow for an external agent
+    device = LiveDevice(
+        user_id=user.id,
+        name=payload.name,
+        kind=payload.kind,
+        pair_code=_new_pair_code(),
+        pair_code_expires_at=_now() + timedelta(minutes=_PAIR_CODE_TTL_MIN),
+    )
+    db.add(device)
+    db.commit()
+    db.refresh(device)
+    return device
+
+
+@router.post("/live/devices/claim", response_model=DeviceClaimResponse)
+def claim_device(payload: DeviceClaimRequest, db: Session = Depends(get_db)):
+    """
+    Exchange a pairing code for a JWT (called by the edge agent — the vehicle
+    machine never needs the account password). Codes are single-use and expire
+    after LIVE_PAIR_CODE_TTL_MIN minutes.
+    """
+    code = payload.code.strip().upper()
+    device = (
+        db.query(LiveDevice)
+        .filter(LiveDevice.pair_code == code, LiveDevice.device_id.is_(None))
+        .first()
+    )
+    if not device or (device.pair_code_expires_at and device.pair_code_expires_at < _now()):
+        raise HTTPException(404, "Pairing code not found or expired — generate a new one.")
+
+    clash = db.query(LiveDevice).filter(LiveDevice.device_id == payload.device_id).first()
+    if clash:
+        raise HTTPException(409, "This device id is already paired. Disconnect it first.")
+
+    owner = db.query(User).filter(User.id == device.user_id).first()
+    if not owner or not owner.is_active:
+        raise HTTPException(403, "The owning account is disabled.")
+
+    device.device_id = payload.device_id
+    if payload.name:
+        device.name = payload.name
+    device.pair_code = None
+    device.pair_code_expires_at = None
+    device.last_seen_at = _now()
+    db.commit()
+    db.refresh(device)
+
+    return DeviceClaimResponse(
+        access_token=create_token(owner),
+        device=LiveDeviceRead.model_validate(device),
+    )
+
+
+@router.get("/live/devices", response_model=DeviceListResponse)
+def list_devices(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The caller's paired devices (pending pairing codes included)."""
+    # Expire stale pending codes lazily
+    stale = (
+        db.query(LiveDevice)
+        .filter(
+            LiveDevice.user_id == user.id,
+            LiveDevice.device_id.is_(None),
+            LiveDevice.pair_code_expires_at < _now(),
+        )
+        .all()
+    )
+    for d in stale:
+        db.delete(d)
+    if stale:
+        db.commit()
+
+    items = (
+        db.query(LiveDevice)
+        .filter(LiveDevice.user_id == user.id)
+        .order_by(LiveDevice.created_at.desc())
+        .all()
+    )
+    return DeviceListResponse(total=len(items), items=items)
+
+
+@router.delete("/live/devices/{device_pk}", response_model=DeviceListResponse)
+def disconnect_device(
+    device_pk: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Disconnect a device. Pending (unclaimed) devices are deleted outright;
+    claimed ones are revoked so their future reports are rejected.
+    """
+    device = db.query(LiveDevice).filter(LiveDevice.id == device_pk).first()
+    if not device or (device.user_id != user.id and user.role != "admin"):
+        raise HTTPException(404, "Device not found.")
+
+    if device.device_id is None:
+        db.delete(device)
+    else:
+        device.is_active = False
+        device.pair_code = None
+        device.pair_code_expires_at = None
+    db.commit()
+
+    items = (
+        db.query(LiveDevice)
+        .filter(LiveDevice.user_id == user.id)
+        .order_by(LiveDevice.created_at.desc())
+        .all()
+    )
+    return DeviceListResponse(total=len(items), items=items)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

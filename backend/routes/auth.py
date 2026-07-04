@@ -36,6 +36,7 @@ from backend.auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, GOOGLE_CLIENT_ID,
 )
+from backend.notify import send_welcome_email
 from backend.schemas_auth import (
     RegisterRequest, LoginRequest, LocationUpdate, ProfileUpdate, RoleUpdate,
     UserRead, TokenResponse, AuthConfigResponse, UserListResponse,
@@ -84,6 +85,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # Free, optional welcome e-mail (stdlib SMTP; no-op when SMTP_HOST unset).
+    # Fire-and-forget in a daemon thread — never blocks or fails registration.
+    send_welcome_email(user.email, user.username, user.role, user.city)
+
     return _token_response(user)
 
 
