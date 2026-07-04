@@ -69,7 +69,7 @@ export default function HomePage() {
             <h1 className="display anim-fade-up delay-1" style={styles.heroTitle}>
               Every street.<br />
               Every crack.<br />
-              <span style={styles.heroAccent}>Mapped &amp; ranked.</span>
+              <span className="text-gradient" style={{ textShadow: 'none' }}>Mapped &amp; ranked.</span>
             </h1>
             <div className="road-divider anim-fade-up delay-2" style={{ width: 180, margin: '22px 0' }} />
             <p className="anim-fade-up delay-2" style={styles.heroSub}>
@@ -178,12 +178,12 @@ export default function HomePage() {
           </Link>
         </section>
 
-        {/* ── KPI row ──────────────────────────────────────────────────── */}
+        {/* ── KPI row (numbers roll in) ───────────────────────────────── */}
         <section style={styles.kpiGrid}>
-          <Kpi delay="delay-1" icon={Radar} label="Detections on record" value={total === null ? '—' : fmtNum(total)} sub="de-duplicated physical damage instances" />
-          <Kpi delay="delay-2" icon={AlertTriangle} label="Critical (S4–S5)" value={stats ? fmtNum(stats.critical_count) : '—'} sub="urgent or emergency response" color="var(--red)" />
-          <Kpi delay="delay-3" icon={Gauge} label="Average severity" value={stats?.avg_severity ?? '—'} sub={`avg confidence ${stats?.avg_confidence != null ? (stats.avg_confidence * 100).toFixed(0) + '%' : '—'}`} color="var(--orange)" />
-          <Kpi delay="delay-4" icon={CheckCircle2} label="Repaired" value={stats ? fmtNum(stats.fixed_count) : '—'} sub={openIssues !== null ? `${fmtNum(openIssues)} still open` : ''} color="var(--green)" />
+          <Kpi delay="delay-1" icon={Radar} label="Detections on record" value="—" countTo={total ?? null} sub="de-duplicated physical damage instances" />
+          <Kpi delay="delay-2" icon={AlertTriangle} label="Critical (S4–S5)" value="—" countTo={stats ? stats.critical_count : null} sub="urgent or emergency response" color="var(--red)" />
+          <Kpi delay="delay-3" icon={Gauge} label="Average severity" value="—" countTo={stats?.avg_severity != null ? Number(stats.avg_severity) : null} decimals={1} sub={`avg confidence ${stats?.avg_confidence != null ? (stats.avg_confidence * 100).toFixed(0) + '%' : '—'}`} color="var(--orange)" />
+          <Kpi delay="delay-4" icon={CheckCircle2} label="Repaired" value="—" countTo={stats ? stats.fixed_count : null} sub={openIssues !== null ? `${fmtNum(openIssues)} still open` : ''} color="var(--green)" />
         </section>
 
         {/* ── Two-column: top classes + quick actions ──────────────────── */}

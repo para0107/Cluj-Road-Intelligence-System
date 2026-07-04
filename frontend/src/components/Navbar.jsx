@@ -120,6 +120,7 @@ export default function Navbar() {
 
   return (
     <nav style={styles.nav}>
+      <div className="navbar-hairline" />
       {/* Brand */}
       <NavLink to="/" style={styles.brand}>
         <LogoMark />

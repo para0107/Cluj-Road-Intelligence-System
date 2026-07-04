@@ -26,6 +26,7 @@ import {
   Radio, WifiOff, Plus, X, ThumbsUp, ThumbsDown, CheckCircle2, ShieldCheck,
   Shield, ShieldAlert, Car, Activity, Users, MapPin, Crosshair,
   Smartphone, Copy, Trash2, Gauge, Link2, ChevronUp, ChevronDown, AlertTriangle,
+  Volume2, VolumeX,
 } from 'lucide-react'
 import {
   CLASS_COLORS, CLASS_LABELS, CLASS_ICONS, ALL_CLASSES,
@@ -47,6 +48,17 @@ import { useAuth } from '../context/AuthContext'
 const POLL_FALLBACK_MS = 5_000
 const FIX_FRESH_MS = 15_000          // a GPS fix younger than this anchors "Report here"
 const FOLLOW_ZOOM = 16
+const VOICE_ALERT_M = 250            // "pothole ahead" radius while driving
+const VOICE_GAP_MS = 6_000           // never talk over yourself
+
+/** Free, on-device text-to-speech (Web Speech API). No-op if unsupported. */
+function speak(text) {
+  try {
+    const u = new SpeechSynthesisUtterance(text)
+    u.rate = 1.05
+    window.speechSynthesis?.speak(u)
+  } catch { /* unsupported browser — stay silent */ }
+}
 
 // Pothole is by far the most reported hazard — it leads the picker.
 const PICKER_CLASSES = ['pothole', ...ALL_CLASSES.filter(c => c !== 'pothole')]
@@ -203,6 +215,17 @@ export default function LivePage() {
   const [driveStats, setDriveStats] = useState({ jolt: 0, speed: null, hasFix: false, sent: 0 })
   const driveStopRef = useRef(null)
   const wakeLockRef = useRef(null)
+
+  // Voice hazard alerts (Waze-style "pothole ahead") — on-device TTS, free
+  const [voiceOn, setVoiceOn] = useState(() => localStorage.getItem('rids_voice_alerts') !== 'off')
+  const alertedIds = useRef(new Set())     // one callout per hazard per session
+  const lastSpokeAt = useRef(0)
+  const toggleVoice = () => {
+    setVoiceOn(v => {
+      localStorage.setItem('rids_voice_alerts', v ? 'off' : 'on')
+      return !v
+    })
+  }
 
   const deviceId = useMemo(getDeviceId, [])
 
@@ -481,7 +504,9 @@ export default function LivePage() {
     setDevicesOpen(false)
     setFollow(true)               // the map drives with you, Waze-style
     acquireWakeLock()
-    pushToast('Drive mode ON — impacts auto-report as potholes')
+    // Speaking inside this click handler also unlocks TTS on mobile browsers.
+    if (voiceOn) speak('Drive mode on')
+    pushToast('Drive mode ON — impacts auto-report, hazards are called out')
   }
 
   // Stop sensors when leaving the page
@@ -503,6 +528,20 @@ export default function LivePage() {
     }
     return best
   }, [fix, eventList])
+
+  // Speak up when driving into a hazard — once per hazard, never chatty.
+  useEffect(() => {
+    if (!driveOn || !voiceOn || !nearest) return
+    const { d, ev } = nearest
+    if (d > VOICE_ALERT_M) return
+    if (alertedIds.current.has(ev.id)) return
+    const now = Date.now()
+    if (now - lastSpokeAt.current < VOICE_GAP_MS) return
+    alertedIds.current.add(ev.id)
+    lastSpokeAt.current = now
+    const label = CLASS_LABELS[ev.damage_type] || 'hazard'
+    speak(`${label} ahead, ${Math.max(10, Math.round(d / 10) * 10)} meters`)
+  }, [nearest, driveOn, voiceOn])
 
   // Tiles follow the app theme for consistency with MapPage:
   // dark mode → Dark tiles, light mode → Streets tiles.
@@ -623,6 +662,16 @@ export default function LivePage() {
             <AlertTriangle size={12} />
             {nearest ? fmtDist(nearest.d) : '—'}
           </span>
+          <button
+            onClick={toggleVoice}
+            title={voiceOn ? 'Mute voice alerts' : 'Unmute voice alerts'}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 2,
+              color: voiceOn ? 'var(--accent)' : 'var(--text-muted)', display: 'flex',
+            }}
+          >
+            {voiceOn ? <Volume2 size={14} /> : <VolumeX size={14} />}
+          </button>
         </div>
       )}
 

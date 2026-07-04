@@ -7,6 +7,7 @@
 
 import React from 'react'
 import { SEVERITY_COLORS, SEVERITY_LABELS, CLASS_COLORS, CLASS_LABELS, CLASS_ICONS } from '../utils/constants'
+import useCountUp from '../hooks/useCountUp'
 
 // ── Severity badge ────────────────────────────────────────────────────────
 export function SevBadge({ s, compact = false }) {
@@ -71,19 +72,30 @@ export function ClassDot({ cls, size = 26 }) {
 }
 
 // ── KPI stat card ─────────────────────────────────────────────────────────
-export function Kpi({ icon: Icon, label, value, sub, color = 'var(--accent)', delay = '' }) {
+// Pass `countTo` (a number) to make the value roll in with a count-up
+// animation; `value` stays the fallback for non-numeric displays.
+export function Kpi({ icon: Icon, label, value, countTo = null, decimals = 0, sub, color = 'var(--accent)', delay = '' }) {
+  const animated = useCountUp(countTo ?? NaN, decimals)
+  const shown = countTo != null
+    ? animated.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+    : value
   return (
-    <div className={`card anim-fade-up ${delay}`} style={{ padding: '18px 20px', position: 'relative', overflow: 'hidden' }}>
+    <div className={`card card-accent-hover anim-fade-up ${delay}`} style={{ padding: '18px 20px', position: 'relative', overflow: 'hidden' }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
         background: `linear-gradient(90deg, ${color}, transparent 70%)`,
+      }} />
+      <div style={{
+        position: 'absolute', top: -34, right: -34, width: 96, height: 96, borderRadius: '50%',
+        background: `radial-gradient(circle, color-mix(in srgb, ${color} 14%, transparent), transparent 70%)`,
+        pointerEvents: 'none',
       }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <span className="overline">{label}</span>
         {Icon && <Icon size={15} style={{ color, opacity: 0.9 }} />}
       </div>
-      <div className="display" style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.1, color: 'var(--text)' }}>
-        {value}
+      <div className="display" style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.1, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
+        {shown}
       </div>
       {sub && <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>{sub}</div>}
     </div>

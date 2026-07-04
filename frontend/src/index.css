@@ -63,6 +63,12 @@
   --shadow-lg: 0 12px 56px rgba(0, 0, 0, 0.65);
   --glow:      0 0 24px var(--accent-glow);
   --transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Signature gradients — yellow (road marking) → cyan (telemetry) */
+  --grad-accent: linear-gradient(100deg, #eaff3d 0%, #a8f26b 45%, #4cc9f0 100%);
+  --grad-hot:    linear-gradient(100deg, #ffd60a, #ff9f43 55%, #ff5d5d);
+  --aurora-a:    rgba(234, 255, 61, 0.07);
+  --aurora-b:    rgba(76, 201, 240, 0.06);
 }
 
 :root.light {
@@ -85,6 +91,10 @@
   --accent-glow:   rgba(153, 168, 0, 0.22);
   --shadow:        0 4px 24px rgba(15, 20, 40, 0.08);
   --shadow-lg:     0 12px 56px rgba(15, 20, 40, 0.14);
+  --grad-accent:   linear-gradient(100deg, #8a9a00 0%, #4e9c4a 45%, #0e87b8 100%);
+  --grad-hot:      linear-gradient(100deg, #d4a900, #e08a30 55%, #e04848);
+  --aurora-a:      rgba(153, 168, 0, 0.06);
+  --aurora-b:      rgba(14, 135, 184, 0.05);
 }
 
 /* ─── Reset ─────────────────────────────────────────────────────────────── */
@@ -103,13 +113,40 @@ html, body, #root {
 
 ::selection { background: var(--accent); color: var(--accent-ink); }
 
-/* Subtle blueprint grid on page backgrounds */
+/* Subtle blueprint grid + drifting aurora glows on page backgrounds.
+   Two soft radial lights (road-marking yellow / telemetry cyan) breathe
+   behind the grid — depth without noise, GPU-cheap (transform only). */
 .page-grid-bg {
+  position: relative;
+  isolation: isolate;
   background-image:
     linear-gradient(var(--border) 1px, transparent 1px),
     linear-gradient(90deg, var(--border) 1px, transparent 1px);
   background-size: 44px 44px;
   background-position: -1px -1px;
+}
+.page-grid-bg::before,
+.page-grid-bg::after {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  width: 65vmax;
+  height: 65vmax;
+  border-radius: 50%;
+  pointer-events: none;
+  will-change: transform;
+}
+.page-grid-bg::before {
+  top: -28vmax;
+  left: -18vmax;
+  background: radial-gradient(circle, var(--aurora-a) 0%, transparent 62%);
+  animation: auroraDrift 26s ease-in-out infinite;
+}
+.page-grid-bg::after {
+  bottom: -30vmax;
+  right: -20vmax;
+  background: radial-gradient(circle, var(--aurora-b) 0%, transparent 62%);
+  animation: auroraDrift 32s ease-in-out infinite reverse;
 }
 
 /* ─── Scrollbars ────────────────────────────────────────────────────────── */
@@ -149,6 +186,23 @@ html, body, #root {
 @keyframes floaty {
   0%, 100% { transform: translateY(0); }
   50%      { transform: translateY(-8px); }
+}
+@keyframes auroraDrift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(6vmax, 4vmax) scale(1.12); }
+  66%      { transform: translate(-4vmax, 7vmax) scale(0.94); }
+}
+@keyframes shineSweep {
+  from { transform: translateX(-130%) skewX(-18deg); }
+  to   { transform: translateX(230%) skewX(-18deg); }
+}
+@keyframes criticalGlow {
+  0%, 100% { filter: drop-shadow(0 0 2px currentColor); opacity: 1; }
+  50%      { filter: drop-shadow(0 0 9px currentColor); opacity: 0.75; }
+}
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
 }
 
 .anim-fade-up      { animation: fadeUp 0.45s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
@@ -203,7 +257,23 @@ html, body, #root {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  /* inset top highlight = catch-light on the glass edge */
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+:root.light .glass { box-shadow: var(--shadow); }
+
+/* Gradient hairline under the fixed navbar */
+.navbar-hairline {
+  position: fixed;
+  top: var(--nav-h);
+  left: 0; right: 0;
+  height: 1px;
+  z-index: 1000;
+  background: var(--grad-accent);
+  background-size: 220% 220%;
+  opacity: 0.55;
+  animation: gradientShift 9s ease-in-out infinite;
+  pointer-events: none;
 }
 
 /* ─── Buttons ───────────────────────────────────────────────────────────── */
@@ -236,12 +306,25 @@ html, body, #root {
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 700;
+  position: relative;
+  overflow: hidden;
 }
 .btn-accent:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
   box-shadow: var(--glow);
 }
+/* Light sweep across accent buttons on hover — the "alive" touch */
+.btn-accent::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  transform: translateX(-130%) skewX(-18deg);
+  pointer-events: none;
+}
+.btn-accent:hover::after { animation: shineSweep 0.7s ease; }
 .btn-ghost { background: transparent; }
 .btn-danger { color: var(--red); border-color: rgba(255, 93, 93, 0.4); }
 .btn-danger:hover { background: rgba(255, 93, 93, 0.08); border-color: var(--red); }
@@ -348,8 +431,9 @@ html, body, #root {
 :root.light .leaflet-control-attribution { background: rgba(255, 255, 255, 0.8) !important; }
 .leaflet-control-attribution a { color: var(--accent) !important; }
 
-/* Pulsing critical marker (applied to CircleMarker via className) */
-.marker-critical { animation: pulse 1.6s ease-in-out infinite; }
+/* Pulsing critical marker (applied to CircleMarker via className) —
+   glows instead of blinking, so it draws the eye without flicker. */
+.marker-critical { animation: criticalGlow 1.6s ease-in-out infinite; }
 
 /* Heatmap blob */
 .heatmap-blob { filter: blur(7px); mix-blend-mode: screen; }
@@ -361,6 +445,26 @@ html, body, #root {
 .text-accent  { color: var(--accent); }
 .text-muted   { color: var(--text-muted); }
 .text-dim     { color: var(--text-dim); }
+
+/* Signature gradient text — slow shimmer, for hero/display moments only */
+.text-gradient {
+  background: var(--grad-accent);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: gradientShift 7s ease-in-out infinite;
+}
+
+/* Gradient hairline for panel/section tops */
+.grad-line {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--grad-accent);
+  background-size: 220% 220%;
+  animation: gradientShift 7s ease-in-out infinite;
+}
 .overline {
   font-family: var(--font-mono);
   font-size: 10px;
