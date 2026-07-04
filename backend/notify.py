@@ -11,6 +11,14 @@ practical zero-cost options:
                          one at myaccount.google.com/apppasswords; requires 2FA)
   Outlook / Yahoo        same pattern with their smtp hosts + app passwords.
 
+NETWORKS THAT BLOCK SMTP (university/corporate egress filters kill ports
+25/465/587 entirely — HTTPS is often the only thing allowed out): set
+BREVO_API_KEY instead. Brevo (brevo.com) has a free tier (300 e-mails/day,
+no card) and its REST API runs over plain HTTPS 443, so it works anywhere a
+browser works. SMTP_FROM must then be a sender address you verified in
+Brevo. When both are configured, the HTTPS API wins (it is the more
+portable transport); SMTP_HOST is ignored.
+
 Configuration (root .env — all optional):
     SMTP_HOST       e.g. smtp.gmail.com          (unset → e-mail silently off)
     SMTP_PORT       default 587
@@ -45,16 +53,31 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USERNAME
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "true").lower() == "true"
+
+# HTTPS transport for SMTP-blocked networks (free tier, no card): the key
+# from brevo.com → Settings → SMTP & API → API keys. Wins over SMTP when set.
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+_BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
 _SEND_TIMEOUT_S = 15
 
 
+def _http_email_enabled() -> bool:
+    return bool(BREVO_API_KEY and SMTP_FROM)
+
+
 def email_enabled() -> bool:
-    """True when an SMTP relay is configured (host + a From address)."""
-    return bool(SMTP_HOST and SMTP_FROM)
+    """True when any transport is configured: HTTPS API or SMTP relay."""
+    return _http_email_enabled() or bool(SMTP_HOST and SMTP_FROM)
 
 
-def _deliver(msg: EmailMessage) -> None:
+def _deliver_smtp(to_addr: str, subject: str, body: str) -> None:
     """Synchronous SMTP delivery. Runs inside the sender thread only."""
+    msg = EmailMessage()
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.set_content(body)
     if SMTP_STARTTLS:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=_SEND_TIMEOUT_S) as smtp:
             smtp.starttls()
@@ -68,25 +91,46 @@ def _deliver(msg: EmailMessage) -> None:
             smtp.send_message(msg)
 
 
+def _deliver_http(to_addr: str, subject: str, body: str) -> None:
+    """
+    Synchronous delivery over HTTPS 443 via the Brevo transactional API —
+    the transport for networks whose firewalls swallow all SMTP ports.
+    """
+    import httpx
+
+    resp = httpx.post(
+        _BREVO_URL,
+        headers={"api-key": BREVO_API_KEY, "content-type": "application/json"},
+        json={
+            "sender": {"email": SMTP_FROM, "name": "RIDS"},
+            "to": [{"email": to_addr}],
+            "subject": subject,
+            "textContent": body,
+        },
+        timeout=_SEND_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+
+
 def send_email_async(to_addr: str, subject: str, body: str) -> bool:
     """
-    Fire-and-forget e-mail. Returns True if a send was *queued* (SMTP is
-    configured), False when e-mail is off. Never raises to the caller.
+    Fire-and-forget e-mail. Returns True if a send was *queued* (a transport
+    is configured), False when e-mail is off. Never raises to the caller.
     """
     if not email_enabled():
-        logger.debug("E-mail disabled (SMTP_HOST unset) — skipping '{}'", subject)
+        logger.debug("E-mail disabled (no BREVO_API_KEY / SMTP_HOST) — skipping '{}'", subject)
         return False
 
-    msg = EmailMessage()
-    msg["From"] = SMTP_FROM
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    msg.set_content(body)
+    use_http = _http_email_enabled()
 
     def _worker() -> None:
         try:
-            _deliver(msg)
-            logger.info("E-mail sent to {} — '{}'", to_addr, subject)
+            if use_http:
+                _deliver_http(to_addr, subject, body)
+            else:
+                _deliver_smtp(to_addr, subject, body)
+            logger.info("E-mail sent to {} via {} — '{}'",
+                        to_addr, "brevo-https" if use_http else "smtp", subject)
         except Exception as exc:  # noqa: BLE001 — e-mail must never break a request
             logger.warning("E-mail to {} failed ({}): {}", to_addr, subject, exc)
 

@@ -835,7 +835,11 @@ Compose (`env_file`). Groups:
   limiting: `LOGIN_MAX_ATTEMPTS` (5), `LOGIN_WINDOW_S` (900), `LOGIN_LOCKOUT_S` (900).
 - **E-mail (optional, free)**: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`,
   `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_STARTTLS` — unset ⇒ e-mail off. Gmail app
-  passwords work and are free.
+  passwords work and are free. **On networks that block outbound SMTP** (typical
+  university/corporate egress filters) set `BREVO_API_KEY` instead: Brevo's free
+  transactional API (300 mails/day, no card) delivers over HTTPS 443 and takes
+  precedence over SMTP when both are set; `SMTP_FROM` must be a Brevo-verified
+  sender.
 - **Live mode**: `LIVE_CLUSTER_RADIUS_M` (25), `LIVE_EVENT_TTL_H` (72),
   `LIVE_CONFIRM_DEVICES` (2), `LIVE_VERIFY_DEVICES` (3), `LIVE_DISPUTE_MIN` (2),
   `LIVE_PAIR_CODE_TTL_MIN` (15). Edge agents: `LIVE_API_URL`,
