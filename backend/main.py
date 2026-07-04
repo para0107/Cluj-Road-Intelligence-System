@@ -45,9 +45,13 @@ app = FastAPI(
 # CORS — allow the local frontend to call the API
 # ─────────────────────────────────────────────
 
+# Comma-separated list in .env, e.g. CORS_ORIGINS=https://rids.vercel.app
+# Default "*" keeps local/dev friction-free; set real origins when deploying.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten this when deploying
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

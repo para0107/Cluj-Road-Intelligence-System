@@ -44,7 +44,7 @@ export default function AdminPage() {
   const changeRole = async (u, role) => {
     let city = u.city
     if (role === 'municipality' && !city) {
-      city = window.prompt(`City for ${u.username}'s municipality account:`, 'Cluj-Napoca')
+      city = window.prompt(`City for ${u.username}'s municipality account:`)
       if (!city) return
     }
     setBusyId(u.id)

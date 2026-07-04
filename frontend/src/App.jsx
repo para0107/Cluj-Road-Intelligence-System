@@ -14,10 +14,15 @@ import RegisterPage from './pages/RegisterPage'
 import AdminPage from './pages/AdminPage'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Spinner, CenterState } from './components/ui'
+import CityGate from './components/CityGate'
 
-/** Everything except /login and /register requires a session. */
+/**
+ * Everything except /login and /register requires a session. Accounts
+ * without a city (Google first login, legacy rows) must pick one before
+ * using the app — the maps and municipality scoping depend on it.
+ */
 function RequireAuth({ children }) {
-  const { isAuthed, booting } = useAuth()
+  const { isAuthed, booting, user } = useAuth()
   const location = useLocation()
   if (booting) {
     return (
@@ -28,6 +33,14 @@ function RequireAuth({ children }) {
   }
   if (!isAuthed) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  }
+  if (!user?.city) {
+    return (
+      <>
+        {children}
+        <CityGate />
+      </>
+    )
   }
   return children
 }

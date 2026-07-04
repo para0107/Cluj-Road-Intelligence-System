@@ -179,3 +179,11 @@ class LandmarksResponse(BaseModel):
     city: str
     source: str                      # cache | nominatim | fallback
     items: List[LandmarkRead]
+
+
+class CityCenterResponse(BaseModel):
+    """Geocoded centre of a city — lets the map open on the user's city."""
+    city: str
+    source: str                      # cache | nominatim
+    latitude: float
+    longitude: float

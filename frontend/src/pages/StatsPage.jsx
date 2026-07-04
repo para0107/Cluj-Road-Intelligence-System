@@ -20,6 +20,7 @@ import { fetchStats, fetchDetections } from '../utils/api'
 import { fmtNum, fmtDate, fmtPct } from '../utils/format'
 import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS } from '../utils/constants'
 import { Kpi, SectionTitle, Spinner, CenterState, EmptyState, ProgressBar } from '../components/ui'
+import { useAuth } from '../context/AuthContext'
 
 const tooltipStyle = {
   contentStyle: {
@@ -31,6 +32,7 @@ const tooltipStyle = {
 }
 
 export default function StatsPage() {
+  const { user } = useAuth()
   const { data: stats, loading: statsLoading, error } = useApi(fetchStats, [])
   const { data: detData } = useApi(() => fetchDetections({ page: 1, page_size: 5000 }), [])
   const detections = detData?.items || []
@@ -111,7 +113,7 @@ export default function StatsPage() {
 
         <SectionTitle
           overline="City analytics"
-          title="Road condition — Cluj-Napoca"
+          title={user?.city ? `Road condition — ${user.city}` : 'Road condition'}
           right={
             <Link to="/map" className="btn btn-sm">
               View on map <ArrowRight size={12} />

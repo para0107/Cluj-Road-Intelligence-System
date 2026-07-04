@@ -251,8 +251,13 @@ def create_report(
 
     # Thank the reporter by e-mail (free SMTP; no-op when unconfigured),
     # at most once per day so a driving session doesn't flood their inbox.
-    if user.email and _thanked_on.get(user.id) != date.today():
-        _thanked_on[user.id] = date.today()
+    # The dict resets each day so it can never grow past one day's users.
+    today = date.today()
+    if _thanked_on.get("_day") != today:
+        _thanked_on.clear()
+        _thanked_on["_day"] = today
+    if user.email and user.id not in _thanked_on:
+        _thanked_on[user.id] = True
         send_thankyou_email(user.email, user.username, payload.damage_type)
 
     return LiveActionResponse(action="created" if created else "merged", event=_read(event))

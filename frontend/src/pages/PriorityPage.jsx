@@ -19,11 +19,13 @@ import {
   REPAIR_COST_RON, SEVERITY_COST_FACTOR,
 } from '../utils/constants'
 import { SevBadge, ClassDot, SectionTitle, Spinner, CenterState, EmptyState, Kpi } from '../components/ui'
+import { useAuth } from '../context/AuthContext'
 
 const estimateCost = (item) =>
   (REPAIR_COST_RON[item.damage_type] || 800) * (SEVERITY_COST_FACTOR[item.severity] || 1)
 
 export default function PriorityPage() {
+  const { user } = useAuth()
   const { data, loading, error } = useApi(() => fetchPriority(100), [])
   const [selected, setSelected] = useState(new Set())
 
@@ -64,7 +66,7 @@ export default function PriorityPage() {
   .total { margin-top:18px; font-size:15px; font-weight:700; text-align:right; }
 </style></head><body>
 <div class="cover">
-  <h1>Road repair work order — Cluj-Napoca</h1>
+  <h1>Road repair work order${user?.city ? ` — ${user.city}` : ''}</h1>
   <p>RIDS priority queue · ${rows.length} sites · generated ${new Date().toLocaleString()}</p>
 </div>
 <div class="body">

@@ -91,12 +91,21 @@ export const fetchUsers = () =>
 export const setUserRole = (userId, role, city = null) =>
   api.patch(`/auth/users/${userId}/role`, { role, city }).then(r => r.data)
 
-// ── City landmarks (free OSM/Nominatim, cached server-side) ────────────────
+export const updateMyProfile = (payload) =>
+  api.patch('/auth/me', payload).then(r => r.data)
+
+// ── City landmarks + centre (free OSM/Nominatim, cached server-side) ───────
 
 export const fetchCityLandmarks = (city, refresh = false) =>
   api.get('/cities/landmarks', {
     params: { city, refresh },
     timeout: 30000,   // first lookup per city is rate-limited by design (~10 s)
+  }).then(r => r.data)
+
+export const fetchCityCenter = (city, refresh = false) =>
+  api.get('/cities/center', {
+    params: { city, refresh },
+    timeout: 15000,   // single geocode; first call per city does one OSM query
   }).then(r => r.data)
 
 // ── Detections ─────────────────────────────────────────────────────────────

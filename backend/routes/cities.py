@@ -20,23 +20,33 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
+import threading
 import time
 
 import httpx
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.models_auth import User, CityLandmark
 from backend.auth import get_current_user
-from backend.schemas_auth import LandmarksResponse, LandmarkRead
+from backend.schemas_auth import LandmarksResponse, LandmarkRead, CityCenterResponse
 
 router = APIRouter()
 
 _NOMINATIM_URL = os.getenv("NOMINATIM_SEARCH_URL", "https://nominatim.openstreetmap.org/search")
 _USER_AGENT = "RIDS-road-intelligence/1.0 (Babes-Bolyai University thesis; educational)"
 _REQUEST_SPACING_S = 1.1        # Nominatim policy: max 1 request/second
+
+# The 1 req/s limit is per service, not per caller — serialize ALL outbound
+# Nominatim traffic from this process so two concurrent users can't get the
+# free tier banned.
+_nominatim_lock = threading.Lock()
+
+# The geocoded city centre is cached in the same table under this kind and is
+# excluded from the landmark (fly-to) listings.
+_CITY_KIND = "city"
 
 # What counts as an "important zone" — one query per entry, first hit wins.
 _LANDMARK_QUERIES = [
@@ -63,10 +73,36 @@ _FALLBACK_CLUJ = [
 ]
 
 
+def _geocode_city(city: str) -> dict | None:
+    """One Nominatim query for the city itself. Returns None on failure."""
+    with _nominatim_lock:
+        try:
+            with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=10) as client:
+                resp = client.get(_NOMINATIM_URL, params={
+                    "q": city,
+                    "format": "jsonv2",
+                    "limit": 1,
+                    "addressdetails": 0,
+                })
+                resp.raise_for_status()
+                rows = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Nominatim city geocode failed for {}: {}", city, exc)
+            return None
+        finally:
+            time.sleep(_REQUEST_SPACING_S)
+    if not rows:
+        return None
+    try:
+        return {"latitude": float(rows[0]["lat"]), "longitude": float(rows[0]["lon"])}
+    except (KeyError, ValueError):
+        return None
+
+
 def _fetch_from_nominatim(city: str) -> list[dict]:
     """One rate-limited pass over the landmark queries. Returns [] on failure."""
     found: list[dict] = []
-    with httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=10) as client:
+    with _nominatim_lock, httpx.Client(headers={"User-Agent": _USER_AGENT}, timeout=10) as client:
         for query, kind in _LANDMARK_QUERIES:
             try:
                 resp = client.get(_NOMINATIM_URL, params={
@@ -112,7 +148,7 @@ def city_landmarks(
     if not refresh:
         cached = (
             db.query(CityLandmark)
-            .filter(CityLandmark.city.ilike(city_norm))
+            .filter(CityLandmark.city.ilike(city_norm), CityLandmark.kind != _CITY_KIND)
             .order_by(CityLandmark.name)
             .all()
         )
@@ -126,9 +162,9 @@ def city_landmarks(
     #     takes ~10 s by design, then it is cached forever)
     items = _fetch_from_nominatim(city_norm)
     if items:
-        db.query(CityLandmark).filter(CityLandmark.city.ilike(city_norm)).delete(
-            synchronize_session=False
-        )
+        db.query(CityLandmark).filter(
+            CityLandmark.city.ilike(city_norm), CityLandmark.kind != _CITY_KIND
+        ).delete(synchronize_session=False)
         for lm in items:
             db.add(CityLandmark(city=city_norm, **lm))
         db.commit()
@@ -147,3 +183,45 @@ def city_landmarks(
             ],
         )
     return LandmarksResponse(city=city_norm, source="fallback", items=[])
+
+
+@router.get("/cities/center", response_model=CityCenterResponse)
+def city_center(
+    city: str = Query(..., min_length=2, max_length=80),
+    refresh: bool = Query(False, description="Force a fresh Nominatim geocode"),
+    _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Geocoded centre of a city, so every map opens on the caller's own city.
+    One free Nominatim query per city EVER — the result is cached in
+    `city_landmarks` under kind='city' (excluded from the fly-to menu).
+    """
+    city_norm = city.strip()
+
+    if not refresh:
+        cached = (
+            db.query(CityLandmark)
+            .filter(CityLandmark.city.ilike(city_norm), CityLandmark.kind == _CITY_KIND)
+            .first()
+        )
+        if cached:
+            return CityCenterResponse(
+                city=city_norm, source="cache",
+                latitude=cached.latitude, longitude=cached.longitude,
+            )
+
+    hit = _geocode_city(city_norm)
+    if hit is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not locate '{city_norm}' — check the city name spelling.",
+        )
+
+    db.query(CityLandmark).filter(
+        CityLandmark.city.ilike(city_norm), CityLandmark.kind == _CITY_KIND
+    ).delete(synchronize_session=False)
+    db.add(CityLandmark(city=city_norm, name=city_norm, kind=_CITY_KIND, **hit))
+    db.commit()
+
+    return CityCenterResponse(city=city_norm, source="nominatim", **hit)

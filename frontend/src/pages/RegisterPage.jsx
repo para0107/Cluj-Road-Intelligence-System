@@ -41,8 +41,8 @@ export default function RegisterPage() {
 
   const submit = async (e) => {
     e.preventDefault()
-    if (form.role === 'municipality' && !form.city.trim()) {
-      setError('Municipality accounts must select their city.')
+    if (!form.city.trim()) {
+      setError('Please select your city — the map opens on it.')
       return
     }
     setBusy(true)
@@ -51,7 +51,7 @@ export default function RegisterPage() {
       const outcome = await register({
         ...form,
         full_name: form.full_name.trim() || null,
-        city: form.city.trim() || null,
+        city: form.city.trim(),
       })
       if (outcome.status === 'verify_email') {
         setInfo(outcome.message)
@@ -219,9 +219,10 @@ export default function RegisterPage() {
                      title="Letters, digits, dots, dashes, underscores" autoComplete="username" />
             </label>
             <label style={styles.label}>
-              City {form.role === 'municipality' && <span style={{ color: 'var(--accent)' }}>*</span>}
+              City <span style={{ color: 'var(--accent)' }}>*</span>
               <input className="input" value={form.city} onChange={set('city')}
-                     placeholder="Cluj-Napoca" required={form.role === 'municipality'} />
+                     placeholder="e.g. Cluj-Napoca" required minLength={2} maxLength={80}
+                     title="The map opens on your city" />
             </label>
           </div>
           <label style={styles.label}>
@@ -276,7 +277,7 @@ const styles = {
     justifyContent: 'center',
     paddingTop: 'var(--nav-h)',
   },
-  card: { width: 440, padding: '30px 32px', margin: '40px 16px' },
+  card: { width: '100%', maxWidth: 440, padding: '30px 32px', margin: '40px 16px' },
   title: { fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' },
   label: { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-dim)' },
   error: {

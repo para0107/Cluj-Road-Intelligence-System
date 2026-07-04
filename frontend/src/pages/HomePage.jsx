@@ -21,12 +21,15 @@ import {
   CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, PIPELINE_STAGES,
 } from '../utils/constants'
 import { Kpi, SectionTitle } from '../components/ui'
+import { useAuth } from '../context/AuthContext'
 
 const STAGE_ICONS = [ScanLine, Radar, Layers, Ruler, Gauge, Copy, Database]
 
 export default function HomePage() {
   const navigate = useNavigate()
+  const { user, isOperator } = useAuth()
   const { data: stats } = useApi(fetchStats, [])
+  const cityName = user?.city || 'your city'
 
   const severityData = useMemo(() => {
     const rows = stats?.severity_breakdown || []
@@ -61,7 +64,7 @@ export default function HomePage() {
           <div style={{ maxWidth: 640 }}>
             <div className="overline anim-fade-up" style={{ color: 'var(--accent)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
               <MapPin size={12} />
-              CLUJ-NAPOCA · 46.77°N 23.62°E · ROMANIA
+              {(user?.city || 'ROAD INTELLIGENCE NETWORK').toUpperCase()}
             </div>
             <h1 className="display anim-fade-up delay-1" style={styles.heroTitle}>
               Every street.<br />
@@ -71,17 +74,24 @@ export default function HomePage() {
             <div className="road-divider anim-fade-up delay-2" style={{ width: 180, margin: '22px 0' }} />
             <p className="anim-fade-up delay-2" style={styles.heroSub}>
               RIDS turns ordinary dashcam footage into a live, georeferenced map of road
-              damage across Cluj-Napoca — detected by <strong>RT-DETR</strong>, measured by{' '}
+              damage across {cityName} — detected by <strong>RT-DETR</strong>, measured by{' '}
               <strong>SAM&nbsp;2.1</strong> and <strong>Monodepth2</strong>, scored S1–S5, and
               ranked into a repair plan the city can act on.
             </p>
             <div className="anim-fade-up delay-3" style={{ display: 'flex', gap: 10, marginTop: 26, flexWrap: 'wrap' }}>
-              <Link to="/map" className="btn btn-accent" style={{ padding: '11px 20px', fontSize: 13 }}>
+              {/* Citizens land on the Live map — the operator pages 404 for them */}
+              <Link to={isOperator ? '/map' : '/live'} className="btn btn-accent" style={{ padding: '11px 20px', fontSize: 13 }}>
                 <Map size={15} /> Open the live map <ArrowRight size={14} />
               </Link>
-              <Link to="/ingest" className="btn" style={{ padding: '11px 20px', fontSize: 13 }}>
-                <Upload size={15} /> Upload a survey
-              </Link>
+              {isOperator ? (
+                <Link to="/ingest" className="btn" style={{ padding: '11px 20px', fontSize: 13 }}>
+                  <Upload size={15} /> Upload a survey
+                </Link>
+              ) : (
+                <Link to="/live" className="btn" style={{ padding: '11px 20px', fontSize: 13 }}>
+                  <Radio size={15} /> Report a hazard
+                </Link>
+              )}
             </div>
           </div>
 
@@ -122,8 +132,9 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* ── Mode chooser ─────────────────────────────────────────────── */}
+        {/* ── Mode chooser (survey mode is operator-only) ──────────────── */}
         <section style={styles.modeGrid}>
+          {isOperator && (
           <Link to="/ingest" className="card card-accent-hover anim-fade-up delay-1" style={styles.modeCard}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <span style={{ ...styles.modeIcon, background: 'var(--accent-dim)', border: '1px solid var(--border-accent)', color: 'var(--accent)' }}>
@@ -139,6 +150,7 @@ export default function HomePage() {
             </p>
             <span style={styles.modeCta}>Start a survey <ArrowRight size={13} /></span>
           </Link>
+          )}
 
           <Link to="/live" className="card card-accent-hover anim-fade-up delay-2" style={styles.modeCard}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -206,22 +218,41 @@ export default function HomePage() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <QuickAction
-              to="/priority" icon={ListOrdered} title="Repair planner"
-              sub="Ranked repair queue with cost estimates" delay="delay-1"
-            />
-            <QuickAction
-              to="/explorer" icon={Table} title="Detection explorer"
-              sub="Filter, sort, export and audit every record" delay="delay-2"
-            />
-            <QuickAction
-              to="/stats" icon={BarChart2} title="City analytics"
-              sub="Severity distribution, class breakdown, trends" delay="delay-3"
-            />
-            <QuickAction
-              to="/ingest" icon={Upload} title="Ingest new footage"
-              sub="Upload .mp4 + .gpx and watch the 7-stage pipeline" delay="delay-4"
-            />
+            {isOperator ? (
+              <>
+                <QuickAction
+                  to="/priority" icon={ListOrdered} title="Repair planner"
+                  sub="Ranked repair queue with cost estimates" delay="delay-1"
+                />
+                <QuickAction
+                  to="/explorer" icon={Table} title="Detection explorer"
+                  sub="Filter, sort, export and audit every record" delay="delay-2"
+                />
+                <QuickAction
+                  to="/stats" icon={BarChart2} title="City analytics"
+                  sub="Severity distribution, class breakdown, trends" delay="delay-3"
+                />
+                <QuickAction
+                  to="/ingest" icon={Upload} title="Ingest new footage"
+                  sub="Upload .mp4 + .gpx and watch the 7-stage pipeline" delay="delay-4"
+                />
+              </>
+            ) : (
+              <>
+                <QuickAction
+                  to="/live" icon={Radio} title="Live hazard map"
+                  sub="See and report hazards around you in real time" delay="delay-1"
+                />
+                <QuickAction
+                  to="/live" icon={Users} title="Drive mode"
+                  sub="Mount your phone — impacts auto-report as you drive" delay="delay-2"
+                />
+                <QuickAction
+                  to="/about" icon={BarChart2} title="How RIDS works"
+                  sub="The detection pipeline, severity scoring and validation" delay="delay-3"
+                />
+              </>
+            )}
           </div>
         </section>
 
@@ -379,7 +410,8 @@ const styles = {
   },
   twoCol: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1.5fr) minmax(280px, 1fr)',
+    // min(100%, …) lets the columns collapse to one on narrow screens
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))',
     gap: 14,
     marginTop: 14,
   },

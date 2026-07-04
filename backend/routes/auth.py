@@ -208,10 +208,13 @@ def _create_user_from_pending(db: Session, pending: PendingRegistration) -> User
 
 @router.post("/auth/register", response_model=RegisterOutcome, status_code=201)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    if payload.role == ROLE_MUNICIPALITY and not (payload.city and payload.city.strip()):
+    # Every account is tied to a city — it is what the maps open on and what
+    # municipality scoping uses. (Google sign-ins pick theirs on first login.)
+    if not (payload.city and payload.city.strip()):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Municipality accounts must select the city they belong to.",
+            "Please select your city — the map opens on it and municipality "
+            "accounts are scoped to it.",
         )
 
     if _account_clash(db, payload.username, payload.email):

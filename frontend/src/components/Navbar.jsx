@@ -10,10 +10,11 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
   Info, Sun, Moon, Activity, Radio, LogOut, Shield, MapPin, ChevronDown,
-  Trash2,
+  Trash2, Menu, X,
 } from 'lucide-react'
 import { fetchHealth, deleteMyAccount } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
+import useIsMobile from '../hooks/useIsMobile'
 
 const ROLE_COLORS = {
   admin: 'var(--red)',
@@ -48,11 +49,13 @@ function LogoMark() {
 export default function Navbar() {
   const { user, isAuthed, isAdmin, isOperator, logout, shareLocation } = useAuth()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
   const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
   const [now, setNow] = useState(new Date())
   const [health, setHealth] = useState(null)          // null | 'ok' | 'down'
   const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
   const [menuOpen, setMenuOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)       // mobile hamburger panel
   const menuRef = useRef(null)
 
   // Close the user menu on outside click
@@ -113,6 +116,8 @@ export default function Navbar() {
     }
   }
 
+  const visibleItems = NAV_ITEMS.filter(item => !item.operator || isOperator)
+
   return (
     <nav style={styles.nav}>
       {/* Brand */}
@@ -120,45 +125,48 @@ export default function Navbar() {
         <LogoMark />
         <div style={{ lineHeight: 1.15 }}>
           <div className="display" style={styles.brandName}>RIDS</div>
-          <div style={styles.brandSub}>CLUJ-NAPOCA · ROAD INTELLIGENCE</div>
+          {!isMobile && <div style={styles.brandSub}>ROAD INTELLIGENCE NETWORK</div>}
         </div>
       </NavLink>
 
       {/* Links (only when signed in; operator pages hidden from citizens) */}
-      <div style={styles.links}>
-        {isAuthed && NAV_ITEMS.filter(item => !item.operator || isOperator)
-          .map(({ to, label, icon: Icon, live }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
-          >
-            <Icon size={13} />
-            {label}
-            {live && (
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%',
-                background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
-                animation: 'pulse 1.6s ease-in-out infinite',
-              }} />
-            )}
-          </NavLink>
-        ))}
-      </div>
+      {!isMobile && (
+        <div style={styles.links}>
+          {isAuthed && visibleItems.map(({ to, label, icon: Icon, live }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+            >
+              <Icon size={13} />
+              {label}
+              {live && (
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+                  animation: 'pulse 1.6s ease-in-out infinite',
+                }} />
+              )}
+            </NavLink>
+          ))}
+        </div>
+      )}
 
       {/* Right cluster */}
       <div style={styles.right}>
         {jobActive && (
           <span style={styles.jobBadge} title="A pipeline run is in progress">
             <Activity size={11} style={{ animation: 'pulse 1.4s ease-in-out infinite' }} />
-            PIPELINE
+            {!isMobile && 'PIPELINE'}
           </span>
         )}
 
-        <span style={styles.clock} className="mono" title="Local time — Cluj-Napoca">
-          {now.toLocaleTimeString('en-GB')}
-        </span>
+        {!isMobile && (
+          <span style={styles.clock} className="mono" title="Local time">
+            {now.toLocaleTimeString('en-GB')}
+          </span>
+        )}
 
         <span style={styles.health} title={`API ${health === 'ok' ? 'online' : health === 'down' ? 'offline' : 'checking…'}`}>
           <span style={{
@@ -235,7 +243,45 @@ export default function Navbar() {
         ) : (
           <NavLink to="/login" className="btn btn-accent btn-sm">Sign in</NavLink>
         )}
+
+        {/* Hamburger (phone) */}
+        {isMobile && isAuthed && (
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ width: 36, height: 36, padding: 0 }}
+            onClick={() => setNavOpen(v => !v)}
+            aria-label="Menu"
+          >
+            {navOpen ? <X size={17} /> : <Menu size={17} />}
+          </button>
+        )}
       </div>
+
+      {/* Mobile nav panel */}
+      {isMobile && navOpen && isAuthed && (
+        <div className="glass anim-fade-in" style={styles.mobilePanel}>
+          {visibleItems.map(({ to, label, icon: Icon, live }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              onClick={() => setNavOpen(false)}
+              className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+              style={{ padding: '13px 16px', fontSize: 13 }}
+            >
+              <Icon size={15} />
+              {label}
+              {live && (
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+                  animation: 'pulse 1.6s ease-in-out infinite',
+                }} />
+              )}
+            </NavLink>
+          ))}
+        </div>
+      )}
     </nav>
   )
 }
@@ -353,5 +399,17 @@ const styles = {
     fontSize: 12,
     cursor: 'pointer',
     textAlign: 'left',
+  },
+  mobilePanel: {
+    position: 'fixed',
+    top: 'calc(var(--nav-h) + 6px)',
+    left: 8,
+    right: 8,
+    zIndex: 1100,
+    display: 'flex',
+    flexDirection: 'column',
+    padding: 6,
+    maxHeight: 'calc(100vh - var(--nav-h) - 20px)',
+    overflowY: 'auto',
   },
 }

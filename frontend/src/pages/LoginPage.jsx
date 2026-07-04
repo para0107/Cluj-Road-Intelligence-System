@@ -154,7 +154,7 @@ const styles = {
     justifyContent: 'center',
     paddingTop: 'var(--nav-h)',
   },
-  card: { width: 380, padding: '30px 32px', margin: '40px 16px' },
+  card: { width: '100%', maxWidth: 380, padding: '30px 32px', margin: '40px 16px' },
   title: { fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' },
   label: { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-dim)' },
   input: { width: '100%' },

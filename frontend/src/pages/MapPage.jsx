@@ -21,7 +21,7 @@ import {
 import {
   CLASS_COLORS, CLASS_LABELS, CLASS_ICONS,
   SEVERITY_COLORS, SEVERITY_LABELS, SEVERITY_ACTIONS,
-  CLUJ_CENTER, CLUJ_ZOOM, CLUJ_LANDMARKS, BASEMAPS,
+  CITY_ZOOM, CLUJ_LANDMARKS, BASEMAPS,
 } from '../utils/constants'
 import { fmtCoord, fmtDate, fmtPct } from '../utils/format'
 import {
@@ -31,6 +31,8 @@ import {
 import { SevBadge, ClassChip, ClassDot, KvRow, Spinner, Toggle } from '../components/ui'
 import { useIsDark } from '../hooks/useTheme'
 import { useAuth } from '../context/AuthContext'
+import useCityCenter from '../hooks/useCityCenter'
+import useIsMobile from '../hooks/useIsMobile'
 
 // ─── Live-update polling interval (ms) — matches IngestionPage ────────────
 const LIVE_POLL_MS = 10_000
@@ -108,7 +110,8 @@ function MapClickHandler({ drawingMode, setStart, setEnd, finishDrawing }) {
 }
 
 // ── Printable report (opens a print window) ────────────────────────────────
-function generateReport(detections, stats) {
+function generateReport(detections, stats, city) {
+  const cityTitle = city ? `${city} Road Condition Report` : 'Road Condition Report'
   const byClass = {}
   const bySev = {}
   detections.forEach(d => {
@@ -121,7 +124,7 @@ function generateReport(detections, stats) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>RIDS — Cluj-Napoca Road Condition Report</title>
+<title>RIDS — ${cityTitle}</title>
 <style>
   body { font-family: 'Segoe UI', sans-serif; background: #f6f7f9; color: #10141c; margin:0; }
   .cover { background: #05070b; color: #eaff3d; padding: 56px 48px 36px; }
@@ -147,7 +150,7 @@ function generateReport(detections, stats) {
 </head>
 <body>
 <div class="cover">
-  <h1>Cluj-Napoca Road Condition Report</h1>
+  <h1>${cityTitle}</h1>
   <p>RIDS — Road Infrastructure Detection System · Babeș-Bolyai University · Generated ${new Date().toLocaleString()}</p>
   <div class="dash"></div>
 </div>
@@ -229,7 +232,8 @@ export default function MapPage() {
 
   // View
   const [selected, setSelected] = useState(null)
-  const [showLegend, setShowLegend] = useState(true)
+  // Phones start with the layer panel folded — the map is the point.
+  const [showLegend, setShowLegend] = useState(() => !window.matchMedia('(max-width: 768px)').matches)
   const [heatmapMode, setHeatmapMode] = useState(false)
   // Basemap follows the app theme (dark → Dark tiles, light → Streets tiles)
   // until the user picks one explicitly with the switcher.
@@ -239,16 +243,29 @@ export default function MapPage() {
   const [flyTarget, setFlyTarget] = useState(null)
   const [landmarksOpen, setLandmarksOpen] = useState(false)
 
-  // Landmarks: per-city from the backend (free OSM lookup, cached), with the
-  // built-in Cluj list as offline fallback.
-  const { user } = useAuth()
-  const [landmarks, setLandmarks] = useState(
-    CLUJ_LANDMARKS.map(lm => ({ name: lm.name, latitude: lm.lat, longitude: lm.lon })),
-  )
+  // Map opens on the operator's own city (geocoded once, cached — never a
+  // hardcoded default).
+  const isMobile = useIsMobile()
+  const { center, zoom, cityCenter } = useCityCenter()
+  const cityFlown = useRef(false)
   useEffect(() => {
-    const city = user?.city || 'Cluj-Napoca'
+    // Marked only after load, so the one-shot glide below has had its
+    // render; afterwards the camera belongs to the user / FitBounds.
+    if (cityCenter && !loading) cityFlown.current = true
+  }, [cityCenter, loading])
+
+  // Landmarks: per-city from the backend (free OSM lookup, cached). The
+  // built-in list is an offline fallback for the demo city only.
+  const { user } = useAuth()
+  const [landmarks, setLandmarks] = useState(() => (
+    (user?.city || '').toLowerCase().startsWith('cluj')
+      ? CLUJ_LANDMARKS.map(lm => ({ name: lm.name, latitude: lm.lat, longitude: lm.lon }))
+      : []
+  ))
+  useEffect(() => {
+    if (!user?.city) return undefined
     let alive = true
-    fetchCityLandmarks(city)
+    fetchCityLandmarks(user.city)
       .then(res => { if (alive && res.items?.length) setLandmarks(res.items) })
       .catch(() => { /* keep fallback list */ })
     return () => { alive = false }
@@ -434,8 +451,8 @@ export default function MapPage() {
 
       {/* ── Map ─────────────────────────────────────────────────────────── */}
       <MapContainer
-        center={CLUJ_CENTER}
-        zoom={CLUJ_ZOOM}
+        center={center}
+        zoom={zoom}
         maxZoom={20}
         minZoom={3}
         style={{ width: '100%', height: '100%', cursor: drawingMode ? 'crosshair' : 'grab' }}
@@ -444,6 +461,11 @@ export default function MapPage() {
         <TileLayer key={basemap} url={tiles.url} attribution={tiles.attr} maxZoom={20} maxNativeZoom={19} />
         <FitBounds detections={detections} />
         <FlyTo target={flyTarget} />
+        {/* First visit on this browser: glide to the user's city once it
+            geocodes — unless there is data to fit or an explicit fly. */}
+        {!loading && detections.length === 0 && cityCenter && !cityFlown.current && !flyTarget && (
+          <FlyTo target={{ lat: cityCenter[0], lon: cityCenter[1], zoom: CITY_ZOOM }} />
+        )}
         <MapClickHandler
           drawingMode={drawingMode}
           setStart={setRectStart}
@@ -566,7 +588,7 @@ export default function MapPage() {
         </button>
         <button
           className="btn btn-sm btn-accent"
-          onClick={() => generateReport(detections, stats)}
+          onClick={() => generateReport(detections, stats, user?.city)}
           disabled={detections.length === 0}
         >
           <FileText size={13} /> Report
@@ -575,7 +597,13 @@ export default function MapPage() {
 
       {/* ── Bottom stat strip ────────────────────────────────────────────── */}
       {displayStats && !selected && (
-        <div style={styles.statStrip} className="glass anim-fade-up">
+        <div
+          style={{
+            ...styles.statStrip,
+            ...(isMobile ? { maxWidth: 'calc(100vw - 16px)', overflowX: 'auto', gap: 12, padding: '8px 14px' } : null),
+          }}
+          className="glass anim-fade-up"
+        >
           <StatChip label={currentRect ? 'Zone total' : 'Total'} value={displayStats.total_detections} color="var(--accent)" />
           <div style={styles.stripDivider} />
           <StatChip label="Critical" value={displayStats.critical_count} color="var(--red)" />
@@ -595,7 +623,13 @@ export default function MapPage() {
       )}
 
       {/* ── Filter panel (bottom-left) ──────────────────────────────────── */}
-      <div style={styles.filterPanel} className="glass">
+      <div
+        style={{
+          ...styles.filterPanel,
+          ...(isMobile ? { left: 8, right: 8, maxWidth: 'none', bottom: 72 } : null),
+        }}
+        className="glass"
+      >
         <div style={styles.filterHeader}>
           <span className="overline">Layers</span>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -683,7 +717,13 @@ export default function MapPage() {
 
       {/* ── Detail drawer (right) ────────────────────────────────────────── */}
       {selected && (
-        <div style={styles.drawer} className="glass anim-slide-right">
+        <div
+          style={{
+            ...styles.drawer,
+            ...(isMobile ? { left: 8, right: 8, width: 'auto', top: 'auto', bottom: 8, maxHeight: '62vh' } : null),
+          }}
+          className="glass anim-slide-right"
+        >
           <div style={styles.drawerHeader}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <ClassDot cls={selected.damage_type} size={34} />

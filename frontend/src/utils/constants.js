@@ -68,11 +68,15 @@ export const SEVERITY_ACTIONS = {
 export const SEVERITY_SHORT = { 1: 'S1', 2: 'S2', 3: 'S3', 4: 'S4', 5: 'S5' }
 
 // ── Map defaults ──────────────────────────────────────────────────────────
-// Cluj-Napoca city centre (Piața Unirii)
-export const CLUJ_CENTER = [46.7712, 23.6236]
-export const CLUJ_ZOOM   = 13
+// Maps open on the signed-in user's city (see hooks/useCityCenter.js).
+// These are the LAST-RESORT fallbacks for the instant before the city
+// resolves (or if a legacy account has no city): a country-level view, so
+// nothing city-specific is ever hardcoded into the map.
+export const DEFAULT_CENTER = [45.9432, 24.9668]   // country centroid fallback
+export const DEFAULT_ZOOM   = 7
+export const CITY_ZOOM      = 13                   // zoom used once a city resolves
 
-// Landmarks used for map fly-to shortcuts and demo context
+// Landmarks used as an offline fallback for the demo city's fly-to menu
 export const CLUJ_LANDMARKS = [
   { name: 'Piața Unirii',        lat: 46.7694, lon: 23.5899 },
   { name: 'Gara CFR',            lat: 46.7847, lon: 23.5867 },
