@@ -38,13 +38,15 @@ services:
       PROJECT_DATA_DIR: /app/data
 
       # ── Auth ────────────────────────────────────────────────────────────
-      # Signing key for JWTs. Override in .env for anything beyond local dev.
-      JWT_SECRET: ${JWT_SECRET:-rids-dev-secret-change-me}
-      # Seed admin (created at startup if missing). Defaults live in main.py;
-      # set these in .env to override without touching code.
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-tudypara}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-tudorparaschiv04@yahoo.ro}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-costincnva2016}
+      # SECURITY: no credential defaults live in this file or in code.
+      # Set JWT_SECRET and the ADMIN_* trio in .env (git-ignored).
+      # - JWT_SECRET unset  → backend generates a random per-process secret
+      #   (works, but sessions reset on every restart).
+      # - ADMIN_* not all set → no admin is seeded (warning logged).
+      JWT_SECRET: ${JWT_SECRET:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Optional free Google OAuth client id (console.cloud.google.com);
       # leave empty to hide the Google button in the UI.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

@@ -8,6 +8,15 @@ roles, every backend endpoint, every UI page, the database, the scalability mode
 configuration surface. It complements `README.md` (setup detail) and `docs/LIVE_MODE.md`
 (live-mode design deep-dive).
 
+> **Update (July 2026):** the auth flow was hardened after this document was
+> first written — accounts now require **e-mail verification** before creation,
+> municipality accounts additionally require **admin approval**, citizens see
+> only the Command/Live/System pages (survey/analytics pages and endpoints are
+> operator-only), login is rate limited, users can delete their own accounts,
+> and admins can enable/disable/delete accounts. The authoritative, current
+> description of auth, roles, and endpoint protection lives in `README.md`
+> (Accounts, roles & notifications + REST API) and `docs/SECURITY.md`.
+
 ---
 
 ## 1. What RIDS is

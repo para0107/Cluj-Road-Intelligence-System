@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
+from backend.auth import require_operator
 from backend.models import Detection
 from backend.schemas import PriorityListResponse, PriorityItem
 
@@ -24,6 +25,7 @@ router = APIRouter()
 def get_priority_list(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    _op=Depends(require_operator),
 ):
     rows = (
         db.query(Detection)

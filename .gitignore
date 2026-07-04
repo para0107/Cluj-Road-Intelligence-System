@@ -1,8 +1,10 @@
 .venv
-.idea
+.idea/
 Documentation
+# Secrets — never commit environment files of any flavour
 .env
-.env
+.env.*
+*.env
 data
 rtdetr-l.pt
 ml/weights

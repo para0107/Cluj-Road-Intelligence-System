@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
+from backend.auth import require_operator
 from backend.models import Detection
 from backend.schemas import HeatmapResponse, HeatmapPoint
 
@@ -20,7 +21,7 @@ router = APIRouter()
 
 
 @router.get("/heatmap", response_model=HeatmapResponse)
-def get_heatmap(db: Session = Depends(get_db)):
+def get_heatmap(db: Session = Depends(get_db), _op=Depends(require_operator)):
     detections = (
         db.query(
             Detection.latitude,

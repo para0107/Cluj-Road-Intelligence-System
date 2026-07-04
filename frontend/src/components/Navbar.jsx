@@ -10,8 +10,9 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
   Info, Sun, Moon, Activity, Radio, LogOut, Shield, MapPin, ChevronDown,
+  Trash2,
 } from 'lucide-react'
-import { fetchHealth } from '../utils/api'
+import { fetchHealth, deleteMyAccount } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 
 const ROLE_COLORS = {
@@ -20,14 +21,16 @@ const ROLE_COLORS = {
   user: 'var(--green)',
 }
 
+// Pages flagged `operator` are visible to municipality/admin only; citizens
+// get Command, Live, and System (the backend enforces the same split).
 const NAV_ITEMS = [
   { to: '/',         label: 'Command',  icon: LayoutDashboard },
   { to: '/live',     label: 'Live',     icon: Radio, live: true },
-  { to: '/map',      label: 'Map',      icon: Map },
-  { to: '/explorer', label: 'Explorer', icon: Table },
-  { to: '/stats',    label: 'Stats',    icon: BarChart2 },
-  { to: '/priority', label: 'Repairs',  icon: ListOrdered },
-  { to: '/ingest',   label: 'Upload',   icon: Upload },
+  { to: '/map',      label: 'Map',      icon: Map,        operator: true },
+  { to: '/explorer', label: 'Explorer', icon: Table,      operator: true },
+  { to: '/stats',    label: 'Stats',    icon: BarChart2,  operator: true },
+  { to: '/priority', label: 'Repairs',  icon: ListOrdered, operator: true },
+  { to: '/ingest',   label: 'Upload',   icon: Upload,     operator: true },
   { to: '/about',    label: 'System',   icon: Info },
 ]
 
@@ -43,7 +46,7 @@ function LogoMark() {
 }
 
 export default function Navbar() {
-  const { user, isAuthed, isAdmin, logout, shareLocation } = useAuth()
+  const { user, isAuthed, isAdmin, isOperator, logout, shareLocation } = useAuth()
   const navigate = useNavigate()
   const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
   const [now, setNow] = useState(new Date())
@@ -88,6 +91,28 @@ export default function Navbar() {
 
   const healthColor = health === 'ok' ? 'var(--green)' : health === 'down' ? 'var(--red)' : 'var(--text-muted)'
 
+  // Self-service account deletion (any role). Local accounts re-type their
+  // password; Google accounts just confirm. The backend refuses to delete
+  // the last active admin.
+  const deleteAccount = async () => {
+    setMenuOpen(false)
+    let password = null
+    if (user.auth_provider === 'local') {
+      password = window.prompt(
+        'Deleting your account is permanent. Type your password to confirm:')
+      if (!password) return
+    } else if (!window.confirm('Delete your account permanently? This cannot be undone.')) {
+      return
+    }
+    try {
+      await deleteMyAccount(password)
+      logout()
+      navigate('/login')
+    } catch (e) {
+      alert(e?.response?.data?.detail || e.message || 'Account deletion failed')
+    }
+  }
+
   return (
     <nav style={styles.nav}>
       {/* Brand */}
@@ -99,9 +124,10 @@ export default function Navbar() {
         </div>
       </NavLink>
 
-      {/* Links (only when signed in) */}
+      {/* Links (only when signed in; operator pages hidden from citizens) */}
       <div style={styles.links}>
-        {isAuthed && NAV_ITEMS.map(({ to, label, icon: Icon, live }) => (
+        {isAuthed && NAV_ITEMS.filter(item => !item.operator || isOperator)
+          .map(({ to, label, icon: Icon, live }) => (
           <NavLink
             key={to}
             to={to}
@@ -198,6 +224,10 @@ export default function Navbar() {
                 <button className="table-row-hover" style={{ ...styles.menuItem, borderTop: '1px solid var(--border)' }}
                   onClick={() => { logout(); setMenuOpen(false); navigate('/login') }}>
                   <LogOut size={12} style={{ color: 'var(--text-muted)' }} /> Sign out
+                </button>
+                <button className="table-row-hover" style={{ ...styles.menuItem, color: 'var(--red)' }}
+                  onClick={deleteAccount}>
+                  <Trash2 size={12} /> Delete my account
                 </button>
               </div>
             )}

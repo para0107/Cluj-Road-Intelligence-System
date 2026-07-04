@@ -68,6 +68,45 @@ class User(Base):
         return f"<User {self.username} role={self.role} city={self.city}>"
 
 
+class PendingRegistration(Base):
+    """
+    A registration that is not an account yet.
+
+    Accounts are only created after (a) the e-mail is confirmed with the code
+    we sent, and (b) — for municipality registrations — at least one admin
+    approves it. Until then everything lives here, so the `users` table only
+    ever contains real, verified accounts.
+
+    status: awaiting_email → (user: account created)
+                           → (municipality: awaiting_approval → account created / row deleted)
+
+    When SMTP is not configured (dev), the e-mail step is skipped:
+    user registrations become accounts immediately and municipality
+    registrations jump straight to awaiting_approval.
+    """
+
+    __tablename__ = "pending_registrations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    username = Column(String(40), nullable=False, unique=True)
+    email = Column(String(120), nullable=False, unique=True)
+    full_name = Column(String(120))
+    password_hash = Column(String(300), nullable=False)
+    role = Column(String(16), nullable=False, default=ROLE_USER)   # user | municipality
+    city = Column(String(80))
+
+    email_code = Column(String(12))                  # 6-digit confirmation code
+    code_expires_at = Column(DateTime(timezone=True))
+    email_verified = Column(Boolean, nullable=False, default=False)
+    status = Column(String(20), nullable=False, default="awaiting_email")
+    # awaiting_email | awaiting_approval
+
+    def __repr__(self) -> str:
+        return f"<PendingRegistration {self.username} role={self.role} status={self.status}>"
+
+
 class CityLandmark(Base):
     __tablename__ = "city_landmarks"
 

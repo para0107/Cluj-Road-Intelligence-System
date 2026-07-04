@@ -15,12 +15,13 @@ from sqlalchemy.orm import Session
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from backend.database import get_db
+from backend.auth import require_operator
 from backend.models import Detection
 
 router = APIRouter()
 
 @router.get("/export/csv")
-def export_csv(db: Session = Depends(get_db)):
+def export_csv(db: Session = Depends(get_db), _op=Depends(require_operator)):
     """
     Export all detections as a CSV file.
     """

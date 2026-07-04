@@ -6,14 +6,14 @@
  * deliberately absent: it requires the paid Apple Developer Program.
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { LogIn, AlertTriangle } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { fetchAuthConfig } from '../utils/api'
 
 export default function LoginPage() {
-  const { login, isAuthed } = useAuth()
+  const { login, loginWithGoogle, isAuthed } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const from = location.state?.from || '/'
@@ -22,15 +22,51 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [googleEnabled, setGoogleEnabled] = useState(false)
+  const [googleClientId, setGoogleClientId] = useState('')
+  const googleBtnRef = useRef(null)
 
   useEffect(() => {
     if (isAuthed) navigate(from, { replace: true })
   }, [isAuthed, navigate, from])
 
   useEffect(() => {
-    fetchAuthConfig().then(c => setGoogleEnabled(Boolean(c.google_enabled))).catch(() => {})
+    fetchAuthConfig()
+      .then(c => setGoogleClientId(c.google_enabled ? (c.google_client_id || '') : ''))
+      .catch(() => {})
   }, [])
+
+  // ── Real "Sign in with Google" button (Google Identity Services, free) ───
+  const onGoogleCredential = useCallback(async (resp) => {
+    setError(null)
+    try {
+      await loginWithGoogle(resp.credential)
+      navigate(from, { replace: true })
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message || 'Google sign-in failed')
+    }
+  }, [loginWithGoogle, navigate, from])
+
+  useEffect(() => {
+    if (!googleClientId || !googleBtnRef.current) return
+    const render = () => {
+      if (!window.google?.accounts?.id || !googleBtnRef.current) return
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: onGoogleCredential,
+      })
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: 'outline', size: 'large', width: 316, text: 'signin_with',
+      })
+    }
+    if (window.google?.accounts?.id) { render(); return }
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+    script.onload = render
+    document.head.appendChild(script)
+    // The GIS script is a harmless singleton — no cleanup needed.
+  }, [googleClientId, onGoogleCredential])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -84,11 +120,15 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {googleEnabled && (
-          <div style={{ marginTop: 14, fontSize: 11.5, color: 'var(--text-muted)', textAlign: 'center' }}>
-            Google sign-in is enabled on this server — use the button on the hosted page,
-            or POST your Google ID token to <span className="mono">/api/auth/oauth/google</span>.
-          </div>
+        {googleClientId && (
+          <>
+            <div style={styles.divider}>
+              <span style={styles.dividerLine} />
+              <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>or</span>
+              <span style={styles.dividerLine} />
+            </div>
+            <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center' }} />
+          </>
         )}
 
         <div style={styles.footer}>
@@ -124,6 +164,11 @@ const styles = {
     background: 'rgba(255,93,93,0.1)', border: '1px solid rgba(255,93,93,0.35)',
     color: 'var(--red)', fontSize: 12,
   },
+  divider: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    margin: '16px 0 12px',
+  },
+  dividerLine: { flex: 1, height: 1, background: 'var(--border)' },
   footer: { marginTop: 18, fontSize: 12.5, textAlign: 'center' },
   fineprint: {
     marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border)',

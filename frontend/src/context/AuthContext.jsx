@@ -9,7 +9,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { authLogin, authRegister, fetchMe, updateMyLocation, TOKEN_KEY, USER_KEY } from '../utils/api'
+import { authLogin, authRegister, authGoogle, fetchMe, updateMyLocation, TOKEN_KEY, USER_KEY } from '../utils/api'
 
 const AuthContext = createContext(null)
 
@@ -77,8 +77,29 @@ export function AuthProvider({ children }) {
     return data.user
   }, [persist, shareLocation])
 
+  // Registration may return an account+token (status "ok"), or an interim
+  // status ("verify_email" / "awaiting_approval") with no session yet —
+  // only persist when a token actually came back.
   const register = useCallback(async (payload) => {
     const data = await authRegister(payload)
+    if (data.access_token && data.user) {
+      persist(data.access_token, data.user)
+      shareLocation()
+    }
+    return data
+  }, [persist, shareLocation])
+
+  /** Persist a session from any auth outcome that carries a token. */
+  const adoptSession = useCallback((data) => {
+    if (data?.access_token && data?.user) {
+      persist(data.access_token, data.user)
+      shareLocation()
+    }
+    return data?.user || null
+  }, [persist, shareLocation])
+
+  const loginWithGoogle = useCallback(async (idToken) => {
+    const data = await authGoogle(idToken)
     persist(data.access_token, data.user)
     shareLocation()
     return data.user
@@ -91,7 +112,9 @@ export function AuthProvider({ children }) {
     isAdmin: user?.role === 'admin',
     isOperator: user?.role === 'admin' || user?.role === 'municipality',
     login,
+    loginWithGoogle,
     register,
+    adoptSession,
     logout,
     shareLocation,
     setUser: (u) => { localStorage.setItem(USER_KEY, JSON.stringify(u)); setUser(u) },

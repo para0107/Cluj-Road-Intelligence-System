@@ -92,6 +92,7 @@ class TokenResponse(BaseModel):
 class AuthConfigResponse(BaseModel):
     """Tells the frontend which optional providers are configured."""
     google_enabled: bool
+    google_client_id: str = ""        # needed by Google Identity Services in the browser
     apple_enabled: bool = False       # intentionally off: paid Apple program
     apple_disabled_reason: str = (
         "Sign in with Apple requires a paid Apple Developer membership "
@@ -102,6 +103,63 @@ class AuthConfigResponse(BaseModel):
 class UserListResponse(BaseModel):
     total: int
     items: List[UserRead]
+
+
+# ─────────────────────────────────────────────
+# E-mail verification & municipality approval
+# ─────────────────────────────────────────────
+
+class RegisterOutcome(BaseModel):
+    """
+    What happened after POST /auth/register or /auth/verify-email:
+      ok                — account created; token attached (sign the user in)
+      verify_email      — confirmation code sent; call /auth/verify-email
+      awaiting_approval — e-mail confirmed; an admin must approve the
+                          municipality account before it exists
+    """
+    status: str                                   # ok | verify_email | awaiting_approval
+    message: str
+    email: Optional[str] = None
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+    user: Optional[UserRead] = None
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=4, max_length=12)
+
+
+class ResendCodeRequest(BaseModel):
+    email: EmailStr
+
+
+class SelfDeleteRequest(BaseModel):
+    """Local accounts must re-type their password; OAuth accounts send none."""
+    password: Optional[str] = Field(None, max_length=128)
+
+
+class ActiveUpdate(BaseModel):
+    is_active: bool
+
+
+class PendingRegistrationRead(BaseModel):
+    id: UUID
+    username: str
+    email: str
+    full_name: Optional[str]
+    role: str
+    city: Optional[str]
+    email_verified: bool
+    status: str
+    created_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PendingListResponse(BaseModel):
+    total: int
+    items: List[PendingRegistrationRead]
 
 
 # ─────────────────────────────────────────────

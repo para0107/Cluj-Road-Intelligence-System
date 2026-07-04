@@ -94,6 +94,90 @@ def send_email_async(to_addr: str, subject: str, body: str) -> bool:
     return True
 
 
+def send_verification_email(to_addr: str, username: str, code: str) -> bool:
+    """E-mail confirmation code — the account is only created after this."""
+    body = (
+        f"Hi {username},\n"
+        "\n"
+        "Use this code to confirm your e-mail address and finish creating your\n"
+        "RIDS account:\n"
+        "\n"
+        f"        {code}\n"
+        "\n"
+        "The code expires in 30 minutes. If you did not request an account,\n"
+        "simply ignore this message — nothing was created.\n"
+        "\n"
+        "— RIDS · Babeș-Bolyai University\n"
+    )
+    return send_email_async(to_addr, f"RIDS e-mail verification code: {code}", body)
+
+
+def send_admin_approval_request(admin_addrs: list[str], username: str,
+                                email: str, city: str | None) -> None:
+    """Tell every admin a municipality registration awaits their approval."""
+    body = (
+        "A municipality account registration is awaiting approval:\n"
+        "\n"
+        f"    Username : {username}\n"
+        f"    E-mail   : {email}\n"
+        f"    City     : {city or '—'}\n"
+        "\n"
+        "Review it on the Admin page (Manage accounts → Pending approvals).\n"
+        "The account is NOT active until an admin approves it.\n"
+        "\n"
+        "— RIDS · Babeș-Bolyai University\n"
+    )
+    for addr in admin_addrs:
+        send_email_async(addr, f"RIDS: municipality approval needed — {username}", body)
+
+
+def send_approval_result_email(to_addr: str, username: str, approved: bool) -> bool:
+    """Tell the applicant their municipality registration was decided."""
+    if approved:
+        body = (
+            f"Hi {username},\n"
+            "\n"
+            "Good news — an administrator approved your municipality account.\n"
+            "You can now sign in and manage your city's repairs on the RIDS\n"
+            "platform.\n"
+            "\n"
+            "— RIDS · Babeș-Bolyai University\n"
+        )
+        subject = "RIDS: your municipality account was approved"
+    else:
+        body = (
+            f"Hi {username},\n"
+            "\n"
+            "An administrator reviewed and declined your municipality account\n"
+            "registration. If you believe this is a mistake, contact the\n"
+            "platform administrator.\n"
+            "\n"
+            "— RIDS · Babeș-Bolyai University\n"
+        )
+        subject = "RIDS: your municipality registration was declined"
+    return send_email_async(to_addr, subject, body)
+
+
+def send_thankyou_email(to_addr: str, username: str, damage_type: str) -> bool:
+    """Thank a user for reporting road damage (throttled by the caller)."""
+    pretty = damage_type.replace("_", " ")
+    body = (
+        f"Hi {username},\n"
+        "\n"
+        f"Thank you for reporting a {pretty} on the RIDS live map!\n"
+        "\n"
+        "Your report is now visible to every driver in the network and to the\n"
+        "city's repair team. As other devices pass the same spot it will be\n"
+        "cross-validated (UNVERIFIED → CONFIRMED → VERIFIED) and prioritised\n"
+        "for repair.\n"
+        "\n"
+        "Every report makes the roads a little safer — keep them coming.\n"
+        "\n"
+        "— RIDS · Babeș-Bolyai University\n"
+    )
+    return send_email_async(to_addr, "Thank you for your road-damage report", body)
+
+
 def send_welcome_email(to_addr: str, username: str, role: str, city: str | None = None) -> bool:
     """Notification for a freshly registered (local, e-mail based) account."""
     role_line = (

@@ -32,7 +32,7 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -52,8 +52,13 @@ from backend.schemas_live import (
     DeviceListResponse, DeviceClaimResponse,
 )
 from backend.live_manager import manager
+from backend.notify import send_thankyou_email
 
 router = APIRouter()
+
+# Thank-you e-mail throttle: at most one per user per day (in-memory — resets
+# on restart, which only means an extra thank-you, never a lost report).
+_thanked_on: dict = {}
 
 # ── Tunables (env-overridable, sane demo defaults) ─────────────────────────
 _CLUSTER_RADIUS_M = float(os.getenv("LIVE_CLUSTER_RADIUS_M", "25"))
@@ -181,7 +186,7 @@ def _touch_device(db: Session, device_id: str, counted: bool = False) -> None:
 def create_report(
     payload: LiveReportCreate,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     _sweep_expired(db)
     _touch_device(db, payload.device_id, counted=True)
@@ -243,6 +248,13 @@ def create_report(
     db.refresh(event)
 
     _broadcast("event_upsert", event)
+
+    # Thank the reporter by e-mail (free SMTP; no-op when unconfigured),
+    # at most once per day so a driving session doesn't flood their inbox.
+    if user.email and _thanked_on.get(user.id) != date.today():
+        _thanked_on[user.id] = date.today()
+        send_thankyou_email(user.email, user.username, payload.damage_type)
+
     return LiveActionResponse(action="created" if created else "merged", event=_read(event))
 
 

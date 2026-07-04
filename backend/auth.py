@@ -30,10 +30,25 @@ from backend.database import get_db
 from backend.models_auth import User, ROLE_ADMIN, ROLE_MUNICIPALITY
 
 # ── Config ──────────────────────────────────────────────────────────────────
-JWT_SECRET = os.getenv("JWT_SECRET", "rids-dev-secret-change-me")
+# SECURITY: there is deliberately NO hardcoded fallback secret. If JWT_SECRET
+# is unset (or left at the old known dev value), a random per-process secret
+# is generated: the app still works, but every restart invalidates all
+# sessions — a loud, safe nudge to set a real JWT_SECRET in .env.
+_BURNT_SECRETS = {"", "rids-dev-secret-change-me"}
+JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
+if JWT_SECRET in _BURNT_SECRETS:
+    JWT_SECRET = secrets.token_hex(32)
+    from loguru import logger as _logger
+    _logger.warning(
+        "JWT_SECRET is not set (or is the known default). Generated a random "
+        "per-process secret — sessions will NOT survive a restart. "
+        "Set a strong JWT_SECRET in .env for persistent sessions."
+    )
 JWT_ALGO = "HS256"
 JWT_TTL_H = float(os.getenv("JWT_TTL_H", "168"))          # 7 days
-_PBKDF2_ITERATIONS = 200_000
+# OWASP-recommended cost for PBKDF2-HMAC-SHA256 (2023+ guidance). Old hashes
+# created at 200k keep verifying — the iteration count is stored per hash.
+_PBKDF2_ITERATIONS = 600_000
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")       # optional, free
 

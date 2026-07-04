@@ -101,18 +101,30 @@ async def startup_event():
 
 def _seed_admin() -> None:
     """
-    Guarantee a starting admin account exists (env-overridable):
-        ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD
-    Runs on every startup; no-ops if the username or e-mail already exists.
+    Seed a starting admin account from env: ADMIN_USERNAME / ADMIN_EMAIL /
+    ADMIN_PASSWORD. Runs on every startup; no-ops if the username or e-mail
+    already exists.
+
+    SECURITY: there are deliberately NO in-repo default credentials. If the
+    three env vars are not all set, no admin is seeded and a warning is
+    logged — an admin can then only be created by promoting a user from an
+    existing admin account or by setting the env vars and restarting.
     """
     from backend.database import SessionLocal
     from backend.models_auth import User, ROLE_ADMIN
     from backend.auth import hash_password
     from sqlalchemy import or_, func as sqlfunc
 
-    username = os.getenv("ADMIN_USERNAME", "tudypara")
-    email = os.getenv("ADMIN_EMAIL", "tudorparaschiv04@yahoo.ro").lower()
-    password = os.getenv("ADMIN_PASSWORD", "costincnva2016")
+    username = os.getenv("ADMIN_USERNAME", "").strip()
+    email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("ADMIN_PASSWORD", "")
+
+    if not (username and email and password):
+        logger.warning(
+            "ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD are not all set — "
+            "skipping admin seeding. Set them in .env to create the first admin."
+        )
+        return
 
     db = SessionLocal()
     try:
@@ -162,6 +174,20 @@ def root():
 
 @app.get("/health", tags=["Health"])
 def health():
+    db_ok = check_connection()
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": "connected" if db_ok else "unreachable",
+    }
+
+
+@app.get("/api/health", tags=["Health"])
+def api_health():
+    """
+    Same probe, but under /api so it is reachable through the Nginx proxy
+    (which only forwards /api/*). Public on purpose: the navbar health dot
+    must work on the login page, before any session exists.
+    """
     db_ok = check_connection()
     return {
         "status": "ok" if db_ok else "degraded",

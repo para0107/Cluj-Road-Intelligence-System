@@ -49,6 +49,30 @@ export const authLogin = (identifier, password) =>
 export const authRegister = (payload) =>
   api.post('/auth/register', payload).then(r => r.data)
 
+export const authVerifyEmail = (email, code) =>
+  api.post('/auth/verify-email', { email, code }).then(r => r.data)
+
+export const authResendCode = (email) =>
+  api.post('/auth/resend-code', { email }).then(r => r.data)
+
+export const deleteMyAccount = (password = null) =>
+  api.delete('/auth/me', { data: { password } }).then(r => r.data)
+
+export const adminDeleteUser = (userId) =>
+  api.delete(`/auth/users/${userId}`).then(r => r.data)
+
+export const adminSetActive = (userId, isActive) =>
+  api.patch(`/auth/users/${userId}/active`, { is_active: isActive }).then(r => r.data)
+
+export const fetchPendingRegistrations = () =>
+  api.get('/auth/registrations/pending').then(r => r.data)
+
+export const approveRegistration = (id) =>
+  api.post(`/auth/registrations/${id}/approve`).then(r => r.data)
+
+export const denyRegistration = (id) =>
+  api.post(`/auth/registrations/${id}/deny`).then(r => r.data)
+
 export const authGoogle = (idToken) =>
   api.post('/auth/oauth/google', { id_token: idToken }).then(r => r.data)
 
@@ -124,12 +148,12 @@ export const downloadCsv = () => {
 
 /**
  * Backend + DB health probe.
- * The bare `/health` route is NOT proxied by nginx (only `/api/` is), so we
- * probe a cheap real API route: 200 → API + DB reachable.
+ * Uses the public /api/health route (proxied by nginx) so the navbar dot
+ * works on the login page too, before any session exists.
  */
 export const fetchHealth = () =>
-  api.get('/stats', { timeout: 5000 })
-    .then(() => ({ status: 'ok', database: 'connected' }))
+  api.get('/health', { timeout: 5000 })
+    .then(r => ({ status: r.data?.status === 'ok' ? 'ok' : 'down', database: r.data?.database }))
     .catch((e) => ({
       status: 'down',
       database: e?.response ? 'unreachable' : 'api offline',

@@ -10,21 +10,34 @@
 
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { UserPlus, AlertTriangle, User as UserIcon, Landmark } from 'lucide-react'
+import {
+  UserPlus, AlertTriangle, User as UserIcon, Landmark,
+  MailCheck, ShieldCheck, RefreshCw,
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import { authVerifyEmail, authResendCode } from '../utils/api'
 
 export default function RegisterPage() {
-  const { register } = useAuth()
+  const { register, adoptSession } = useAuth()
   const navigate = useNavigate()
 
   const [form, setForm] = useState({
     full_name: '', username: '', email: '', password: '',
     role: 'user', city: '',
   })
+  // stage: form → verify (e-mail code) → pending (municipality approval)
+  const [stage, setStage] = useState('form')
+  const [code, setCode] = useState('')
+  const [info, setInfo] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
+
+  const fail = (err, fallback) => {
+    const detail = err?.response?.data?.detail
+    setError(typeof detail === 'string' ? detail : (detail?.[0]?.msg || err.message || fallback))
+  }
 
   const submit = async (e) => {
     e.preventDefault()
@@ -35,18 +48,124 @@ export default function RegisterPage() {
     setBusy(true)
     setError(null)
     try {
-      await register({
+      const outcome = await register({
         ...form,
         full_name: form.full_name.trim() || null,
         city: form.city.trim() || null,
       })
-      navigate('/', { replace: true })
+      if (outcome.status === 'verify_email') {
+        setInfo(outcome.message)
+        setStage('verify')
+      } else if (outcome.status === 'awaiting_approval') {
+        setInfo(outcome.message)
+        setStage('pending')
+      } else {
+        navigate('/', { replace: true })
+      }
     } catch (err) {
-      const detail = err?.response?.data?.detail
-      setError(typeof detail === 'string' ? detail : (detail?.[0]?.msg || err.message || 'Registration failed'))
+      fail(err, 'Registration failed')
     } finally {
       setBusy(false)
     }
+  }
+
+  const submitCode = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      const outcome = await authVerifyEmail(form.email.trim(), code.trim())
+      if (outcome.status === 'awaiting_approval') {
+        setInfo(outcome.message)
+        setStage('pending')
+      } else {
+        adoptSession(outcome)
+        navigate('/', { replace: true })
+      }
+    } catch (err) {
+      fail(err, 'Verification failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const resend = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const outcome = await authResendCode(form.email.trim())
+      setInfo(outcome.message)
+    } catch (err) {
+      fail(err, 'Could not resend the code')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ── Stage: e-mail code entry ──────────────────────────────────────────────
+  if (stage === 'verify') {
+    return (
+      <div style={styles.page} className="page-grid-bg">
+        <div className="card anim-fade-up" style={styles.card}>
+          <div className="overline" style={{ color: 'var(--accent)', marginBottom: 8 }}>
+            ONE MORE STEP
+          </div>
+          <h1 className="display" style={styles.title}>Confirm your e-mail</h1>
+          <div className="road-divider" style={{ width: 120, margin: '14px 0 22px' }} />
+
+          {error && (
+            <div style={styles.error}><AlertTriangle size={13} style={{ flexShrink: 0 }} />{error}</div>
+          )}
+          <div style={styles.notice}>
+            <MailCheck size={13} style={{ flexShrink: 0, color: 'var(--accent)' }} />
+            {info || `We sent a 6-digit code to ${form.email}.`}
+          </div>
+
+          <form onSubmit={submitCode} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <label style={styles.label}>
+              Confirmation code
+              <input className="input mono" autoFocus required
+                     value={code} onChange={e => setCode(e.target.value)}
+                     inputMode="numeric" minLength={4} maxLength={12}
+                     placeholder="123456"
+                     style={{ letterSpacing: '0.35em', fontSize: 18, textAlign: 'center' }} />
+            </label>
+            <button className="btn btn-accent" style={{ padding: '11px 0' }} disabled={busy || !code.trim()}>
+              <ShieldCheck size={15} /> {busy ? 'Checking…' : 'Confirm e-mail'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={resend} disabled={busy}>
+              <RefreshCw size={12} /> Re-send the code
+            </button>
+          </form>
+
+          <div style={styles.footer}>
+            <span style={{ color: 'var(--text-muted)' }}>Wrong e-mail?</span>{' '}
+            <button className="link-btn" style={styles.linkBtn} onClick={() => { setStage('form'); setError(null); setInfo(null) }}>
+              Start over
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Stage: municipality awaiting admin approval ───────────────────────────
+  if (stage === 'pending') {
+    return (
+      <div style={styles.page} className="page-grid-bg">
+        <div className="card anim-fade-up" style={{ ...styles.card, textAlign: 'center' }}>
+          <ShieldCheck size={34} style={{ color: 'var(--green)', marginBottom: 12 }} />
+          <h1 className="display" style={styles.title}>Awaiting approval</h1>
+          <div className="road-divider" style={{ width: 120, margin: '14px auto 18px' }} />
+          <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.7 }}>
+            {info || 'A platform administrator must approve municipality accounts. You will receive an e-mail once yours is reviewed.'}
+          </p>
+          <Link to="/login" className="btn btn-accent" style={{ marginTop: 18, padding: '10px 22px' }}>
+            Back to sign in
+          </Link>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -62,6 +181,14 @@ export default function RegisterPage() {
           <div style={styles.error}>
             <AlertTriangle size={13} style={{ flexShrink: 0 }} />
             {error}
+          </div>
+        )}
+
+        {form.role === 'municipality' && (
+          <div style={styles.notice}>
+            <Landmark size={13} style={{ flexShrink: 0, color: 'var(--cyan)' }} />
+            Municipality accounts confirm their e-mail AND are reviewed by a
+            platform admin before activation.
           </div>
         )}
 
@@ -157,6 +284,16 @@ const styles = {
     padding: '9px 12px', marginBottom: 14, borderRadius: 8,
     background: 'rgba(255,93,93,0.1)', border: '1px solid rgba(255,93,93,0.35)',
     color: 'var(--red)', fontSize: 12,
+  },
+  notice: {
+    display: 'flex', alignItems: 'flex-start', gap: 8,
+    padding: '9px 12px', marginBottom: 14, borderRadius: 8,
+    background: 'var(--accent-dim)', border: '1px solid var(--border-accent)',
+    color: 'var(--text-dim)', fontSize: 12, lineHeight: 1.55,
+  },
+  linkBtn: {
+    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+    color: 'var(--accent)', fontWeight: 600, fontSize: 12.5,
   },
   footer: { marginTop: 18, fontSize: 12.5, textAlign: 'center' },
 }

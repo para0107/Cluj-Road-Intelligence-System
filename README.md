@@ -375,28 +375,47 @@ damage uploads automatically:
 ## Accounts, roles & notifications
 
 - **Auth:** JWT (PyJWT HS256, `JWT_SECRET`, TTL `JWT_TTL_H`, default 7 days). Passwords:
-  stdlib **PBKDF2-HMAC-SHA256**, 200 000 iterations, per-user salt — no bcrypt/passlib
+  stdlib **PBKDF2-HMAC-SHA256**, 600 000 iterations, per-user salt — no bcrypt/passlib
   dependency. `backend/auth.py` provides the `get_current_user` / `require_operator` /
-  `require_admin` dependencies.
-- **Roles:**
-  | Role | Powers |
-  |------|--------|
-  | `user` (Citizen) | View everything, upload surveys, report/confirm/dispute live hazards, connect devices |
-  | `municipality` | Everything a user can do **plus** operator actions scoped to their city: resolve live hazards, mark detections repaired, delete detections |
-  | `admin` | Full control incl. user/role management (Admin page) |
-- **Registration** (`/register`): the user picks **Citizen or Municipality** via role
-  cards; municipality accounts must name their city. Login accepts username **or** e-mail.
-  A **seed admin** is created at startup from `ADMIN_USERNAME/EMAIL/PASSWORD` env
-  (`main.py::_seed_admin`).
-- **Welcome e-mail (free, optional):** on e-mail registration the backend sends a
-  notification via **stdlib smtplib** (`backend/notify.py`) — works with any free SMTP
-  relay (Gmail app password recommended). Configure `SMTP_HOST/PORT/USERNAME/PASSWORD/
-  FROM/STARTTLS`; when unset the feature silently no-ops. Sends run in a daemon thread and
-  can never block or fail registration.
-- **Google OAuth** (optional, free): set `GOOGLE_CLIENT_ID`; the ID token is verified
-  against Google's public tokeninfo endpoint; the account is auto-created on first login.
-  **Apple Sign-In is deliberately absent** (paid Apple Developer program — violates the
-  zero-cost rule).
+  `require_admin` dependencies. **No default credentials exist in the repo**: the seed
+  admin is created only when `ADMIN_USERNAME/EMAIL/PASSWORD` are set in `.env`, and an
+  unset `JWT_SECRET` produces a random per-process secret (sessions reset on restart)
+  plus a loud warning. Login is **rate limited** per identifier+IP (5 failures / 15 min
+  → 15 min lockout). See [`docs/SECURITY.md`](docs/SECURITY.md) for the full hardening log.
+- **Roles & page visibility:**
+  | Role | Pages | Powers |
+  |------|-------|--------|
+  | `user` (Citizen) | **Command, Live, System only** | Report/confirm/dispute live hazards, connect devices (drive mode / dashcam), delete own account |
+  | `municipality` | All pages (adds Map, Explorer, Stats, Repairs, Upload) | Everything a user can do **plus**: upload surveys, resolve live hazards, mark detections repaired, delete detections |
+  | `admin` | All pages + Admin | Full control: roles, enable/disable/delete accounts, approve municipality registrations |
+  The same split is enforced server-side: `/detections*`, `/heatmap`, `/priority-list`,
+  `/export/csv` and `/ingest/*` require the operator role; `/stats` any signed-in user.
+- **Registration with e-mail verification** (`/register`): the user picks **Citizen or
+  Municipality** via role cards (municipality must name its city). Nothing is created
+  yet — a **6-digit confirmation code** is e-mailed (30 min TTL, re-send with a 60 s
+  gap) and held in `pending_registrations`. On a correct code, citizen accounts are
+  created and signed in immediately; **municipality registrations additionally wait for
+  admin approval** — every admin is e-mailed, the Admin page shows an approvals queue,
+  and at least one admin must approve (or deny) before the account exists. The
+  applicant is notified of the decision by e-mail. When SMTP is unconfigured (dev), the
+  code step is skipped gracefully; the municipality approval step still applies.
+- **Account lifecycle:** any signed-in user can **delete their own account** from the
+  navbar profile menu (local accounts re-type their password). Admins can change roles,
+  **enable/disable**, and **delete** accounts from the Admin page. The last active
+  admin can neither demote nor delete itself.
+- **E-mails (free, optional):** all notifications go through **stdlib smtplib**
+  (`backend/notify.py`) over any free SMTP relay (Gmail app password recommended) —
+  verification codes, welcome mail, municipality approval requests/decisions, and a
+  **thank-you e-mail when a user reports damage** in Live mode (throttled to one per
+  user per day). Configure `SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/STARTTLS`; when unset
+  every e-mail feature silently no-ops. Sends run in a daemon thread and can never
+  block or fail a request.
+- **Google sign-in** (optional, free): set `GOOGLE_CLIENT_ID` and the login page
+  renders a real **“Sign in with Google”** button (Google Identity Services). The ID
+  token is verified against Google's public tokeninfo endpoint and the account is
+  auto-created on first login — no code step needed (Google already verified the
+  e-mail). **Apple Sign-In is deliberately absent** (paid Apple Developer program —
+  violates the zero-cost rule).
 - **City landmarks:** `GET /api/cities/landmarks` powers the map's fly-to menu for any
   city — free Nominatim lookups, rate-limited ≥1 s apart, **cached forever** in
   `city_landmarks` (one lookup per city, ever), with a built-in offline fallback for
@@ -423,6 +442,7 @@ equivalent for the core schema.
 | `02_live_schema.sql` | `live_events`, `live_reports` |
 | `03_auth_schema.sql` | `users`, `city_landmarks` |
 | `04_live_devices.sql` | `live_devices` |
+| `05_pending_registrations.sql` | `pending_registrations` (e-mail verification + municipality approval queue) |
 
 ### `detections` — one row per de-duplicated damage instance
 
@@ -481,30 +501,38 @@ Interactive docs: **http://localhost:8000/docs** (Swagger) · `/redoc`.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/auth/register` | — | Create account (**user or municipality**) → JWT; sends the optional welcome e-mail |
-| `POST` | `/api/auth/login` | — | Username-or-e-mail + password → JWT |
+| `POST` | `/api/auth/register` | — | Start a registration (**user or municipality**) → e-mails a confirmation code (`verify_email`), or account+JWT when SMTP is off |
+| `POST` | `/api/auth/verify-email` | — | Confirm the code → user: account+JWT; municipality: `awaiting_approval` |
+| `POST` | `/api/auth/resend-code` | — | Re-send the confirmation code (60 s throttle) |
+| `POST` | `/api/auth/login` | — | Username-or-e-mail + password → JWT (rate limited; 429 on lockout) |
 | `POST` | `/api/auth/oauth/google` | — | Google ID token → JWT (when configured) |
-| `GET`  | `/api/auth/config` | — | Which optional providers are enabled |
+| `GET`  | `/api/auth/config` | — | Which optional providers are enabled (+ Google client id) |
 | `GET` / `PATCH` | `/api/auth/me` | user | Profile read / update (name, city) |
 | `PATCH`| `/api/auth/me/location` | user | Record browser geolocation |
+| `DELETE`| `/api/auth/me` | user | Delete MY account (password re-typed for local accounts) |
 | `GET`  | `/api/auth/users` | admin | List accounts |
 | `PATCH`| `/api/auth/users/{id}/role` | admin | Change a role (city required for municipality) |
+| `PATCH`| `/api/auth/users/{id}/active` | admin | Enable / disable an account |
+| `DELETE`| `/api/auth/users/{id}` | admin | Delete an account |
+| `GET`  | `/api/auth/registrations/pending` | admin | Municipality approval queue (+ unverified registrations) |
+| `POST` | `/api/auth/registrations/{id}/approve` | admin | Approve → account created, applicant e-mailed |
+| `POST` | `/api/auth/registrations/{id}/deny` | admin | Deny → registration deleted, applicant e-mailed |
 
 ### Survey data & analytics
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `GET`  | `/api/detections` | — | Paginated list; filters (type, severity range, dates), sorting |
-| `GET`  | `/api/detections/nearby` | — | Radius search (lat, lon, radius_m, limit) |
-| `GET`  | `/api/detections/{id}` | — | Single detection |
+| `GET`  | `/api/detections` | operator | Paginated list; filters (type, severity range, dates), sorting |
+| `GET`  | `/api/detections/nearby` | operator | Radius search (lat, lon, radius_m, limit) |
+| `GET`  | `/api/detections/{id}` | operator | Single detection |
 | `PATCH`| `/api/detections/{id}/status` | operator | Set `is_fixed` |
 | `DELETE`| `/api/detections/bulk` | operator | Delete by id list (optionally cascade `survey_log`) |
-| `GET`  | `/api/stats` | — | Aggregate stats (totals, per-type/severity breakdowns, averages) |
-| `GET`  | `/api/heatmap` | — | Weighted points (severity·ln(count+1)) for the heat layer |
-| `GET`  | `/api/priority-list` | — | Ranked repair list |
-| `GET`  | `/api/export/csv` | — | CSV export of all detections |
-| `POST` | `/api/ingest/upload` | user | Upload video (+gps), queue a pipeline job → 202 |
-| `GET`  | `/api/ingest/status/{job_id}` | — | Poll job / session status |
+| `GET`  | `/api/stats` | user | Aggregate stats (the Command page shows them to citizens too) |
+| `GET`  | `/api/heatmap` | operator | Weighted points (severity·ln(count+1)) for the heat layer |
+| `GET`  | `/api/priority-list` | operator | Ranked repair list |
+| `GET`  | `/api/export/csv` | operator | CSV export of all detections |
+| `POST` | `/api/ingest/upload` | operator | Upload video (+gps), streamed to disk with `MAX_UPLOAD_MB` cap → 202 |
+| `GET`  | `/api/ingest/status/{job_id}` | user | Poll job / session status (job id format-validated) |
 | `GET`  | `/api/cities/landmarks` | user | Per-city fly-to landmarks (cached Nominatim) |
 
 ### Live mode & devices
@@ -525,10 +553,11 @@ Interactive docs: **http://localhost:8000/docs** (Swagger) · `/redoc`.
 
 ### Health
 
-`GET /` and `GET /health` (root health checks; note nginx only proxies `/api/`, so the
-frontend probes a cheap real API route instead).
+`GET /`, `GET /health`, and the nginx-proxied public probe `GET /api/health`
+(used by the navbar dot — works on the login page, before any session exists).
 
 > CORS is currently `allow_origins=["*"]` — tighten before any real deployment.
+> The complete security-hardening log lives in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ---
 
@@ -539,18 +568,24 @@ lucide-react icons, axios. **One global context only** — `AuthContext` (sessio
 everything else is page-local hooks. The only cross-page pipeline signal is
 `localStorage['rids_active_job']` (set by IngestionPage, polled by MapPage every 10 s).
 
-| Page | Route | Purpose |
-|------|-------|---------|
-| **HomePage** | `/` | Landing dashboard: headline stats, quick links, system health |
-| **LivePage** | `/live` | Real-time hazard map: WS badge (polling fallback), tap-to-report with the 10-class picker, *Still there / Not there* voting, operator resolve, live feed with UNVERIFIED/CONFIRMED/VERIFIED chips, toasts, **Devices panel** (phone drive mode, dashcam pairing codes, device list + revoke) |
-| **MapPage** | `/map` | Survey detections: severity/type filters, basemap switcher (dark/streets/satellite), heatmap overlay, per-city landmark fly-to, popups, operator mark-repaired/delete, printable report; silent refresh while a job runs |
-| **StatsPage** | `/stats` | City-wide statistics dashboards (Recharts) |
-| **ExplorerPage** | `/explorer` | Sortable / filterable / paginated detection table, CSV download |
-| **PriorityPage** | `/priority` | Ranked repair queue with severity bands and repair-cost sketches (RON heuristics × severity factor) |
-| **IngestionPage** | `/ingest` | Upload + per-stage live pipeline tracker |
-| **AboutPage** | `/about` | Project description |
-| **LoginPage / RegisterPage** | `/login`, `/register` | Sessions; **role choice (Citizen / Municipality)** with city; optional Google button |
-| **AdminPage** | `/admin` | Accounts table + role management (admin only) |
+Citizens see **Command, Live, and System**; the survey/analytics pages (Map, Explorer,
+Stats, Repairs, Upload) are visible to **municipality operators and admins only** —
+hidden from the navbar, guarded in the router, and enforced by the API.
+
+| Page | Route | Visible to | Purpose |
+|------|-------|------------|---------|
+| **HomePage (Command)** | `/` | all roles | Landing dashboard: headline stats, quick links, system health |
+| **LivePage** | `/live` | all roles | Real-time hazard map: WS badge (polling fallback), tap-to-report with the 10-class picker, *Still there / Not there* voting, operator resolve, live feed with UNVERIFIED/CONFIRMED/VERIFIED chips, toasts, **Devices panel** (phone drive mode, dashcam pairing codes, device list + revoke) |
+| **MapPage** | `/map` | operators | Survey detections: severity/type filters, basemap switcher (dark/streets/satellite), heatmap overlay, per-city landmark fly-to, popups, mark-repaired/delete, printable report; silent refresh while a job runs |
+| **StatsPage** | `/stats` | operators | City-wide statistics dashboards (Recharts) |
+| **ExplorerPage** | `/explorer` | operators | Sortable / filterable / paginated detection table, CSV download |
+| **PriorityPage (Repairs)** | `/priority` | operators | Ranked repair queue with severity bands and repair-cost sketches (RON heuristics × severity factor) |
+| **IngestionPage (Upload)** | `/ingest` | operators | Upload + per-stage live pipeline tracker |
+| **AboutPage (System)** | `/about` | all roles | Project description |
+| **LoginPage / RegisterPage** | `/login`, `/register` | public | Sessions; **role choice (Citizen / Municipality)** with city; **e-mail code verification step**; municipality "awaiting approval" screen; **Sign in with Google** button when configured |
+| **AdminPage** | `/admin` | admin | Accounts table (roles, enable/disable, delete) + **municipality approvals queue** |
+
+Any signed-in user can delete their own account from the navbar profile menu.
 
 Conventions:
 
@@ -748,8 +783,11 @@ docker compose down                     # stop (keeps pgdata volume); add -v to 
 
 - Frontend: **http://localhost:3000** · Backend docs: **http://localhost:8000/docs**
 - Backend health: **http://localhost:8000/health**
-- First visit: **register an account** (Citizen or Municipality) at `/register`, or log in
-  with the seed admin (set `ADMIN_USERNAME/EMAIL/PASSWORD` in `.env`).
+- First visit: **register an account** at `/register` (Citizen accounts confirm their
+  e-mail when SMTP is configured; Municipality accounts additionally need admin
+  approval), or log in with the seed admin — **you must set
+  `ADMIN_USERNAME/EMAIL/PASSWORD` and `JWT_SECRET` in `.env`**; no defaults ship in
+  the repo (see [`docs/SECURITY.md`](docs/SECURITY.md)).
 
 ### 2. Database schema — created automatically
 
@@ -789,9 +827,12 @@ Compose (`env_file`). Groups:
 
 - **Database**: `POSTGRES_DB / USER / PASSWORD / HOST / PORT`, `DATABASE_URL`
   *(port nuance: `5433` on the host, `db:5432` inside Docker)*.
-- **Auth**: `JWT_SECRET` (**override for anything beyond local dev**), `JWT_TTL_H`,
-  `ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD` (seed admin),
-  `GOOGLE_CLIENT_ID` (optional free Google sign-in; empty hides the button).
+- **Auth**: `JWT_SECRET` (**required for persistent sessions** — unset generates a
+  random per-process secret + warning), `JWT_TTL_H`,
+  `ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD` (seed admin — **no in-repo
+  defaults**; unset ⇒ no admin is seeded), `GOOGLE_CLIENT_ID` (optional free Google
+  sign-in; empty hides the button), `VERIFY_CODE_TTL_MIN` (30), and login rate
+  limiting: `LOGIN_MAX_ATTEMPTS` (5), `LOGIN_WINDOW_S` (900), `LOGIN_LOCKOUT_S` (900).
 - **E-mail (optional, free)**: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`,
   `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_STARTTLS` — unset ⇒ e-mail off. Gmail app
   passwords work and are free.
@@ -807,7 +848,8 @@ Compose (`env_file`). Groups:
   target; it is the prefix `job_watcher` strips when translating container → host paths.
 - **Survey pipeline**: `PIPELINE_DEVICE` (watcher forces `cuda`), `PIPELINE_FPS`,
   `WATCHER_POLL_S`, `DEDUP_CLUSTER_RADIUS_M`, `SURROUNDING_DENSITY_RADIUS_M`,
-  `DETECTOR_BATCH`, `DETECTOR_HALF`, `DETECTOR_IMGSZ`, `JOB_STALE_TIMEOUT_S`.
+  `DETECTOR_BATCH`, `DETECTOR_HALF`, `DETECTOR_IMGSZ`, `JOB_STALE_TIMEOUT_S`,
+  `MAX_UPLOAD_MB` (4096) / `MAX_GPS_MB` (50) upload caps.
 - **Frontend build**: `VITE_API_URL` — only when the frontend is hosted away from the API
   (e.g. Vercel); unset keeps same-origin `/api` through the Nginx/Vite proxy.
 - **City / scheduler / logging**: `CITY_NAME / LAT / LON / BBOX`,

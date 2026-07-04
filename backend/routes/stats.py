@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from backend.database import get_db
+from backend.auth import get_current_user
 from backend.models import Detection
 from backend.schemas import StatsResponse, DamageTypeCount, SeverityCount
 
@@ -21,7 +22,9 @@ router = APIRouter()
 
 
 @router.get("/stats", response_model=StatsResponse)
-def get_stats(db: Session = Depends(get_db)):
+def get_stats(db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    # Any signed-in role may read the headline stats (the Command page shows
+    # them to citizens too); the detailed survey pages are operator-only.
     total = db.query(func.count(Detection.id)).scalar() or 0
     last_survey = db.query(func.max(Detection.survey_date)).scalar()
 

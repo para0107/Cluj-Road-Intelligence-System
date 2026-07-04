@@ -1,4 +1,4 @@
-"""
+r"""
 backend/routes/ingest.py
 
 POST /ingest/upload      — accept video (.mp4) + optional gps (.gpx) multipart
@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,7 +64,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 
-from backend.auth import get_current_user
+from backend.auth import get_current_user, require_operator
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
@@ -94,6 +95,46 @@ _FPS          = float(os.getenv("PIPELINE_FPS", "2.0"))
 # new uploads. The default is deliberately generous: the orchestrator rewrites
 # session.json after every stage, so a healthy long run is never flagged.
 _JOB_STALE_TIMEOUT_S = float(os.getenv("JOB_STALE_TIMEOUT_S", "7200"))
+
+# SECURITY: uploads are streamed to disk in chunks (never fully buffered in
+# RAM) and capped. Nginx allows large bodies; this is the enforced limit.
+_MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "4096"))      # 4 GB default
+_MAX_GPS_MB = float(os.getenv("MAX_GPS_MB", "50"))
+_UPLOAD_CHUNK = 8 * 1024 * 1024                                  # 8 MB
+
+# SECURITY: job ids are backend-generated timestamps; anything else in the
+# status URL is rejected before it can touch a filesystem path.
+_JOB_ID_RE = re.compile(r"^\d{8}_\d{6}$")
+
+
+async def _save_upload_streaming(upload: UploadFile, dest: Path, max_mb: float) -> int:
+    """Stream a multipart upload to dest in chunks; enforce the size cap."""
+    max_bytes = int(max_mb * 1024 * 1024)
+    size = 0
+    try:
+        with dest.open("wb") as f:
+            while True:
+                chunk = await upload.read(_UPLOAD_CHUNK)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File exceeds the {max_mb:.0f} MB limit "
+                               f"(MAX_UPLOAD_MB / MAX_GPS_MB in .env).",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save upload: {exc}",
+        )
+    return size
 
 
 def _ensure_dirs() -> None:
@@ -212,7 +253,7 @@ def _active_job_id() -> Optional[str]:
 async def upload_survey(
     video: UploadFile = File(..., description="Dashcam footage (.mp4)"),
     gps:   UploadFile = File(None, description="GPS log (.gpx) — optional"),
-    _user=Depends(get_current_user),   # any authenticated account may upload
+    _op=Depends(require_operator),   # survey uploads: municipality/admin only
 ):
     """
     Persists uploaded files to the shared data/ volume and writes a job-request
@@ -252,19 +293,12 @@ async def upload_survey(
     _ensure_dirs()
     job_id = _generate_job_id()
 
-    # ── Save video file ───────────────────────────────────────────────────
+    # ── Save video file (streamed, capped — never buffered in RAM) ────────
     # Prefix with job_id to guarantee uniqueness across concurrent uploads.
     safe_video_name = f"{job_id}_{Path(video.filename).name}"
     video_path = _RAW_FOOTAGE / safe_video_name
-    try:
-        video_bytes = await video.read()
-        video_path.write_bytes(video_bytes)
-        logger.info("Saved video → %s (%d bytes)", video_path, len(video_bytes))
-    except OSError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save video: {exc}",
-        )
+    video_size = await _save_upload_streaming(video, video_path, _MAX_UPLOAD_MB)
+    logger.info("Saved video → %s (%d bytes)", video_path, video_size)
 
     # ── Save GPS file (optional) ──────────────────────────────────────────
     gps_container_path: Optional[str] = None
@@ -272,16 +306,12 @@ async def upload_survey(
         safe_gps_name = f"{job_id}_{Path(gps.filename).name}"
         gps_path = _RAW_GPS / safe_gps_name
         try:
-            gps_bytes = await gps.read()
-            gps_path.write_bytes(gps_bytes)
-            gps_container_path = str(gps_path)
-            logger.info("Saved GPS  → %s (%d bytes)", gps_path, len(gps_bytes))
-        except OSError as exc:
+            gps_size = await _save_upload_streaming(gps, gps_path, _MAX_GPS_MB)
+        except HTTPException:
             video_path.unlink(missing_ok=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save GPS file: {exc}",
-            )
+            raise
+        gps_container_path = str(gps_path)
+        logger.info("Saved GPS  → %s (%d bytes)", gps_path, gps_size)
 
     # ── Write job-request file ────────────────────────────────────────────
     # job_watcher.py on the host translates container paths → host paths
@@ -341,7 +371,7 @@ async def upload_survey(
     summary="Poll the status of a queued, running, or completed pipeline job.",
     tags=["Ingest"],
 )
-def get_job_status(job_id: str):
+def get_job_status(job_id: str, _user=Depends(get_current_user)):
     """
     Status resolution order:
       1. session.json exists and status == complete|failed  → return it
@@ -357,6 +387,14 @@ def get_job_status(job_id: str):
         complete      — all stages succeeded
         failed        — a stage raised an exception
     """
+    # SECURITY: job_id is interpolated into filesystem paths below — reject
+    # anything that is not a backend-generated YYYYMMDD_HHMMSS id.
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid job id format.",
+        )
+
     # Check session.json first — most authoritative source of truth once the
     # orchestrator has started writing it.
     session_data = _read_session_json(job_id)

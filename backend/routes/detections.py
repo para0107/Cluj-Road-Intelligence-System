@@ -46,6 +46,7 @@ def list_detections(
     sort_by: Optional[str] = Query("priority_score"),
     sort_order: Optional[str] = Query("desc"),
     db: Session = Depends(get_db),
+    _op=Depends(require_operator),   # survey data pages are municipality/admin only
 ):
     query = db.query(Detection)
 
@@ -100,6 +101,7 @@ def detections_nearby(
     radius_m: float = Query(100, ge=1, le=5000),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    _op=Depends(require_operator),
 ):
     # Cast both operands to geography so ST_DWithin measures the radius in
     # true metres (matching db_writer's upsert). Using raw geometry degrees
@@ -129,7 +131,11 @@ def detections_nearby(
 
 
 @router.get("/detections/{detection_id}", response_model=DetectionRead)
-def get_detection(detection_id: UUID, db: Session = Depends(get_db)):
+def get_detection(
+    detection_id: UUID,
+    db: Session = Depends(get_db),
+    _op=Depends(require_operator),
+):
     detection = db.query(Detection).filter(Detection.id == detection_id).first()
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found.")
