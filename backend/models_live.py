@@ -145,6 +145,10 @@ class LiveReport(Base):
     __table_args__ = (
         Index("idx_live_reports_event", "event_id"),
         Index("idx_live_reports_device", "event_id", "device_id"),
+        # /live/stats counts reports in the last hour; without this the count
+        # degrades to a table scan as reports accumulate. Existing volumes get
+        # it from the idempotent CREATE INDEX in main.py's startup hook.
+        Index("idx_live_reports_created", "created_at"),
     )
 
     def __repr__(self) -> str:

@@ -65,18 +65,21 @@ class ConnectionManager:
     # ── Broadcast ────────────────────────────────────────────────────────────
 
     async def broadcast(self, message: dict) -> None:
-        """Send a JSON message to every connected client; drop dead sockets."""
+        """
+        Send a JSON message to every connected client; drop dead sockets.
+        Sends run concurrently so one slow phone on a bad connection cannot
+        delay the other thousand clients.
+        """
         if not self._connections:
             return
         payload = json.dumps(message, default=str)
-        dead: list[WebSocket] = []
         async with self._lock:
             targets = list(self._connections)
-        for ws in targets:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead.append(ws)
+        results = await asyncio.gather(
+            *(ws.send_text(payload) for ws in targets),
+            return_exceptions=True,
+        )
+        dead = [ws for ws, res in zip(targets, results) if isinstance(res, Exception)]
         if dead:
             async with self._lock:
                 for ws in dead:

@@ -73,9 +73,9 @@ export default function HomePage() {
             </h1>
             <div className="road-divider anim-fade-up delay-2" style={{ width: 180, margin: '22px 0' }} />
             <p className="anim-fade-up delay-2" style={styles.heroSub}>
-              RIDS turns ordinary dashcam footage into a live, georeferenced map of road
-              damage across {cityName} — detected by <strong>RT-DETR</strong>, measured by{' '}
-              <strong>SAM&nbsp;2.1</strong> and <strong>Monodepth2</strong>, scored S1–S5, and
+              RDDS turns ordinary dashcam footage into a live, georeferenced map of road
+              damage across {cityName}. Damage is detected by <strong>RT-DETR</strong>, measured
+              by <strong>SAM&nbsp;2.1</strong> and <strong>Monodepth2</strong>, scored S1&ndash;S5, and
               ranked into a repair plan the city can act on.
             </p>
             <div className="anim-fade-up delay-3" style={{ display: 'flex', gap: 10, marginTop: 26, flexWrap: 'wrap' }}>
@@ -144,9 +144,9 @@ export default function HomePage() {
             </div>
             <div className="display" style={styles.modeTitle}>Upload a drive. Get a full audit.</div>
             <p style={styles.modeText}>
-              The deep-analysis path: dashcam video + GPS run through the 7-stage GPU pipeline —
-              SAM geometry, Monodepth2 depth, S1–S5 severity, spatial dedup, PostGIS. Precise,
-              auditable, thesis-grade results.
+              The deep-analysis path: dashcam video and GPS run through the 7-stage GPU
+              pipeline, from SAM geometry and Monodepth2 depth to S1&ndash;S5 severity and
+              PostGIS. Precise, auditable, repeatable results.
             </p>
             <span style={styles.modeCta}>Start a survey <ArrowRight size={13} /></span>
           </Link>
@@ -168,9 +168,9 @@ export default function HomePage() {
             </div>
             <div className="display" style={styles.modeTitle}>Every car is a sensor. Waze for road damage.</div>
             <p style={styles.modeText}>
-              The real-time path: cameras running the same RT-DETR model (and people tapping the map)
-              stream hazards in live. Independent vehicles re-sighting the same spot escalate it —
-              unverified → confirmed → verified — and disputes clear it.
+              The real-time path: cameras running the same RT-DETR model, and people tapping
+              the map, stream hazards in live. Every independent vehicle that re-sights the
+              same spot makes it more trusted, and disputes clear it.
             </p>
             <span style={{ ...styles.modeCta, color: 'var(--red)' }}>
               <Users size={13} /> Open the live map <ArrowRight size={13} />
@@ -192,7 +192,7 @@ export default function HomePage() {
             <SectionTitle overline="Damage taxonomy" title="Most frequent damage classes" />
             {classData.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: 12.5, padding: '30px 0', textAlign: 'center' }}>
-                No detections yet — upload a survey to populate the map.
+                No detections yet. Upload a survey to populate the map.
               </div>
             ) : (
               <div style={{ height: 230 }}>
@@ -245,10 +245,10 @@ export default function HomePage() {
                 />
                 <QuickAction
                   to="/live" icon={Users} title="Drive mode"
-                  sub="Mount your phone — impacts auto-report as you drive" delay="delay-2"
+                  sub="Mount your phone and bumps report themselves as you drive" delay="delay-2"
                 />
                 <QuickAction
-                  to="/about" icon={BarChart2} title="How RIDS works"
+                  to="/about" icon={BarChart2} title="How RDDS works"
                   sub="The detection pipeline, severity scoring and validation" delay="delay-3"
                 />
               </>
@@ -298,7 +298,7 @@ export default function HomePage() {
           <div className="road-divider" style={{ width: '100%', marginBottom: 22, opacity: 0.35 }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
-              RIDS — Road Infrastructure Detection System · Bachelor's thesis, Babeș-Bolyai University · Paraschiv Tudor, 2026
+              RDDS · Road Degradation Detection System · Paraschiv Tudor, 2026
             </span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
               RT-DETR-L · SAM 2.1 · Monodepth2 · PostGIS

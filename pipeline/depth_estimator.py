@@ -37,7 +37,7 @@ Depth confidence rationale:
   within the extraction region is a proxy for this: high spatial variance
   means the disparity surface is unstable in that region.
   Threshold: depth_confidence < 0.4 → fallback to geometry proxy.
-  (This matches the threshold documented in Chapter 3 of the thesis.)
+  (This matches the documented reference threshold.)
 
 Mask reconstruction rationale:
   SegmentationResult stores MaskGeometry (4 scalar features) but not the
@@ -86,7 +86,7 @@ Usage (CLI):
         [--device cuda]
         [--verbose]
 
-Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations
@@ -151,7 +151,7 @@ class DepthEstimatorConfig:
 
     depth_conf_threshold:
         Detections with depth_confidence below this value fall back to
-        the SAM geometry proxy. Default 0.4 (documented in thesis Ch. 3).
+        the SAM geometry proxy. Default 0.4.
 
     crop_fraction:
         Fraction of the bounding box used for central-crop depth extraction
@@ -627,7 +627,7 @@ def _geometry_proxy_depth(
       depth_proxy    = area_norm * (0.5 + 0.5 * mask_compactness)
 
     This is not a trained model — it is a transparent deterministic heuristic
-    documented as such in the thesis (Chapter 3, Stage 4 fallback).
+    documented as such (Stage 4 fallback).
     Values are in [0, 1] by construction.
 
     depth_confidence is set to 0.0 to signal that this is a proxy,

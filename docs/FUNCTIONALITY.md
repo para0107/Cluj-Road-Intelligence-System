@@ -1,6 +1,6 @@
-# RIDS — Full Functionality Reference
+# RDDS — Full Functionality Reference
 
-**Road Infrastructure Detection System** · Babeș-Bolyai University, 2026 (bachelor's thesis)
+**Road Degradation Detection System** · 2026
 
 This document describes **everything the system does and how it does it**: the two
 processing pipelines and their attributes, the live crowd-sensing mode, authentication and
@@ -19,9 +19,9 @@ configuration surface. It complements `README.md` (setup detail) and `docs/LIVE_
 
 ---
 
-## 1. What RIDS is
+## 1. What RDDS is
 
-RIDS detects, classifies, and prioritizes **road damage** from ordinary dashcam video.
+RDDS detects, classifies, and prioritizes **road damage** from ordinary dashcam video.
 A city (demo: Cluj-Napoca) gets:
 
 - a **survey workflow** — upload a drive video (+ optional GPS track), get de-duplicated,
@@ -143,7 +143,7 @@ Attributes and options:
   position from `--gps track.gpx` (time-interpolated) or fixed `--lat/--lon`.
 - **Auth:** `--pair <CODE>` (pairing code from the Live page — saves a JWT to
   `~/.rids_live_token`, no password ever typed on the car PC), or `--token`, or
-  `--email/--password` (env: `RIDS_TOKEN/RIDS_EMAIL/RIDS_PASSWORD`).
+  `--email/--password` (env: `RDDS_TOKEN/RDDS_EMAIL/RDDS_PASSWORD`).
 - **Identity:** stable per-machine `device_id` persisted in `~/.rids_device_id`.
 - `pipeline/simulate_fleet.py` — multi-vehicle demo without GPU: replays several virtual
   vehicles posting reports so the live map can be demonstrated anywhere.
@@ -343,7 +343,7 @@ pipeline enrichment.)
 | Auth | `JWT_SECRET` (**must be overridden in any real deployment**), `JWT_TTL_H`, `ADMIN_USERNAME/EMAIL/PASSWORD`, `GOOGLE_CLIENT_ID` (optional) |
 | E-mail (optional) | `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_STARTTLS` — unset ⇒ e-mail off |
 | Live mode | `LIVE_CLUSTER_RADIUS_M` (25), `LIVE_EVENT_TTL_H` (72), `LIVE_CONFIRM_DEVICES` (2), `LIVE_VERIFY_DEVICES` (3), `LIVE_DISPUTE_MIN` (2), `LIVE_PAIR_CODE_TTL_MIN` (15) |
-| Edge agent | `LIVE_API_URL`, `RIDS_TOKEN/RIDS_EMAIL/RIDS_PASSWORD` |
+| Edge agent | `LIVE_API_URL`, `RDDS_TOKEN/RDDS_EMAIL/RDDS_PASSWORD` |
 | Frontend build | `VITE_API_URL` (only when hosted away from the API) |
 
 Model weights (`ml/weights/`: `best.pt`, `sam2.1_hiera_tiny.pt`, `mono_640x192/`) are not

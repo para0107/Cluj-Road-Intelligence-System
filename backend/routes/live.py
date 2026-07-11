@@ -29,6 +29,8 @@ Design notes
 
 import os
 import sys
+import threading
+import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
@@ -67,6 +69,33 @@ _CONFIRM_DEVICES = int(os.getenv("LIVE_CONFIRM_DEVICES", "2"))
 _VERIFY_DEVICES = int(os.getenv("LIVE_VERIFY_DEVICES", "3"))
 _DISPUTE_MIN = int(os.getenv("LIVE_DISPUTE_MIN", "2"))
 
+# ── Read micro-cache ────────────────────────────────────────────────────────
+# GET /live/events and /live/stats are the polling fallback for clients
+# without a WebSocket. A thousand phones polling every 5 s would mean ~200
+# DB queries/s for byte-identical answers, so reads are served from a short
+# in-process cache and every mutation clears it (a client's own report is
+# visible on its very next poll). WS pushes are unaffected.
+_READ_CACHE_TTL_S = float(os.getenv("LIVE_READ_CACHE_S", "2.0"))
+_read_cache: dict = {}          # key -> (expires_monotonic, value)
+_read_cache_lock = threading.Lock()
+
+
+def _cached_read(key: str, build):
+    now = time.monotonic()
+    with _read_cache_lock:
+        hit = _read_cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+    value = build()
+    with _read_cache_lock:
+        _read_cache[key] = (now + _READ_CACHE_TTL_S, value)
+    return value
+
+
+def _invalidate_read_cache() -> None:
+    with _read_cache_lock:
+        _read_cache.clear()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -86,6 +115,7 @@ def _read(event: LiveEvent) -> LiveEventRead:
 
 def _broadcast(kind: str, event: LiveEvent | None, event_id=None) -> None:
     """Push a mutation to every connected live client (fire-and-forget)."""
+    _invalidate_read_cache()   # every mutation flows through here
     manager.broadcast_from_thread({
         "type": kind,                                     # event_upsert | event_removed
         "event": _read(event).model_dump() if event else None,
@@ -348,46 +378,50 @@ def resolve_event(
 @router.get("/live/events", response_model=LiveEventListResponse)
 def list_events(db: Session = Depends(get_db)):
     """Active events — the polling fallback for clients without WebSocket."""
-    _sweep_expired(db)
-    items = (
-        db.query(LiveEvent)
-        .filter(LiveEvent.is_active.is_(True))
-        .order_by(LiveEvent.last_reported.desc())
-        .limit(1000)
-        .all()
-    )
-    return LiveEventListResponse(
-        server_time=_now(),
-        count=len(items),
-        items=[_read(e) for e in items],
-    )
+    def build():
+        _sweep_expired(db)
+        items = (
+            db.query(LiveEvent)
+            .filter(LiveEvent.is_active.is_(True))
+            .order_by(LiveEvent.last_reported.desc())
+            .limit(1000)
+            .all()
+        )
+        return LiveEventListResponse(
+            server_time=_now(),
+            count=len(items),
+            items=[_read(e) for e in items],
+        )
+    return _cached_read("events", build)
 
 
 @router.get("/live/stats", response_model=LiveStatsResponse)
 def live_stats(db: Session = Depends(get_db)):
-    hour_ago = _now() - timedelta(hours=1)
-    active = db.query(func.count(LiveEvent.id)).filter(LiveEvent.is_active.is_(True)).scalar() or 0
-    verified = (
-        db.query(func.count(LiveEvent.id))
-        .filter(LiveEvent.is_active.is_(True), LiveEvent.status == "verified")
-        .scalar() or 0
-    )
-    reports_1h = (
-        db.query(func.count(LiveReport.id))
-        .filter(LiveReport.created_at >= hour_ago)
-        .scalar() or 0
-    )
-    devices_1h = (
-        db.query(func.count(distinct(LiveReport.device_id)))
-        .filter(LiveReport.created_at >= hour_ago)
-        .scalar() or 0
-    )
-    return LiveStatsResponse(
-        active_events=active,
-        verified_events=verified,
-        reports_last_hour=reports_1h,
-        devices_last_hour=devices_1h,
-    )
+    def build():
+        hour_ago = _now() - timedelta(hours=1)
+        active = db.query(func.count(LiveEvent.id)).filter(LiveEvent.is_active.is_(True)).scalar() or 0
+        verified = (
+            db.query(func.count(LiveEvent.id))
+            .filter(LiveEvent.is_active.is_(True), LiveEvent.status == "verified")
+            .scalar() or 0
+        )
+        reports_1h = (
+            db.query(func.count(LiveReport.id))
+            .filter(LiveReport.created_at >= hour_ago)
+            .scalar() or 0
+        )
+        devices_1h = (
+            db.query(func.count(distinct(LiveReport.device_id)))
+            .filter(LiveReport.created_at >= hour_ago)
+            .scalar() or 0
+        )
+        return LiveStatsResponse(
+            active_events=active,
+            verified_events=verified,
+            reports_last_hour=reports_1h,
+            devices_last_hour=devices_1h,
+        )
+    return _cached_read("stats", build)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,7 +507,7 @@ def claim_device(payload: DeviceClaimRequest, db: Session = Depends(get_db)):
         .first()
     )
     if not device or (device.pair_code_expires_at and device.pair_code_expires_at < _now()):
-        raise HTTPException(404, "Pairing code not found or expired — generate a new one.")
+        raise HTTPException(404, "That code was not found or has expired. Generate a new one from the Live page.")
 
     clash = db.query(LiveDevice).filter(LiveDevice.device_id == payload.device_id).first()
     if clash:

@@ -102,7 +102,7 @@ def _deliver_http(to_addr: str, subject: str, body: str) -> None:
         _BREVO_URL,
         headers={"api-key": BREVO_API_KEY, "content-type": "application/json"},
         json={
-            "sender": {"email": SMTP_FROM, "name": "RIDS"},
+            "sender": {"email": SMTP_FROM, "name": "RDDS"},
             "to": [{"email": to_addr}],
             "subject": subject,
             "textContent": body,
@@ -139,40 +139,40 @@ def send_email_async(to_addr: str, subject: str, body: str) -> bool:
 
 
 def send_verification_email(to_addr: str, username: str, code: str) -> bool:
-    """E-mail confirmation code — the account is only created after this."""
+    """E-mail confirmation code; the account is only created after this."""
     body = (
         f"Hi {username},\n"
         "\n"
         "Use this code to confirm your e-mail address and finish creating your\n"
-        "RIDS account:\n"
+        "RDDS account:\n"
         "\n"
         f"        {code}\n"
         "\n"
         "The code expires in 30 minutes. If you did not request an account,\n"
-        "simply ignore this message — nothing was created.\n"
+        "you can simply ignore this message. Nothing was created.\n"
         "\n"
-        "— RIDS · Babeș-Bolyai University\n"
+        "The RDDS team\n"
     )
-    return send_email_async(to_addr, f"RIDS e-mail verification code: {code}", body)
+    return send_email_async(to_addr, f"Your RDDS verification code: {code}", body)
 
 
 def send_admin_approval_request(admin_addrs: list[str], username: str,
                                 email: str, city: str | None) -> None:
     """Tell every admin a municipality registration awaits their approval."""
     body = (
-        "A municipality account registration is awaiting approval:\n"
+        "A municipality account registration is waiting for approval:\n"
         "\n"
         f"    Username : {username}\n"
         f"    E-mail   : {email}\n"
-        f"    City     : {city or '—'}\n"
+        f"    City     : {city or 'not given'}\n"
         "\n"
-        "Review it on the Admin page (Manage accounts → Pending approvals).\n"
-        "The account is NOT active until an admin approves it.\n"
+        "You can review it on the Admin page, under Manage accounts and then\n"
+        "Pending approvals. The account stays inactive until an admin approves it.\n"
         "\n"
-        "— RIDS · Babeș-Bolyai University\n"
+        "The RDDS team\n"
     )
     for addr in admin_addrs:
-        send_email_async(addr, f"RIDS: municipality approval needed — {username}", body)
+        send_email_async(addr, f"RDDS: municipality approval needed for {username}", body)
 
 
 def send_approval_result_email(to_addr: str, username: str, approved: bool) -> bool:
@@ -181,24 +181,24 @@ def send_approval_result_email(to_addr: str, username: str, approved: bool) -> b
         body = (
             f"Hi {username},\n"
             "\n"
-            "Good news — an administrator approved your municipality account.\n"
-            "You can now sign in and manage your city's repairs on the RIDS\n"
+            "Good news: an administrator approved your municipality account.\n"
+            "You can now sign in and manage your city's repairs on the RDDS\n"
             "platform.\n"
             "\n"
-            "— RIDS · Babeș-Bolyai University\n"
+            "The RDDS team\n"
         )
-        subject = "RIDS: your municipality account was approved"
+        subject = "RDDS: your municipality account was approved"
     else:
         body = (
             f"Hi {username},\n"
             "\n"
             "An administrator reviewed and declined your municipality account\n"
-            "registration. If you believe this is a mistake, contact the\n"
+            "registration. If you believe this is a mistake, please contact the\n"
             "platform administrator.\n"
             "\n"
-            "— RIDS · Babeș-Bolyai University\n"
+            "The RDDS team\n"
         )
-        subject = "RIDS: your municipality registration was declined"
+        subject = "RDDS: your municipality registration was declined"
     return send_email_async(to_addr, subject, body)
 
 
@@ -208,35 +208,34 @@ def send_thankyou_email(to_addr: str, username: str, damage_type: str) -> bool:
     body = (
         f"Hi {username},\n"
         "\n"
-        f"Thank you for reporting a {pretty} on the RIDS live map!\n"
+        f"Thank you for reporting a {pretty} on the RDDS live map!\n"
         "\n"
         "Your report is now visible to every driver in the network and to the\n"
-        "city's repair team. As other devices pass the same spot it will be\n"
-        "cross-validated (UNVERIFIED → CONFIRMED → VERIFIED) and prioritised\n"
-        "for repair.\n"
+        "city's repair team. As other drivers pass the same spot, the report\n"
+        "gets confirmed and moves up the repair queue.\n"
         "\n"
-        "Every report makes the roads a little safer — keep them coming.\n"
+        "Every report makes the roads a little safer. Keep them coming.\n"
         "\n"
-        "— RIDS · Babeș-Bolyai University\n"
+        "The RDDS team\n"
     )
-    return send_email_async(to_addr, "Thank you for your road-damage report", body)
+    return send_email_async(to_addr, "Thank you for your road damage report", body)
 
 
 def send_welcome_email(to_addr: str, username: str, role: str, city: str | None = None) -> bool:
     """Notification for a freshly registered (local, e-mail based) account."""
     role_line = (
-        f"Account type: Municipality operator{f' — {city}' if city else ''}\n"
+        f"Account type: Municipality operator{f' for {city}' if city else ''}\n"
         "You can resolve live hazards, mark detections repaired, and manage\n"
         "your city's repair queue from the Priority and Live pages."
         if role == "municipality"
         else "Account type: Citizen\n"
-             "You can upload survey videos, report live hazards, and confirm\n"
-             "or dispute what other drivers see."
+             "You can report live hazards while you drive and confirm or\n"
+             "dispute what other drivers see."
     )
     body = (
         f"Hi {username},\n"
         "\n"
-        "Your RIDS (Road Infrastructure Detection System) account was created\n"
+        "Your RDDS (Road Degradation Detection System) account was created\n"
         "successfully with this e-mail address.\n"
         "\n"
         f"{role_line}\n"
@@ -244,6 +243,6 @@ def send_welcome_email(to_addr: str, username: str, role: str, city: str | None 
         "If you did not create this account, reply to this e-mail so the\n"
         "administrator can remove it.\n"
         "\n"
-        "— RIDS · Babeș-Bolyai University\n"
+        "The RDDS team\n"
     )
-    return send_email_async(to_addr, "Welcome to RIDS — account created", body)
+    return send_email_async(to_addr, "Welcome to RDDS, your account is ready", body)

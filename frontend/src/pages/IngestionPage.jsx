@@ -307,7 +307,7 @@ export default function IngestionPage() {
           setJobStatus(null)
           return
         }
-        console.warn('[RIDS] Status poll error:', err.message)
+        console.warn('[RDDS] Status poll error:', err.message)
       }
     }
 

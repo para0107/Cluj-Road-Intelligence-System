@@ -42,7 +42,7 @@ export default function RegisterPage() {
   const submit = async (e) => {
     e.preventDefault()
     if (!form.city.trim()) {
-      setError('Please select your city — the map opens on it.')
+      setError('Please select your city. The map opens on it.')
       return
     }
     setBusy(true)

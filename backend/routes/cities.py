@@ -36,7 +36,7 @@ from backend.schemas_auth import LandmarksResponse, LandmarkRead, CityCenterResp
 router = APIRouter()
 
 _NOMINATIM_URL = os.getenv("NOMINATIM_SEARCH_URL", "https://nominatim.openstreetmap.org/search")
-_USER_AGENT = "RIDS-road-intelligence/1.0 (Babes-Bolyai University thesis; educational)"
+_USER_AGENT = "RDDS-road-intelligence/1.0 (open-source road monitoring)"
 _REQUEST_SPACING_S = 1.1        # Nominatim policy: max 1 request/second
 
 # The 1 req/s limit is per service, not per caller — serialize ALL outbound
@@ -65,7 +65,7 @@ _FALLBACK_CLUJ = [
     ("Piața Unirii", "square", 46.7694, 23.5899),
     ("Gara CFR", "station", 46.7847, 23.5867),
     ("Cluj Arena", "stadium", 46.7686, 23.5725),
-    ("UBB — FSEGA", "university", 46.7734, 23.6193),
+    ("FSEGA", "university", 46.7734, 23.6193),
     ("Iulius Mall", "mall", 46.7735, 23.6320),
     ("Aeroport Intl. Cluj", "airport", 46.7852, 23.6862),
     ("Mănăștur", "district", 46.7568, 23.5567),
@@ -215,7 +215,7 @@ def city_center(
     if hit is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Could not locate '{city_norm}' — check the city name spelling.",
+            detail=f"Could not locate '{city_norm}'. Please check the city name spelling.",
         )
 
     db.query(CityLandmark).filter(

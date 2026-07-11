@@ -124,7 +124,7 @@ function generateReport(detections, stats, city) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>RIDS — ${cityTitle}</title>
+<title>RDDS — ${cityTitle}</title>
 <style>
   body { font-family: 'Segoe UI', sans-serif; background: #f6f7f9; color: #10141c; margin:0; }
   .cover { background: #05070b; color: #eaff3d; padding: 56px 48px 36px; }
@@ -151,7 +151,7 @@ function generateReport(detections, stats, city) {
 <body>
 <div class="cover">
   <h1>${cityTitle}</h1>
-  <p>RIDS — Road Infrastructure Detection System · Babeș-Bolyai University · Generated ${new Date().toLocaleString()}</p>
+  <p>RDDS · Road Degradation Detection System · Generated ${new Date().toLocaleString()}</p>
   <div class="dash"></div>
 </div>
 <div class="body">
@@ -208,7 +208,7 @@ function generateReport(detections, stats, city) {
   </div>
 </div>
 <div class="footer">
-  RIDS · Road Infrastructure Detection System · Babeș-Bolyai University, Faculty of Mathematics and Computer Science, 2026
+  RDDS · Road Degradation Detection System · 2026
 </div>
 <script>window.onload = () => window.print()</script>
 </body></html>`

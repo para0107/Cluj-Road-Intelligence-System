@@ -39,7 +39,7 @@ before passing paths to the orchestrator.
     Container: /app/data/raw/footage/20260523_120000_survey.mp4
     Host:      C:\\Facultate\\pothole-detection\\Pothole-Detection\\data\\raw\\footage\\20260523_120000_survey.mp4
 
-Author: Paraschiv Tudor — Babeș-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations
@@ -305,7 +305,7 @@ def main() -> None:
     _setup_logging()
 
     logger.info("=" * 60)
-    logger.info("RIDS job_watcher starting")
+    logger.info("RDDS job_watcher starting")
     logger.info("  Project root : %s", _PROJECT_ROOT)
     logger.info("  Data dir     : %s", _DATA_DIR_HOST)
     logger.info("  Jobs dir     : %s", _JOBS_DIR)

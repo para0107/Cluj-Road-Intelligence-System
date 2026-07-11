@@ -125,7 +125,7 @@ export default function Navbar() {
       <NavLink to="/" style={styles.brand}>
         <LogoMark />
         <div style={{ lineHeight: 1.15 }}>
-          <div className="display" style={styles.brandName}>RIDS</div>
+          <div className="display" style={styles.brandName}>RDDS</div>
           {!isMobile && <div style={styles.brandSub}>ROAD INTELLIGENCE NETWORK</div>}
         </div>
       </NavLink>

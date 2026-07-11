@@ -24,7 +24,7 @@ detector's bounding-box crop — no SAM, no Monodepth2, no extra VRAM,
     depth      — the full pipeline's own geometry fallback, verbatim:
                  area_norm · (0.5 + 0.5 · compactness)
                  (depth_estimator._geometry_proxy_depth — already a documented
-                 thesis heuristic for frames where Monodepth2 is unreliable)
+                 fallback heuristic for frames where Monodepth2 is unreliable)
 
 The signals then flow through the UNMODIFIED stage-5 formula
 (severity_classifier.classify_box): same per-class weights, same S1–S5

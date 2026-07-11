@@ -38,7 +38,7 @@ export default function CityGate() {
         <MapPin size={26} style={{ color: 'var(--accent)', marginBottom: 10 }} />
         <h2 className="display" style={{ fontSize: 20, fontWeight: 700 }}>Which city are you in?</h2>
         <p style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.6, margin: '10px 0 18px' }}>
-          RIDS opens the map on your city and routes your reports to the right
+          RDDS opens the map on your city and routes your reports to the right
           municipality. You can change it later from your profile menu.
         </p>
 

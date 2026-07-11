@@ -32,7 +32,7 @@ Usage (CLI):
         --output  data/validation_nrdd_2024/deduplicated/
         [--verbose]
 
-Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations
@@ -433,7 +433,7 @@ class Deduplicator:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>RIDS — Stage 7 Deduplication Report</title>
+<title>RDDS — Stage 7 Deduplication Report</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -448,7 +448,7 @@ class Deduplicator:
 </style>
 </head>
 <body>
-<h1>RIDS — Stage 7: Deduplication Report</h1>
+<h1>RDDS — Stage 7: Deduplication Report</h1>
 <h2>Summary</h2>
 <table>
   <tr><th>Metric</th><th>Value</th></tr>

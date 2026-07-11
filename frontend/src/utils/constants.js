@@ -58,11 +58,11 @@ export const SEVERITY_LABELS = {
 }
 
 export const SEVERITY_ACTIONS = {
-  1: 'Monitor — log and re-inspect at the next survey.',
-  2: 'Schedule — add to the routine maintenance plan.',
-  3: 'Priority repair — schedule within the current cycle.',
-  4: 'Urgent repair — dispatch a crew this week.',
-  5: 'Emergency — close the lane and repair immediately.',
+  1: 'Monitor: log it and re-inspect at the next survey.',
+  2: 'Schedule: add it to the routine maintenance plan.',
+  3: 'Priority repair: schedule it within the current cycle.',
+  4: 'Urgent repair: dispatch a crew this week.',
+  5: 'Emergency: close the lane and repair immediately.',
 }
 
 export const SEVERITY_SHORT = { 1: 'S1', 2: 'S2', 3: 'S3', 4: 'S4', 5: 'S5' }
@@ -81,7 +81,7 @@ export const CLUJ_LANDMARKS = [
   { name: 'Piața Unirii',        lat: 46.7694, lon: 23.5899 },
   { name: 'Gara CFR',            lat: 46.7847, lon: 23.5867 },
   { name: 'Cluj Arena',          lat: 46.7686, lon: 23.5725 },
-  { name: 'UBB — FSEGA',         lat: 46.7734, lon: 23.6193 },
+  { name: 'FSEGA',               lat: 46.7734, lon: 23.6193 },
   { name: 'Iulius Mall',         lat: 46.7735, lon: 23.6320 },
   { name: 'Aeroport Intl. Cluj', lat: 46.7852, lon: 23.6862 },
   { name: 'Mănăștur',            lat: 46.7568, lon: 23.5567 },

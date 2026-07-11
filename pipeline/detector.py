@@ -11,7 +11,7 @@ Responsibilities:
     is applied here so no box is silently discarded before we see it)
   - Return one DetectionResult per frame, containing all accepted bounding boxes
 
-Per-class thresholds (Section 4.10 of thesis):
+Per-class thresholds:
   - All damage classes:         0.35  (near F1 peak for Run 2)
   - lane_line_blur:             0.50  (interim — replace with F1-curve peak
                                        from model.val() on N-RDD2024 val split)
@@ -25,7 +25,6 @@ Severity overrides:
 TTA note:
   Test Time Augmentation was evaluated during training and produced zero
   accuracy improvement for RT-DETR on this dataset. Disabled here.
-  (Ref: Section 4.5 of thesis)
 
 N-RDD2024 class mapping (10-class schema, Kaya & Codur 2024):
   0 -> longitudinal_crack        (D00)
@@ -197,7 +196,7 @@ class DetectorConfig:
         Default: N-RDD2024 fine-tuned checkpoint (Run 2, mAP50=0.577 val).
 
     conf:
-        Reference confidence threshold documented in the thesis (0.35).
+        Reference confidence threshold (0.35).
         Note: Ultralytics model.predict() is actually called with conf=0.001
         and per-class filtering is applied as post-processing using
         CLASS_CONF_THRESHOLDS. This field is retained for documentation,

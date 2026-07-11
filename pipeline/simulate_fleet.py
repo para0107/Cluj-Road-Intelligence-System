@@ -175,15 +175,15 @@ AUTH_HEADERS: dict = {}
 def _login(api: str, email: str | None, password: str | None) -> None:
     """
     Live reporting requires an account. Credentials come from --email/--password
-    or env RIDS_EMAIL / RIDS_PASSWORD; the seeded admin works for local demos.
+    or env RDDS_EMAIL / RDDS_PASSWORD; the seeded admin works for local demos.
     """
     import os
-    email = email or os.getenv("RIDS_EMAIL")
-    password = password or os.getenv("RIDS_PASSWORD")
-    token = os.getenv("RIDS_TOKEN")
+    email = email or os.getenv("RDDS_EMAIL")
+    password = password or os.getenv("RDDS_PASSWORD")
+    token = os.getenv("RDDS_TOKEN")
     if not token:
         if not (email and password):
-            print("[x] Provide --email/--password (or RIDS_EMAIL/RIDS_PASSWORD, or RIDS_TOKEN).")
+            print("[x] Provide --email/--password (or RDDS_EMAIL/RDDS_PASSWORD, or RDDS_TOKEN).")
             raise SystemExit(1)
         r = requests.post(
             f"{api}/api/auth/login",
@@ -199,10 +199,10 @@ def _login(api: str, email: str | None, password: str | None) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="RIDS live-mode fleet simulator")
+    ap = argparse.ArgumentParser(description="RDDS live-mode fleet simulator")
     ap.add_argument("--api", default="http://localhost:8000", help="Backend base URL")
-    ap.add_argument("--email", default=None, help="Account e-mail (or env RIDS_EMAIL)")
-    ap.add_argument("--password", default=None, help="Account password (or env RIDS_PASSWORD)")
+    ap.add_argument("--email", default=None, help="Account e-mail (or env RDDS_EMAIL)")
+    ap.add_argument("--password", default=None, help="Account password (or env RDDS_PASSWORD)")
     ap.add_argument("--vehicles", type=int, default=4, help="Number of simulated cars")
     ap.add_argument("--speed", type=float, default=40.0, help="Vehicle speed (km/h)")
     ap.add_argument("--tick", type=float, default=1.5, help="Simulation tick (s)")

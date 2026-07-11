@@ -1,7 +1,7 @@
 """
 pipeline/preprocessor.py
 ------------------------
-Stage 1 of the RIDS inference pipeline.
+Stage 1 of the RDDS inference pipeline.
 
 Responsibilities:
   - Extract frames from a dashcam .mp4 at a configurable rate (default 2 fps)
@@ -29,7 +29,7 @@ The video start time is resolved in this order of preference:
      started recording at exactly the same moment — an assumption that is
      often false in practice.
 
-Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations
@@ -446,7 +446,7 @@ def _frame_timestamps(
 
 class Preprocessor:
     """
-    Stage 1 of the RIDS pipeline.
+    Stage 1 of the RDDS pipeline.
 
     GPS synchronisation
     -------------------
@@ -875,7 +875,7 @@ def _setup_logging(verbose: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="RIDS Stage 1 — Preprocessor: extract frames and sync GPS."
+        description="RDDS Stage 1 — Preprocessor: extract frames and sync GPS."
     )
     parser.add_argument("--video",    required=True, help="Path to dashcam .mp4")
     parser.add_argument("--gps",      required=True, help="Path to .gpx or BDD100K .json")

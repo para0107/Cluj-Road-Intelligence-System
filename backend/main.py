@@ -31,10 +31,10 @@ load_dotenv()
 # ─────────────────────────────────────────────
 
 app = FastAPI(
-    title="RIDS — Road Infrastructure Detection System API",
+    title="RDDS — Road Degradation Detection System API",
     description=(
         "Road damage detection, classification, and prioritization system "
-        "for Cluj-Napoca, Romania. Babeș-Bolyai University, 2026."
+        "for Cluj-Napoca, Romania."
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -77,7 +77,7 @@ app.include_router(cities.router,     prefix="/api", tags=["Cities"])
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting RIDS API...")
+    logger.info("Starting RDDS API...")
     # Live-mode WS broadcasts are scheduled from sync handlers via this loop.
     live_ws_manager.capture_loop()
     ok = check_connection()
@@ -99,6 +99,17 @@ async def startup_event():
                 "missing and their endpoints will return 500. Fix the schema "
                 "error above and restart the backend."
             )
+        # create_all never adds NEW indexes to EXISTING tables, so indexes
+        # that arrived after a volume was created are ensured here instead.
+        try:
+            from sqlalchemy import text
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_live_reports_created "
+                    "ON live_reports (created_at)"
+                ))
+        except Exception:
+            logger.exception("Could not ensure secondary indexes (non-fatal).")
         _seed_admin()
         logger.success("API ready.")
 
@@ -171,18 +182,36 @@ def _seed_admin() -> None:
 def root():
     return {
         "status": "ok",
-        "service": "RIDS — Road Infrastructure Detection System API",
+        "service": "RDDS — Road Degradation Detection System API",
         "version": "1.0.0",
+    }
+
+
+# Every open browser tab probes health every 30 s. The DB round-trip is
+# cached briefly so a thousand tabs cost the database one SELECT per 5 s.
+_health_cache = {"at": 0.0, "ok": False}
+
+
+def _db_ok_cached() -> bool:
+    import time
+    now = time.monotonic()
+    if now - _health_cache["at"] > 5.0:
+        _health_cache["ok"] = check_connection()
+        _health_cache["at"] = now
+    return _health_cache["ok"]
+
+
+def _health_payload() -> dict:
+    db_ok = _db_ok_cached()
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": "connected" if db_ok else "unreachable",
     }
 
 
 @app.get("/health", tags=["Health"])
 def health():
-    db_ok = check_connection()
-    return {
-        "status": "ok" if db_ok else "degraded",
-        "database": "connected" if db_ok else "unreachable",
-    }
+    return _health_payload()
 
 
 @app.get("/api/health", tags=["Health"])
@@ -192,11 +221,7 @@ def api_health():
     (which only forwards /api/*). Public on purpose: the navbar health dot
     must work on the login page, before any session exists.
     """
-    db_ok = check_connection()
-    return {
-        "status": "ok" if db_ok else "degraded",
-        "database": "connected" if db_ok else "unreachable",
-    }
+    return _health_payload()
 
 
 # ─────────────────────────────────────────────

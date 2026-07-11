@@ -1,7 +1,7 @@
 """
 pipeline/orchestrator.py
 ------------------------
-End-to-end coordinator for the Road Infrastructure Detection System (RIDS).
+End-to-end coordinator for the Road Degradation Detection System (RDDS).
 
 Stage sequence
 --------------
@@ -51,7 +51,7 @@ Usage (CLI):
         [--resume]
         [--verbose]
 
-Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations
@@ -844,7 +844,7 @@ def _setup_logging(verbose: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "RIDS pipeline (Stages 1–8). "
+            "RDDS pipeline (Stages 1–8). "
             "Enrichment permanently removed. "
             "DB credentials from .env."
         )

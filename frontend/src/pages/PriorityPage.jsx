@@ -52,7 +52,7 @@ export default function PriorityPage() {
     const rows = selectedItems.length > 0 ? selectedItems : items.slice(0, 20)
     const sevColors = { 1: '#3ddc84', 2: '#d4a900', 3: '#e08a30', 4: '#e04848', 5: '#a21caf' }
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>RIDS — Work order</title>
+<title>RDDS — Work order</title>
 <style>
   body { font-family:'Segoe UI',sans-serif; color:#10141c; margin:0; }
   .cover { background:#05070b; color:#eaff3d; padding:44px 44px 30px; }
@@ -67,7 +67,7 @@ export default function PriorityPage() {
 </style></head><body>
 <div class="cover">
   <h1>Road repair work order${user?.city ? ` — ${user.city}` : ''}</h1>
-  <p>RIDS priority queue · ${rows.length} sites · generated ${new Date().toLocaleString()}</p>
+  <p>RDDS priority queue · ${rows.length} sites · generated ${new Date().toLocaleString()}</p>
 </div>
 <div class="body">
 <table>

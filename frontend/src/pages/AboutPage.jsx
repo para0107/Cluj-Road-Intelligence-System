@@ -1,8 +1,8 @@
 /**
  * frontend/src/pages/AboutPage.jsx — "System" page.
  *
- * Explains what RIDS is, the model stack, the severity model, and the
- * execution architecture. Written for a thesis-defense / municipality demo.
+ * Explains what RDDS is, the model stack, the severity model, and the
+ * execution architecture. Written for a public / municipality demo.
  */
 
 import React from 'react'
@@ -49,8 +49,8 @@ export default function AboutPage() {
             A city-scale road survey<br />for the price of a dashcam.
           </h1>
           <p className="anim-fade-up delay-2" style={{ fontSize: 14, color: 'var(--text-dim)', lineHeight: 1.75, marginTop: 16 }}>
-            Traditional road inspections in Cluj-Napoca are manual, expensive and infrequent — a full
-            city survey can take months. RIDS replaces them with footage collected during normal
+            Traditional road inspections are manual, expensive and infrequent, and a full
+            city survey can take months. RDDS replaces them with footage collected during normal
             driving: an overnight processing run turns raw video into a georeferenced damage map with
             severity scores and a ranked repair list.
           </p>
@@ -96,8 +96,8 @@ export default function AboutPage() {
           ))}
         </div>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '14px 0 44px', lineHeight: 1.7, maxWidth: 760 }}>
-          The score combines four normalised signals — relative depth, mask area, interior contrast and
-          edge sharpness — with per-class weights, then applies a class-importance factor. Road-marking
+          The score combines four normalised signals (relative depth, mask area, interior contrast and
+          edge sharpness) with per-class weights, then applies a class-importance factor. Road-marking
           classes are structurally capped at S2: a blurred lane line is never an "emergency". Priority
           for the repair queue is <span className="mono">severity · log(times observed + 1)</span>, so
           persistent damage rises over time.
@@ -131,7 +131,7 @@ export default function AboutPage() {
         <div style={styles.archGrid}>
           <div className="card anim-fade-up delay-1" style={styles.archCard}>
             <Container size={18} style={{ color: 'var(--cyan)', marginBottom: 10 }} />
-            <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>Docker — the web stack</div>
+            <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>Docker: the web stack</div>
             <div style={styles.archText}>
               PostGIS, the FastAPI backend and this React frontend run in containers with no GPU and
               no ML dependencies. The backend accepts uploads and serves the map, stats and queue.
@@ -143,12 +143,12 @@ export default function AboutPage() {
             <div style={styles.archText}>
               The only bridge between the two worlds. The backend drops a job file; the host watcher
               picks it up; the orchestrator writes live progress back after every stage. No sockets,
-              no queues — a design that survives restarts on either side.
+              no queues, and the design survives restarts on either side.
             </div>
           </div>
           <div className="card anim-fade-up delay-3" style={styles.archCard}>
             <Cpu size={18} style={{ color: 'var(--green)', marginBottom: 10 }} />
-            <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>Host — the GPU pipeline</div>
+            <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>Host: the GPU pipeline</div>
             <div style={styles.archText}>
               A Windows host with CUDA runs the seven-stage pipeline: PyTorch, RT-DETR, SAM 2.1 and
               Monodepth2 process each survey and upsert results into PostGIS.
@@ -161,15 +161,15 @@ export default function AboutPage() {
           <GraduationCap size={26} style={{ color: 'var(--accent)', flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 260 }}>
             <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>
-              Bachelor's thesis — Babeș-Bolyai University
+              Open-source project
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
-              Faculty of Mathematics and Computer Science · Artificial Intelligence ·
+              Built with RT-DETR, SAM 2.1 and Monodepth2 ·
               Paraschiv Tudor · Cluj-Napoca, 2026
             </div>
           </div>
           <Link to="/ingest" className="btn btn-accent">
-            Try it — upload a survey <ArrowRight size={13} />
+            Try it: upload a survey <ArrowRight size={13} />
           </Link>
         </div>
       </div>

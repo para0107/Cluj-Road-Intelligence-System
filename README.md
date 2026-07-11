@@ -1,4 +1,4 @@
-# RIDS — Road Infrastructure Detection System
+# RDDS — Road Degradation Detection System
 
 > **Automated urban road-damage detection, classification, prioritization, and real-time
 > crowd-sensing from dashcam footage — built for Cluj-Napoca, Romania.**
@@ -12,8 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-15--3.3-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgis.net)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 
-**Bachelor's Thesis — Babeș-Bolyai University, Faculty of Mathematics and Computer Science**
-**Specialization: Artificial Intelligence · Author: Paraschiv Tudor · 2026**
+**Open-source road monitoring platform · Author: Paraschiv Tudor · 2026**
 
 [GitHub Repository](https://github.com/para0107/Cluj-Road-Intelligence-System)
 
@@ -53,7 +52,7 @@
 
 ## Overview
 
-RIDS is an end-to-end urban infrastructure monitoring platform with **two complementary
+RDDS is an end-to-end urban infrastructure monitoring platform with **two complementary
 workflows**:
 
 **1 — Survey mode (deep analysis).** A raw `.mp4` drive video (optionally with a `.gpx`
@@ -93,7 +92,7 @@ urban road infrastructure is a significant contributing factor. Traditional cond
 in Cluj-Napoca rely on manual inspection — expensive, infrequent, and subjective; a full
 city-wide survey can take months.
 
-RIDS proposes an automated alternative that any municipality can adopt with minimal hardware
+RDDS proposes an automated alternative that any municipality can adopt with minimal hardware
 investment. Footage collected during normal vehicle operation is processed automatically into
 a continuously updated georeferenced damage map with severity scores and a ranked repair
 list — and the live mode turns every participating driver into a real-time road sensor at
@@ -136,7 +135,7 @@ zero marginal server cost.
 
 ## The two-context execution model
 
-This is the single most important thing to understand about RIDS.
+This is the single most important thing to understand about RDDS.
 
 The backend container **cannot** run the ML pipeline: it has no GPU, no PyTorch/Ultralytics/
 SAM/Monodepth2 in its image (`backend/requirements.backend.txt` is runtime-only), and no
@@ -343,7 +342,7 @@ proxy — pipeline/lite_severity.py) ─► local dedup (--min-gap-m 20, --coold
   position from `--gps track.gpx` (time-interpolated) or fixed `--lat/--lon`.
 - **Auth:** `--pair <CODE>` (pairing code from the Live page → saves a JWT to
   `~/.rids_live_token`; no password ever typed on the car PC), or `--token`, or
-  `--email/--password` (env `RIDS_TOKEN` / `RIDS_EMAIL` / `RIDS_PASSWORD`).
+  `--email/--password` (env `RDDS_TOKEN` / `RDDS_EMAIL` / `RDDS_PASSWORD`).
 - **Identity:** stable per-machine device id persisted in `~/.rids_device_id`.
 - `pipeline/simulate_fleet.py` — multi-vehicle live-mode demo, no GPU needed.
 
@@ -843,7 +842,7 @@ Compose (`env_file`). Groups:
 - **Live mode**: `LIVE_CLUSTER_RADIUS_M` (25), `LIVE_EVENT_TTL_H` (72),
   `LIVE_CONFIRM_DEVICES` (2), `LIVE_VERIFY_DEVICES` (3), `LIVE_DISPUTE_MIN` (2),
   `LIVE_PAIR_CODE_TTL_MIN` (15). Edge agents: `LIVE_API_URL`,
-  `RIDS_TOKEN / RIDS_EMAIL / RIDS_PASSWORD`.
+  `RDDS_TOKEN / RDDS_EMAIL / RDDS_PASSWORD`.
 - **Host paths (relative to project root)**: `MONODEPTH_ROOT=ml/weights`,
   `MONODEPTH_WEIGHTS_DIR=ml/weights/mono_640x192`, `WEIGHTS_DIR=ml/weights`,
   `RAW_FOOTAGE_DIR`, `RAW_GPS_DIR`. `PROJECT_ROOT` stays **unset** (the watcher
@@ -1007,8 +1006,7 @@ runtime.
 
 ## License & attribution
 
-Academic project — Bachelor's thesis, Babeș-Bolyai University, Faculty of Mathematics and
-Computer Science (Artificial Intelligence specialization), **Paraschiv Tudor, 2026**.
+Open-source project by **Paraschiv Tudor, 2026**.
 
 **Model & dataset references**
 

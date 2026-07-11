@@ -1,6 +1,6 @@
 # Security hardening — what was fixed and how
 
-This document records the security review of the RIDS codebase and the fixes
+This document records the security review of the RDDS codebase and the fixes
 applied. Numbers match the original review findings.
 
 ## Fixed
@@ -95,4 +95,4 @@ rolls back, and returns a clean **409**.
 - CORS remains `allow_origins=["*"]` for local development — tighten to the
   real frontend origin for any public deployment.
 - `.env` holds all secrets in one file on the deployment host — acceptable for
-  a thesis project; use a secret manager beyond that.
+  a small deployment; use a secret manager beyond that.

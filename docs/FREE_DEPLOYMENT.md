@@ -1,11 +1,11 @@
-# Deploying RIDS for free — options and recommendations
+# Deploying RDDS for free — options and recommendations
 
 These are **suggestions only** — nothing here is wired into the code, and none
 of it requires a credit card. Ordered by how well each fits this project.
 
 ## 0. The built-in answer: don't host the model at all
 
-RIDS is already architected so the **server never runs ML**. The lite pipeline
+RDDS is already architected so the **server never runs ML**. The lite pipeline
 (`pipeline/live_pipeline.py`) executes RT-DETR on each user's own machine and
 posts only tiny JSON reports. That means:
 
@@ -22,7 +22,7 @@ CPU-only users run the free one-time ONNX export
 
 | Option | What you get | Catch |
 |---|---|---|
-| **Your own PC + Cloudflare Tunnel** | The existing `docker compose` stack becomes publicly reachable over HTTPS via a free `cloudflared` tunnel. Zero changes to the repo. | PC must stay on; free tunnel has no SLA. **Best for the thesis demo.** |
+| **Your own PC + Cloudflare Tunnel** | The existing `docker compose` stack becomes publicly reachable over HTTPS via a free `cloudflared` tunnel. Zero changes to the repo. | PC must stay on; free tunnel has no SLA. **Best for a live demo.** |
 | **Oracle Cloud Always Free** | Ampere A1 VM (up to 4 OCPU / 24 GB RAM) — comfortably runs Docker + PostGIS + even CPU ONNX inference. Genuinely always-free, not a trial. | Sign-up requires a card for identity (not charged); capacity in EU regions is sometimes scarce — retry. |
 | **Hugging Face Spaces (Docker)** | Free CPU Space runs a container — good for a public detector demo (upload image → boxes). | 16 GB disk / 2 vCPU; sleeps when idle; not meant for a persistent PostGIS. |
 | **Render free web service** | Managed deploy of the FastAPI image from the repo. | Spins down after ~15 min idle (cold starts); free Postgres expires after 90 days. |

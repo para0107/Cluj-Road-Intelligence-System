@@ -69,7 +69,7 @@ Usage
     # Dry-run: print detected points, do not write file
     python scripts/extract_gpx_from_video.py path/to/survey.mp4 --dry_run
 
-RIDS pipeline handoff
+RDDS pipeline handoff
 ─────────────────────
 After extraction, drop the video + gpx into the frontend upload form, or call
 the orchestrator directly:
@@ -1648,7 +1648,7 @@ def _build_gpx_xml(points: List[GPSPoint], source_name: str) -> str:
 
     gpx = ET.Element(f"{{{GPX_NS}}}gpx")
     gpx.set("version", "1.1")
-    gpx.set("creator", f"RIDS extract_gpx_from_video.py — source: {source_name}")
+    gpx.set("creator", f"RDDS extract_gpx_from_video.py — source: {source_name}")
     gpx.set(f"{{{XSI_NS}}}schemaLocation", SCHEMA)
 
     trk     = ET.SubElement(gpx, f"{{{GPX_NS}}}trk")
@@ -1899,11 +1899,11 @@ def main() -> None:
 
     log.info("GPX written → %s  (%d points)", out_path, len(points))
 
-    # Print RIDS handoff hint
+    # Print RDDS handoff hint
     print(
         f"\n✓  Extracted {len(points)} GPS points  [{used_strategy}]"
         f"\n   Output → {out_path}"
-        f"\n\nRIDS pipeline handoff:"
+        f"\n\nRDDS pipeline handoff:"
         f"\n   python pipeline/orchestrator.py \\"
         f"\n       --video {mp4_path} \\"
         f"\n       --gps   {out_path} \\"

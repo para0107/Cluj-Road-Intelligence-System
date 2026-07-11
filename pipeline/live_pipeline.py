@@ -39,8 +39,8 @@ Auth
 Live reporting requires an account (see backend/routes/auth.py). Options:
   --pair <CODE>                              # code from Live page → Devices panel;
                                              # saves a token to ~/.rids_live_token
-  --token <jwt>                              # or env RIDS_TOKEN
-  --email x@y.z --password ...               # or env RIDS_EMAIL / RIDS_PASSWORD
+  --token <jwt>                              # or env RDDS_TOKEN
+  --email x@y.z --password ...               # or env RDDS_EMAIL / RDDS_PASSWORD
 
 Examples
 --------
@@ -187,8 +187,8 @@ class LiveApi:
                 "[x] Live reporting requires an account.\n"
                 "    Easiest: open the Live page → Devices → 'Pair a dashcam / PC'\n"
                 "    and run:  python pipeline/live_pipeline.py --pair <CODE>\n"
-                "    Or pass --token, or --email/--password (or set RIDS_TOKEN / "
-                "RIDS_EMAIL / RIDS_PASSWORD in the environment)."
+                "    Or pass --token, or --email/--password (or set RDDS_TOKEN / "
+                "RDDS_EMAIL / RDDS_PASSWORD in the environment)."
             )
             raise SystemExit(1)
         r = requests.post(
@@ -281,7 +281,7 @@ def export_onnx(weights: Path, imgsz: int, quantize: bool) -> int:
 # ── Main loop ───────────────────────────────────────────────────────────────
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="RIDS lite pipeline — per-user live edge agent")
+    ap = argparse.ArgumentParser(description="RDDS lite pipeline — per-user live edge agent")
     src = ap.add_mutually_exclusive_group()
     src.add_argument("--video", help="Dashcam video file to replay")
     src.add_argument("--camera", type=int, help="Webcam index (e.g. 0)")
@@ -291,9 +291,9 @@ def main() -> int:
 
     ap.add_argument("--api", default=_DEFAULT_API, help=f"Backend base URL (default {_DEFAULT_API})")
     ap.add_argument("--device-id", default=None, help="Stable device identity (default: ~/.rids_device_id)")
-    ap.add_argument("--token", default=os.getenv("RIDS_TOKEN"), help="JWT (or env RIDS_TOKEN)")
-    ap.add_argument("--email", default=os.getenv("RIDS_EMAIL"), help="Account e-mail (or env RIDS_EMAIL)")
-    ap.add_argument("--password", default=os.getenv("RIDS_PASSWORD"), help="Account password (or env RIDS_PASSWORD)")
+    ap.add_argument("--token", default=os.getenv("RDDS_TOKEN"), help="JWT (or env RDDS_TOKEN)")
+    ap.add_argument("--email", default=os.getenv("RDDS_EMAIL"), help="Account e-mail (or env RDDS_EMAIL)")
+    ap.add_argument("--password", default=os.getenv("RDDS_PASSWORD"), help="Account password (or env RDDS_PASSWORD)")
 
     ap.add_argument("--weights", default=str(_DEFAULT_PT), help="best.pt or an exported .onnx")
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"], help="Inference device")

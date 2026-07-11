@@ -138,8 +138,8 @@ export default function LoginPage() {
 
         <div style={styles.fineprint}>
           Sign in with Google is free to enable (set <span className="mono">GOOGLE_CLIENT_ID</span>).
-          Apple Sign-In is not offered — it requires the paid Apple Developer Program,
-          and this project runs at zero cost.
+          Apple Sign-In is not offered because it requires the paid Apple Developer
+          Program, and this project runs at zero cost.
         </div>
       </div>
     </div>

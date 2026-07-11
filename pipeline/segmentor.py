@@ -61,7 +61,7 @@ Usage (CLI):
         [--device cuda]
         [--verbose]
 
-Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations
@@ -329,7 +329,7 @@ class SegmentationResult:
 # ---------------------------------------------------------------------------
 # Geometry computation
 # Ported directly from scripts/detect_and_sam.py — do not modify the logic
-# without also updating the validation script and chapter 3 of the thesis.
+# without also updating the validation script and the project docs.
 # ---------------------------------------------------------------------------
 
 def _compute_geometry(mask_uint8: np.ndarray, image_bgr: np.ndarray) -> MaskGeometry:

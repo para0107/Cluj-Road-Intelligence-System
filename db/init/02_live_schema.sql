@@ -49,5 +49,7 @@ CREATE TABLE IF NOT EXISTS live_reports (
     note        TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_live_reports_event  ON live_reports (event_id);
-CREATE INDEX IF NOT EXISTS idx_live_reports_device ON live_reports (event_id, device_id);
+CREATE INDEX IF NOT EXISTS idx_live_reports_event   ON live_reports (event_id);
+CREATE INDEX IF NOT EXISTS idx_live_reports_device  ON live_reports (event_id, device_id);
+-- /live/stats counts reports from the last hour
+CREATE INDEX IF NOT EXISTS idx_live_reports_created ON live_reports (created_at);

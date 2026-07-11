@@ -28,11 +28,17 @@ if not DATABASE_URL:
 # ─── Engine ──────────────────────────────────────────────────────────────────
 # pool_pre_ping=True — test connections before use (handles Docker restarts)
 # echo=False — set True temporarily if you want to see raw SQL for debugging
+#
+# Pool sizing: FastAPI runs sync routes on a ~40-thread executor, so the pool
+# must be able to serve bursts without threads queueing on connections.
+# Defaults handle ~1000 casual concurrent users; override via .env if needed.
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "15")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "25")),
+    pool_timeout=int(os.getenv("DB_POOL_TIMEOUT_S", "30")),
+    pool_recycle=1800,
     echo=False,
 )
 

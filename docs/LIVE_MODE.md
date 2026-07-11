@@ -1,6 +1,6 @@
-# RIDS Live Mode — Waze for road damage
+# RDDS Live Mode — Waze for road damage
 
-Live mode turns RIDS from a batch survey tool into a real-time, crowd-validated
+Live mode turns RDDS from a batch survey tool into a real-time, crowd-validated
 hazard network. It coexists with Survey mode in the same app — the landing page
 lets you pick either path.
 
@@ -81,7 +81,7 @@ All live actions require a signed-in account (JWT): `user` reports and votes,
 and manage repairs; admins manage accounts at `/admin`. The starting admin is
 seeded at backend startup (`ADMIN_USERNAME`/`ADMIN_EMAIL`/`ADMIN_PASSWORD`).
 Edge agents authenticate with `--email/--password`, `--token`, or the
-`RIDS_EMAIL`/`RIDS_PASSWORD`/`RIDS_TOKEN` environment variables.
+`RDDS_EMAIL`/`RDDS_PASSWORD`/`RDDS_TOKEN` environment variables.
 
 ## Running the demo
 

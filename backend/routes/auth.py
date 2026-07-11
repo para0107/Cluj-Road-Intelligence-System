@@ -213,7 +213,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     if not (payload.city and payload.city.strip()):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Please select your city — the map opens on it and municipality "
+            "Please select your city. The map opens on it and municipality "
             "accounts are scoped to it.",
         )
 
@@ -317,7 +317,7 @@ def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
     if not pending.code_expires_at or pending.code_expires_at < _now():
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "The confirmation code expired — request a new one.",
+            "The confirmation code expired. Please request a new one.",
         )
     if not (pending.email_code and hmac.compare_digest(pending.email_code, payload.code.strip())):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Wrong confirmation code.")
@@ -332,12 +332,12 @@ def verify_email(payload: VerifyEmailRequest, db: Session = Depends(get_db)):
         return RegisterOutcome(
             status="awaiting_approval", email=pending.email,
             message="E-mail confirmed. A platform admin must now approve your "
-                    "municipality account — you will be notified by e-mail.",
+                    "municipality account. You will be notified by e-mail.",
         )
 
     user = _create_user_from_pending(db, pending)
     send_welcome_email(user.email, user.username, user.role, user.city)
-    return _ok_outcome(user, "E-mail confirmed — welcome aboard!")
+    return _ok_outcome(user, "E-mail confirmed. Welcome aboard!")
 
 
 _resend_lock = threading.Lock()
@@ -411,7 +411,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 )
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
-                "Confirm your e-mail first — check your inbox for the code.",
+                "Confirm your e-mail first. Check your inbox for the code.",
             )
         _rl_fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong username/e-mail or password.")
@@ -441,7 +441,7 @@ def auth_config():
 def google_login(body: dict, db: Session = Depends(get_db)):
     """
     Exchange a Google ID token (from Google Identity Services on the frontend)
-    for a RIDS JWT. Verification uses Google's public tokeninfo endpoint —
+    for a RDDS JWT. Verification uses Google's public tokeninfo endpoint —
     free, no SDK, no billing. Creates the account on first login (Google has
     already verified the e-mail, so the code step is skipped).
     """
@@ -495,7 +495,7 @@ def google_login(body: dict, db: Session = Depends(get_db)):
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Account collision — try again.")
+        raise HTTPException(status.HTTP_409_CONFLICT, "Account collision. Please try again.")
     db.refresh(user)
     return _token_response(user)
 
@@ -565,7 +565,7 @@ def delete_me(
         if other_admins == 0:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                "You are the last active admin — promote another admin before "
+                "You are the last active admin. Promote another admin before "
                 "deleting this account.",
             )
 

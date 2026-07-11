@@ -92,7 +92,7 @@ Usage (CLI):
         --output           data/processed/severity/run/
         [--verbose]
 
-Author: Paraschiv Tudor -- Babes-Bolyai University, 2026
+Author: Paraschiv Tudor, 2026
 """
 
 from __future__ import annotations

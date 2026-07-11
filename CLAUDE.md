@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-RIDS — Road Infrastructure Detection System. Detects, classifies, and prioritizes road damage
+RDDS — Road Degradation Detection System. Detects, classifies, and prioritizes road damage
 in Cluj-Napoca from dashcam video (.mp4 + optional .gpx) via a 7-stage CV pipeline
 (RT-DETR-L → SAM 2.1 → Monodepth2 → rule-based severity → DBSCAN dedup → PostGIS), served by a
-FastAPI API and a React + Leaflet SPA. Bachelor's thesis project (Babeș-Bolyai University, 2026).
+FastAPI API and a React + Leaflet SPA.
 The README.md is thorough and current — read it for full detail; this file is the condensed
 operating guide.
 
@@ -164,7 +164,7 @@ or stdlib SMTP (`SMTP_HOST/PORT/USERNAME/PASSWORD/FROM`).
 
 Google OAuth is optional and free (set `GOOGLE_CLIENT_ID`); Apple Sign-In is deliberately
 absent (paid Apple program — violates the project's zero-cost rule). Edge scripts
-authenticate via `--email/--password/--token` or `RIDS_EMAIL/RIDS_PASSWORD/RIDS_TOKEN`.
+authenticate via `--email/--password/--token` or `RDDS_EMAIL/RDDS_PASSWORD/RDDS_TOKEN`.
 
 **Landmark lookups are NOT pipeline enrichment.** The enrichment ban above applies to
 the detection pipeline and DB columns. `backend/routes/cities.py` may call Nominatim
@@ -206,14 +206,32 @@ every user runs their own lite instance; the server stays a stateless aggregator
 CUDA) and uses fp16 (`DETECTOR_HALF`, auto on CUDA); `DETECTOR_IMGSZ` overrides input
 size. Batching never changes detections; fp16 differences are negligible (<1e-3).
 
+**Read-path scaling (load-tested at 500 concurrent clients, zero errors):**
+`GET /live/events` + `/live/stats` serve from a short in-process cache
+(`LIVE_READ_CACHE_S`, 2 s) that every mutation clears via `_broadcast`; the health
+probes cache the DB ping for 5 s; WS fan-out sends concurrently (one slow client
+can't stall the rest); DB pool is env-tunable (`DB_POOL_SIZE`/`DB_MAX_OVERFLOW`,
+15/25). Keep ONE uvicorn worker: WS fan-out is per-process (Redis pub/sub is the
+documented multi-worker upgrade path in `live_manager.py`). New indexes on existing
+tables must be added BOTH to the model and as idempotent `CREATE INDEX IF NOT
+EXISTS` in `main.py::startup` (create_all won't add them) plus the SQL init file.
+
+**User-facing copy style:** plain sentences, no em-dashes, no academic references —
+this includes e-mails (`backend/notify.py`, signed "The RDDS team"), API error
+`detail` strings, and UI text. The brand is "RDDS — Road Degradation Detection
+System"; internal keys (`rids_*` localStorage, `cluj_monitor_*` containers) are
+deliberately NOT renamed.
+
 ## Layout notes
 
 - `backend/` — FastAPI (routes: auth, detections, stats, heatmap, priority, export,
   ingest, live, cities).
 - `pipeline/` — the 7 stage modules + `orchestrator.py` + `job_watcher.py`.
-- `docs/` — `LIVE_MODE.md`, `FUNCTIONALITY.md`, `SECURITY.md`, `DEPLOYMENT_GUIDE.md`
+- `docs/` — `LIVE_MODE.md`, `FUNCTIONALITY.md`, `SECURITY.md`, `FREE_DEPLOYMENT.md`
   (free split hosting: Vercel static frontend + host backend via `VITE_API_URL`).
-- `ml/` — training/research only (never imported by the backend); inference reads `ml/weights/`.
+- `ml/` — training/research only (never imported by the backend); inference reads
+  `ml/weights/` (not in git; `python scripts/download_weights.py --dataset <kaggle id>`
+  fetches them, or set `KAGGLE_WEIGHTS_DATASET` in `.env`).
 - `scripts/` — one-off setup/validation utilities; legacy `validate_*.py` still hardcode
   absolute paths (research tools, not runtime).
 - `scheduler/daily_job.py` — optional APScheduler nightly run.
