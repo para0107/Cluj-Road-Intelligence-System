@@ -26,6 +26,7 @@ Env (.env):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -52,6 +53,80 @@ _DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
 
 _UPSERT_RADIUS_M = float(os.environ.get("DEDUP_CLUSTER_RADIUS_M", "2.0"))
 _DENSITY_RADIUS_M = float(os.environ.get("SURROUNDING_DENSITY_RADIUS_M", "50.0"))
+
+# ---------------------------------------------------------------------------
+# Evidence crops (optional, never fatal)
+# ---------------------------------------------------------------------------
+# For every written detection, a small JPG crop of the damage is saved under
+# <session>/07_db_write/evidence/ and its data-dir-relative path is stored in
+# detections.crop_path — the backend serves it at /api/media/evidence/{id}.
+# Kill switch: EVIDENCE_CROPS=false in .env. Any failure (missing frame,
+# missing cv2, bad box) silently skips the crop; DB writes are unaffected.
+_EVIDENCE_ENABLED = os.environ.get("EVIDENCE_CROPS", "true").strip().lower() not in ("0", "false", "no")
+_EVIDENCE_MARGIN_PX = 12
+_EVIDENCE_MAX_PX = 640
+_EVIDENCE_JPEG_QUALITY = 82
+
+
+def _data_relative(path: Path) -> Optional[str]:
+    """Path relative to the shared data/ tree, POSIX-style.
+
+    The backend joins this against PROJECT_DATA_DIR (/app/data in Docker),
+    so it must start at the 'processed' segment: e.g.
+    'processed/sessions/20260711_120000/07_db_write/evidence/ab12cd34ef56aa00.jpg'.
+    """
+    parts = path.resolve().parts
+    if "processed" not in parts:
+        return None
+    idx = parts.index("processed")
+    return "/".join(parts[idx:])
+
+
+def _write_evidence_crop(box: dict, frame_path: str, evidence_dir: Optional[Path]) -> Optional[str]:
+    """Crop the detection's bbox out of its source frame. Returns the
+    data-dir-relative JPG path, or None (crop unavailable — never an error)."""
+    if not (_EVIDENCE_ENABLED and evidence_dir and frame_path):
+        return None
+    try:
+        coords = [box.get(k) for k in ("x1", "y1", "x2", "y2")]
+        if any(c is None for c in coords):
+            return None
+        src = Path(frame_path)
+        if not src.is_file():
+            return None
+
+        import cv2   # lazy: only the host pipeline environment has OpenCV
+
+        img = cv2.imread(str(src))
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        x1 = max(int(coords[0]) - _EVIDENCE_MARGIN_PX, 0)
+        y1 = max(int(coords[1]) - _EVIDENCE_MARGIN_PX, 0)
+        x2 = min(int(coords[2]) + _EVIDENCE_MARGIN_PX, w)
+        y2 = min(int(coords[3]) + _EVIDENCE_MARGIN_PX, h)
+        if x2 - x1 < 4 or y2 - y1 < 4:
+            return None
+        crop = img[y1:y2, x1:x2]
+
+        ch, cw = crop.shape[:2]
+        longest = max(ch, cw)
+        if longest > _EVIDENCE_MAX_PX:
+            scale = _EVIDENCE_MAX_PX / float(longest)
+            crop = cv2.resize(crop, (max(int(cw * scale), 1), max(int(ch * scale), 1)))
+
+        digest = hashlib.sha1(
+            f"{frame_path}|{x1},{y1},{x2},{y2}".encode("utf-8")
+        ).hexdigest()[:16]
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        out_path = evidence_dir / f"{digest}.jpg"
+        if not cv2.imwrite(str(out_path), crop,
+                           [int(cv2.IMWRITE_JPEG_QUALITY), _EVIDENCE_JPEG_QUALITY]):
+            return None
+        return _data_relative(out_path)
+    except Exception:
+        logger.debug("Evidence crop failed for %s (non-fatal).", frame_path, exc_info=True)
+        return None
 
 # ---------------------------------------------------------------------------
 # Severity mapping
@@ -213,6 +288,8 @@ class DbWriter:
         n_skipped_dup = 0
         n_errors = 0
 
+        evidence_dir = (Path(output_dir) / "evidence") if output_dir else None
+
         if not self.cfg.dry_run:
             self._connect()
 
@@ -246,6 +323,7 @@ class DbWriter:
                             det_date=det_date,
                             lighting=lighting,
                             frame_path=frame_path,
+                            crop_path=_write_evidence_crop(box, frame_path, evidence_dir),
                         )
                     except Exception:
                         logger.exception("Row build error (frame=%s)", frame_path)
@@ -301,6 +379,7 @@ class DbWriter:
         det_date: date,
         lighting: str,
         frame_path: str,
+        crop_path: Optional[str] = None,
     ) -> dict:
         sev_level, sev_int, sev_conf = _extract_severity(box)
         depth_est, depth_conf = _extract_depth(box)
@@ -316,6 +395,7 @@ class DbWriter:
             "damage_type": str(damage_type),
             "confidence": float(confidence),
             "frame_path": frame_path,
+            "crop_path": crop_path,
 
             "surface_area_cm2": float(area),
             "edge_sharpness": float(edge),
@@ -373,7 +453,7 @@ class DbWriter:
                 """
                 INSERT INTO detections (
                     geom, latitude, longitude,
-                    damage_type, confidence, frame_path,
+                    damage_type, confidence, frame_path, crop_path,
                     surface_area_cm2, edge_sharpness, interior_contrast, mask_compactness,
                     depth_estimate_cm, depth_confidence,
                     lighting_condition,
@@ -384,7 +464,7 @@ class DbWriter:
                     survey_date, survey_video_file
                 ) VALUES (
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s,
-                    %s, %s, %s,
+                    %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s,
                     %s,
@@ -398,7 +478,7 @@ class DbWriter:
                 (
                     lon, lat,  # geom point
                     row["latitude"], row["longitude"],
-                    row["damage_type"], row["confidence"], row["frame_path"],
+                    row["damage_type"], row["confidence"], row["frame_path"], row["crop_path"],
                     row["surface_area_cm2"], row["edge_sharpness"], row["interior_contrast"], row["mask_compactness"],
                     row["depth_estimate_cm"], row["depth_confidence"],
                     row["lighting_condition"],
@@ -436,13 +516,14 @@ class DbWriter:
                 severity=%s,
                 severity_confidence=%s,
                 confidence=%s,
+                crop_path=COALESCE(%s, crop_path),
                 updated_at=NOW()
             WHERE id=%s;
             """,
             (
                 today, new_count, detn_rate, new_pri,
                 row["severity"], row["severity_confidence"],
-                row["confidence"], existing_id,
+                row["confidence"], row["crop_path"], existing_id,
             ),
         )
         self._update_density(lon, lat)

@@ -22,6 +22,11 @@ import {
 } from '../utils/constants'
 import { Kpi, SectionTitle } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
+import useMotionOk from '../hooks/useMotionOk'
+import { useIsDark } from '../hooks/useTheme'
+import Aurora from '../reactbits/Aurora/Aurora'
+import SplitText from '../reactbits/SplitText/SplitText'
+import ShinyText from '../reactbits/ShinyText/ShinyText'
 
 const STAGE_ICONS = [ScanLine, Radar, Layers, Ruler, Gauge, Copy, Database]
 
@@ -30,6 +35,8 @@ export default function HomePage() {
   const { user, isOperator } = useAuth()
   const { data: stats } = useApi(fetchStats, [])
   const cityName = user?.city || 'your city'
+  const motionOk = useMotionOk()
+  const isDark = useIsDark()
 
   const severityData = useMemo(() => {
     const rows = stats?.severity_breakdown || []
@@ -57,6 +64,20 @@ export default function HomePage() {
 
   return (
     <div style={styles.page} className="page-grid-bg">
+      {/* Aurora sits behind the hero only, and only on a device that can spare
+          the frames. With motion off, .page-grid-bg carries the look. */}
+      {motionOk && (
+        <div style={styles.aurora}>
+          <Aurora
+            colorStops={isDark
+              ? ['#eaff3d', '#4cc9f0', '#3ddc84']
+              : ['#99a800', '#4cc9f0', '#3ddc84']}
+            amplitude={0.9}
+            blend={0.45}
+          />
+        </div>
+      )}
+
       <div style={styles.inner}>
 
         {/* ── Hero ─────────────────────────────────────────────────────── */}
@@ -66,11 +87,29 @@ export default function HomePage() {
               <MapPin size={12} />
               {(user?.city || 'ROAD INTELLIGENCE NETWORK').toUpperCase()}
             </div>
-            <h1 className="display anim-fade-up delay-1" style={styles.heroTitle}>
-              Every street.<br />
-              Every crack.<br />
-              <span className="text-gradient" style={{ textShadow: 'none' }}>Mapped &amp; ranked.</span>
-            </h1>
+
+            {motionOk ? (
+              <h1 className="display" style={styles.heroTitle}>
+                <SplitText
+                  text="Every street. Every crack."
+                  tag="span"
+                  splitType="chars"
+                  delay={22}
+                  duration={0.8}
+                  textAlign="left"
+                  className="display"
+                />
+                <br />
+                <span className="text-gradient" style={{ textShadow: 'none' }}>Mapped &amp; ranked.</span>
+              </h1>
+            ) : (
+              <h1 className="display anim-fade-up delay-1" style={styles.heroTitle}>
+                Every street.<br />
+                Every crack.<br />
+                <span className="text-gradient" style={{ textShadow: 'none' }}>Mapped &amp; ranked.</span>
+              </h1>
+            )}
+
             <div className="road-divider anim-fade-up delay-2" style={{ width: 180, margin: '22px 0' }} />
             <p className="anim-fade-up delay-2" style={styles.heroSub}>
               RDDS turns ordinary dashcam footage into a live, georeferenced map of road
@@ -81,7 +120,11 @@ export default function HomePage() {
             <div className="anim-fade-up delay-3" style={{ display: 'flex', gap: 10, marginTop: 26, flexWrap: 'wrap' }}>
               {/* Citizens land on the Live map — the operator pages 404 for them */}
               <Link to={isOperator ? '/map' : '/live'} className="btn btn-accent" style={{ padding: '11px 20px', fontSize: 13 }}>
-                <Map size={15} /> Open the live map <ArrowRight size={14} />
+                <Map size={15} />
+                {motionOk
+                  ? <ShinyText text="Open the live map" speed={3} color="var(--accent-ink)" shineColor="#ffffff" />
+                  : 'Open the live map'}
+                <ArrowRight size={14} />
               </Link>
               {isOperator ? (
                 <Link to="/ingest" className="btn" style={{ padding: '11px 20px', fontSize: 13 }}>
@@ -328,8 +371,21 @@ const styles = {
     minHeight: '100%',
     paddingTop: 'var(--nav-h)',
     overflowX: 'hidden',
+    position: 'relative',
+  },
+  aurora: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 440,
+    zIndex: 0,
+    opacity: 0.32,
+    pointerEvents: 'none',
   },
   inner: {
+    position: 'relative',
+    zIndex: 1,
     maxWidth: 1160,
     margin: '0 auto',
     padding: '0 28px 40px',

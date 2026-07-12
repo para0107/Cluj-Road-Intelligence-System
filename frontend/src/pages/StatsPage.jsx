@@ -10,16 +10,21 @@ import React, { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Radar, AlertTriangle, Gauge, CheckCircle2, TrendingUp, Layers, Target, ArrowRight,
+  Clock, Wrench, RotateCcw, Banknote, Printer, Activity,
 } from 'lucide-react'
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, AreaChart, Area, Legend,
+  CartesianGrid, AreaChart, Area, Legend, ComposedChart, Line,
 } from 'recharts'
 import { useApi } from '../hooks/useApi'
-import { fetchStats, fetchDetections } from '../utils/api'
-import { fmtNum, fmtDate, fmtPct } from '../utils/format'
-import { CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS } from '../utils/constants'
+import { fetchStats, fetchDetections, fetchOpsAnalytics } from '../utils/api'
+import { fmtNum, fmtDate, fmtPct, fmtRon } from '../utils/format'
+import {
+  CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS,
+  WORK_ORDER_LABELS, WORK_ORDER_COLORS,
+} from '../utils/constants'
 import { Kpi, SectionTitle, Spinner, CenterState, EmptyState, ProgressBar } from '../components/ui'
+import { printCityReport } from '../utils/cityReport'
 import { useAuth } from '../context/AuthContext'
 
 const tooltipStyle = {
@@ -35,6 +40,7 @@ export default function StatsPage() {
   const { user } = useAuth()
   const { data: stats, loading: statsLoading, error } = useApi(fetchStats, [])
   const { data: detData } = useApi(() => fetchDetections({ page: 1, page_size: 5000 }), [])
+  const { data: ops, loading: opsLoading, error: opsError } = useApi(fetchOpsAnalytics, [])
   const detections = detData?.items || []
 
   // ── Derived datasets ─────────────────────────────────────────────────────

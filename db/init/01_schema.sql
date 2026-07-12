@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS detections (
     survey_date         DATE NOT NULL,
     survey_video_file   VARCHAR(255),
 
-    is_fixed            BOOLEAN DEFAULT FALSE
+    is_fixed            BOOLEAN DEFAULT FALSE,
+    fixed_at            TIMESTAMPTZ
 );
 
 -- ── survey_log — one row per survey_date (unique) ────────────────────────────

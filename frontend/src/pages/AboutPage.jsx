@@ -13,6 +13,9 @@ import {
 } from 'lucide-react'
 import { PIPELINE_STAGES, SEVERITY_COLORS, SEVERITY_LABELS, SEVERITY_ACTIONS } from '../utils/constants'
 import { SectionTitle } from '../components/ui'
+import useMotionOk from '../hooks/useMotionOk'
+import SplitText from '../reactbits/SplitText/SplitText'
+import FadeContent from '../reactbits/FadeContent/FadeContent'
 
 const STAGE_ICONS = [ScanLine, Radar, Layers, Ruler, Gauge, Copy, Database]
 
@@ -35,6 +38,8 @@ const MODELS = [
 ]
 
 export default function AboutPage() {
+  const motionOk = useMotionOk()
+
   return (
     <div style={styles.page} className="page-grid-bg">
       <div style={styles.inner}>
@@ -45,9 +50,23 @@ export default function AboutPage() {
             <MapPin size={11} style={{ display: 'inline', marginRight: 6 }} />
             THE SYSTEM
           </div>
-          <h1 className="display anim-fade-up delay-1" style={{ fontSize: 'clamp(26px, 4vw, 40px)', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
-            A city-scale road survey<br />for the price of a dashcam.
-          </h1>
+          {motionOk ? (
+            <h1 className="display" style={{ fontSize: 'clamp(26px, 4vw, 40px)', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+              <SplitText
+                text="A city-scale road survey for the price of a dashcam."
+                tag="span"
+                splitType="words"
+                delay={40}
+                duration={0.7}
+                textAlign="center"
+                className="display"
+              />
+            </h1>
+          ) : (
+            <h1 className="display anim-fade-up delay-1" style={{ fontSize: 'clamp(26px, 4vw, 40px)', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+              A city-scale road survey<br />for the price of a dashcam.
+            </h1>
+          )}
           <p className="anim-fade-up delay-2" style={{ fontSize: 14, color: 'var(--text-dim)', lineHeight: 1.75, marginTop: 16 }}>
             Traditional road inspections are manual, expensive and infrequent, and a full
             city survey can take months. RDDS replaces them with footage collected during normal
@@ -157,21 +176,23 @@ export default function AboutPage() {
         </div>
 
         {/* ── Credits ──────────────────────────────────────────────────── */}
-        <div className="card anim-fade-up" style={{ padding: '22px 24px', marginTop: 44, display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-          <GraduationCap size={26} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>
-              Open-source project
+        <FadeContent duration={700} blur>
+          <div className="card" style={{ padding: '22px 24px', marginTop: 44, display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+            <GraduationCap size={26} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <div className="display" style={{ fontSize: 14, fontWeight: 700 }}>
+                Open-source project
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+                Built with RT-DETR, SAM 2.1 and Monodepth2 ·
+                Paraschiv Tudor · Cluj-Napoca, 2026
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
-              Built with RT-DETR, SAM 2.1 and Monodepth2 ·
-              Paraschiv Tudor · Cluj-Napoca, 2026
-            </div>
+            <Link to="/ingest" className="btn btn-accent">
+              Try it: upload a survey <ArrowRight size={13} />
+            </Link>
           </div>
-          <Link to="/ingest" className="btn btn-accent">
-            Try it: upload a survey <ArrowRight size={13} />
-          </Link>
-        </div>
+        </FadeContent>
       </div>
     </div>
   )

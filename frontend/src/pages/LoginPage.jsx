@@ -11,6 +11,11 @@ import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { LogIn, AlertTriangle } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { fetchAuthConfig } from '../utils/api'
+import CaptchaField from '../components/CaptchaField'
+import FadeContent from '../reactbits/FadeContent/FadeContent'
+import Particles from '../reactbits/Particles/Particles'
+import useMotionOk from '../hooks/useMotionOk'
+import { useIsDark } from '../hooks/useTheme'
 
 export default function LoginPage() {
   const { login, loginWithGoogle, isAuthed } = useAuth()
@@ -23,7 +28,12 @@ export default function LoginPage() {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [googleClientId, setGoogleClientId] = useState('')
+  const [captchaEnabled, setCaptchaEnabled] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState(null)
   const googleBtnRef = useRef(null)
+
+  const motionOk = useMotionOk()
+  const isDark = useIsDark()
 
   useEffect(() => {
     if (isAuthed) navigate(from, { replace: true })
@@ -31,7 +41,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     fetchAuthConfig()
-      .then(c => setGoogleClientId(c.google_enabled ? (c.google_client_id || '') : ''))
+      .then(c => {
+        setGoogleClientId(c.google_enabled ? (c.google_client_id || '') : '')
+        setCaptchaEnabled(Boolean(c.captcha_enabled))
+      })
       .catch(() => {})
   }, [])
 
@@ -70,10 +83,14 @@ export default function LoginPage() {
 
   const submit = async (e) => {
     e.preventDefault()
+    if (captchaEnabled && !captchaToken) {
+      setError('Finish the verification check first.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      await login(identifier.trim(), password)
+      await login(identifier.trim(), password, captchaToken ? { altcha: captchaToken } : {})
       navigate(from, { replace: true })
     } catch (err) {
       setError(err?.response?.data?.detail || err.message || 'Login failed')
@@ -82,14 +99,13 @@ export default function LoginPage() {
     }
   }
 
-  return (
-    <div style={styles.page} className="page-grid-bg">
-      <div className="card anim-fade-up" style={styles.card}>
-        <div className="overline" style={{ color: 'var(--accent)', marginBottom: 8 }}>
-          CLUJ-NAPOCA · ROAD INTELLIGENCE
-        </div>
-        <h1 className="display" style={styles.title}>Sign in</h1>
-        <div className="road-divider" style={{ width: 120, margin: '14px 0 22px' }} />
+  const card = (
+    <div className="card" style={styles.card}>
+      <div className="overline" style={{ color: 'var(--accent)', marginBottom: 8 }}>
+        CLUJ-NAPOCA · ROAD INTELLIGENCE
+      </div>
+      <h1 className="display" style={styles.title}>Sign in</h1>
+      <div className="road-divider" style={{ width: 120, margin: '14px 0 22px' }} />
 
         {error && (
           <div style={styles.error}>
@@ -115,6 +131,8 @@ export default function LoginPage() {
               autoComplete="current-password" required
             />
           </label>
+          <CaptchaField enabled={captchaEnabled} onToken={setCaptchaToken} />
+
           <button className="btn btn-accent" style={{ padding: '11px 0', marginTop: 6 }} disabled={busy}>
             <LogIn size={15} /> {busy ? 'Signing in…' : 'Sign in'}
           </button>
@@ -141,6 +159,30 @@ export default function LoginPage() {
           Apple Sign-In is not offered because it requires the paid Apple Developer
           Program, and this project runs at zero cost.
         </div>
+    </div>
+  )
+
+  return (
+    <div style={styles.page} className="page-grid-bg">
+      {/* A calm particle field behind the card. Skipped on phones and when the
+          visitor asked for reduced motion, where .page-grid-bg carries the look. */}
+      {motionOk && (
+        <div style={styles.particles}>
+          <Particles
+            particleCount={90}
+            particleSpread={9}
+            speed={0.06}
+            particleColors={isDark ? ['#eaff3d', '#4cc9f0'] : ['#99a800', '#4cc9f0']}
+            alphaParticles
+            moveParticlesOnHover={false}
+          />
+        </div>
+      )}
+
+      <div style={styles.cardWrap}>
+        {motionOk
+          ? <FadeContent duration={700} blur>{card}</FadeContent>
+          : <div className="anim-fade-up">{card}</div>}
       </div>
     </div>
   )
@@ -153,7 +195,15 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 'var(--nav-h)',
+    position: 'relative',
   },
+  particles: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 0,
+    pointerEvents: 'none',
+  },
+  cardWrap: { position: 'relative', zIndex: 1, width: '100%', display: 'flex', justifyContent: 'center' },
   card: { width: '100%', maxWidth: 380, padding: '30px 32px', margin: '40px 16px' },
   title: { fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' },
   label: { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-dim)' },

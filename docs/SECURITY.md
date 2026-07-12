@@ -81,18 +81,123 @@ rolls back, and returns a clean **409**.
 - **Secrets hygiene** — `.idea/` removed from git tracking; `.gitignore` now
   covers `.env`, `.env.*`, `*.env`, and `.idea/`.
 
+## Second hardening pass (upgrade release)
+
+Added alongside the gamification, municipality and public-API features. All of
+it is zero-cost: no third-party service, no new Python dependency.
+
+- **Rate limiting generalized** (`backend/ratelimit.py`). The login limiter was
+  extracted into a shared `Limiter` (fixed window, optional lockout, one lock,
+  opportunistic pruning) plus a `rate_limited(...)` FastAPI dependency, and is
+  now applied to every abusable endpoint, not just login:
+
+  | Endpoint | Budget | Keyed on |
+  |---|---|---|
+  | `POST /auth/login` | 5 failures / 15 min, then a 15 min lockout | identifier + IP |
+  | `POST /auth/register` | 5 / hour | IP |
+  | `POST /auth/oauth/google` | 20 / hour | IP |
+  | `GET /auth/captcha/challenge` | 30 / min | IP |
+  | `POST /live/reports` | 1 / 15 s **and** 40 / day | user |
+  | `POST /live/events/{id}/confirm` and `/dispute` | 30 / hour | user |
+  | `POST /live/devices/pair` | 10 / hour | user |
+  | `POST /live/devices/claim` | 10 / hour | IP |
+  | `POST /contact/sales` | 3 / hour | IP |
+  | `GET /v1/public/*` | per-key `rate_limit_per_min` (default 60) | API key |
+
+  The report cooldown and daily cap matter more than they look: points make
+  spamming attractive, so the economy is defended at the write path.
+
+- **Proof-of-work captcha, self-hosted** (`backend/altcha.py`). Implements the
+  open ALTCHA protocol with nothing but the standard library: the browser
+  brute-forces a number whose SHA-256 matches a signed challenge. Verification
+  checks the hash, the HMAC (constant time, keyed off `JWT_SECRET`), the expiry
+  and a minimum solve time, and rejects replays from an in-process seen-set.
+  There is no captcha vendor, no outbound call, and it works on a network that
+  blocks everything except HTTPS to our own host. Off by default; enable with
+  `CAPTCHA_ENABLED=true`. A honeypot field (`website`) backs it up on register
+  and on the contact form.
+
+- **Points cannot be farmed.** A raw report earns nothing. Points are granted
+  only when an event is validated by *other* devices (confirmed, verified) or
+  acted on by the city (promoted, fixed). The ledger has a unique
+  `(user_id, reason, ref_id)` constraint, so a replayed or double-fired hook
+  inserts nothing.
+
+- **WebSocket hardening** (`/api/live/ws`). Was unauthenticated, uncapped and
+  unbounded. Now: an Origin check against `CORS_ORIGINS` (skipped while it is
+  `*`), a per-IP connection cap (`LIVE_WS_MAX_PER_IP`, 4) and a total cap
+  (`LIVE_WS_MAX_TOTAL`, 2000), and the keep-alive loop drops clients that send
+  oversized (>512 char) or too-frequent (>30/min) frames.
+
+- **CORS credentials fixed.** `allow_origins=["*"]` was paired with
+  `allow_credentials=True`. Credentials are now enabled only when real origins
+  are configured. The app authenticates with a Bearer header, not cookies, so
+  nothing depended on it.
+
+- **Security headers.** `backend/middleware.py` sets `X-Content-Type-Options`,
+  `X-Frame-Options: DENY`, `Referrer-Policy` and a `Permissions-Policy` on every
+  API response, and `frontend/nginx.conf` adds a Content-Security-Policy to the
+  SPA document. The CSP allow-list is deliberate and minimal: Google Identity
+  (optional login), Google Fonts, unpkg (Leaflet CSS), CARTO/Esri (map tiles),
+  Hugging Face (the assistant's model download), and `'wasm-unsafe-eval'` +
+  `worker-src blob:` for in-browser inference.
+
+- **Ports closed.** `docker-compose.yml` published Postgres and the API on all
+  host interfaces. Both are now bound to `127.0.0.1`, so the only thing reachable
+  from the network is Nginx. This also makes the `X-Real-IP` the rate limiter
+  trusts unforgeable, since it can only arrive through our own proxy.
+
+- **Unbounded reads bounded.** `/heatmap` returned every row (it now aggregates
+  into ~11 m bins in SQL, capped at 20k points); `/export/csv` built the entire
+  table in memory (it now streams in batches); the admin user and registration
+  lists silently truncated at 500 (they now paginate).
+
+- **Evidence photos are path-safe.** `GET /media/evidence/{id}` resolves the
+  stored `crop_path` under `PROJECT_DATA_DIR` and refuses anything absolute,
+  containing `..`, escaping the data root, or not ending in `.jpg`. A tampered
+  DB value cannot read outside the data tree.
+
+- **API keys are never stored.** Only a SHA-256 hash and a display prefix are
+  kept; the plaintext is shown once, at creation. Public endpoints are GET-only
+  and expose no user data, no device data and no photos.
+
 ## Accepted / known residual risks
 
 - Live-mode device identity is self-declared for anonymous devices —
   distinct-device validation is honest-majority, not Sybil-proof (paired
-  devices with revocation mitigate).
-- The login rate limiter and thank-you throttle are in-process (reset on
-  restart; per-replica when scaled out). Move to Redis if the API is ever
-  replicated.
+  devices with revocation mitigate). The captcha raises the cost of minting
+  accounts, but a determined Sybil attacker with many accounts and devices can
+  still confirm their own report.
+- Every limiter, cache and captcha replay-set is **in-process** (reset on
+  restart; per-replica when scaled out). This is why the API must stay on ONE
+  uvicorn worker, which is also what the WebSocket fan-out requires. Redis is
+  the documented upgrade path for both (`backend/live_manager.py`).
 - JWTs cannot be revoked before expiry (`JWT_TTL_H`, default 7 days); role
   checks and `is_active` are enforced from the DB on every request, so
   disabling an account takes effect immediately even with a live token.
-- CORS remains `allow_origins=["*"]` for local development — tighten to the
-  real frontend origin for any public deployment.
+- CORS remains `allow_origins=["*"]` by default for local development — set
+  `CORS_ORIGINS` to the real frontend origin for any public deployment. Note
+  the WebSocket Origin check only engages once you do.
+- The CSP needs `style-src 'unsafe-inline'` because the app's styling model is
+  inline style objects. Removing it would mean rewriting every page.
+- A volumetric denial-of-service is out of scope for the application layer. The
+  free Cloudflare proxy in front of the host is the documented answer
+  (`docs/FREE_DEPLOYMENT.md`); nothing in the app can absorb that traffic.
 - `.env` holds all secrets in one file on the deployment host — acceptable for
   a small deployment; use a secret manager beyond that.
+
+## New settings (all optional, safe defaults)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CAPTCHA_ENABLED` | `false` | Require the ALTCHA proof-of-work on register, login and contact |
+| `CAPTCHA_TTL_S` | `600` | How long a challenge stays valid |
+| `CAPTCHA_MIN_SOLVE_S` | `2.0` | Reject solutions returned faster than a human page load |
+| `LIVE_WS_MAX_PER_IP` | `4` | WebSocket connections allowed per address |
+| `LIVE_WS_MAX_TOTAL` | `2000` | WebSocket connections allowed in total |
+| `RL_<NAME>_MAX` / `RL_<NAME>_WINDOW_S` | per limiter | Override any budget in the table above |
+| `EVIDENCE_CROPS` | `true` | Let the pipeline save a photo crop per detection |
+| `API_KEYS_PER_USER` | `3` | Active developer keys allowed per account |
+| `STATS_CACHE_S` | `10` | Micro-cache on `/stats` |
+| `RQI_MAX_CELLS` | `5000` | Refuse a quality-grid request larger than this |
+| `APP_TIMEZONE` | `Europe/Bucharest` | Local day boundary for reporting streaks |

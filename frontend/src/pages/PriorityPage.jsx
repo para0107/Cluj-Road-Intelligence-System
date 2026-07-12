@@ -3,31 +3,72 @@
  *
  * Ranked repair queue from GET /api/priority-list, enriched client-side with
  * rough cost estimates (REPAIR_COST_RON heuristics — a planning aid, not a
- * quote). Selecting rows builds a "work order" summary that can be printed.
+ * quote). Selecting rows builds a "work order" summary that can be printed,
+ * or turned into a real work order (POST /api/work-orders). The page also
+ * carries the budget planner, which works off GET /api/stats.
  */
 
-import React, { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import React, { useMemo, useState, useEffect } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   ListOrdered, AlertTriangle, Printer, Banknote, MapPin, HardHat, ArrowRight,
+  HardHat as HardHatIcon, X,
 } from 'lucide-react'
 import { useApi } from '../hooks/useApi'
-import { fetchPriority } from '../utils/api'
+import { fetchPriority, fetchStats, createWorkOrder } from '../utils/api'
 import { fmtRon, fmtDate } from '../utils/format'
 import {
   CLASS_LABELS, SEVERITY_COLORS, SEVERITY_ACTIONS,
-  REPAIR_COST_RON, SEVERITY_COST_FACTOR,
+  estimateRepairCost,
 } from '../utils/constants'
 import { SevBadge, ClassDot, SectionTitle, Spinner, CenterState, EmptyState, Kpi } from '../components/ui'
+import BudgetPlanner from '../components/BudgetPlanner'
 import { useAuth } from '../context/AuthContext'
 
-const estimateCost = (item) =>
-  (REPAIR_COST_RON[item.damage_type] || 800) * (SEVERITY_COST_FACTOR[item.severity] || 1)
+/** POST /work-orders accepts at most 200 detection ids per order. */
+const MAX_WO_ITEMS = 200
+
+const estimateCost = (item) => estimateRepairCost(item.damage_type, item.severity)
+
+const today = () => new Date().toISOString().slice(0, 10)
+
+/** FastAPI `detail` is a string for our errors and a list for validation ones. */
+const readErr = (e, fallback) => {
+  const d = e?.response?.data?.detail
+  if (typeof d === 'string' && d) return d
+  if (Array.isArray(d)) {
+    const msgs = d.map(x => x?.msg).filter(Boolean)
+    if (msgs.length) return msgs.join('. ')
+  }
+  if (d && typeof d === 'object' && d.msg) return String(d.msg)
+  return e?.message || fallback
+}
 
 export default function PriorityPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const { data, loading, error } = useApi(() => fetchPriority(100), [])
   const [selected, setSelected] = useState(new Set())
+
+  // Stats feed the budget planner. The queue itself comes from useApi above.
+  const [stats, setStats] = useState(null)
+  const [statsError, setStatsError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchStats()
+      .then((d) => { if (alive) setStats(d) })
+      .catch((e) => { if (alive) setStatsError(readErr(e, 'Could not load the numbers.')) })
+    return () => { alive = false }
+  }, [])
+
+  // Work order modal
+  const [woOpen, setWoOpen] = useState(false)
+  const [woForm, setWoForm] = useState({
+    title: '', crew_name: '', scheduled_for: '', due_date: '', cost_estimate_ron: '', notes: '',
+  })
+  const [woSaving, setWoSaving] = useState(false)
+  const [woError, setWoError] = useState(null)
 
   const items = useMemo(() =>
     (data?.items || []).map(it => ({ ...it, est_cost: estimateCost(it) })), [data])
@@ -37,6 +78,7 @@ export default function PriorityPage() {
 
   const selectedItems = items.filter(it => selected.has(it.id))
   const selectedCost = selectedItems.reduce((acc, it) => acc + it.est_cost, 0)
+  const overCap = selectedItems.length > MAX_WO_ITEMS
 
   const toggle = (id) => {
     setSelected(prev => {
@@ -47,6 +89,61 @@ export default function PriorityPage() {
   }
 
   const selectTopN = (n) => setSelected(new Set(items.slice(0, n).map(it => it.id)))
+  const selectAll = () => setSelected(new Set(items.map(it => it.id)))
+  const clearSelection = () => setSelected(new Set())
+
+  const openWorkOrder = () => {
+    setWoError(null)
+    setWoForm({
+      title: `Repairs, ${selectedItems.length} sites, ${today()}`,
+      crew_name: '',
+      scheduled_for: '',
+      due_date: '',
+      cost_estimate_ron: String(Math.round(selectedCost)),
+      notes: '',
+    })
+    setWoOpen(true)
+  }
+
+  const submitWorkOrder = async (e) => {
+    e.preventDefault()
+    if (woSaving) return
+
+    const title = woForm.title.trim()
+    if (!title) { setWoError('Give the work order a title.'); return }
+    if (selectedItems.length === 0) { setWoError('Select at least one site.'); return }
+    if (overCap) {
+      setWoError(`A work order takes at most ${MAX_WO_ITEMS} sites. Remove ${selectedItems.length - MAX_WO_ITEMS} of them.`)
+      return
+    }
+
+    const raw = woForm.cost_estimate_ron.trim()
+    const cost = raw === '' ? null : Number(raw)
+    if (cost !== null && (!Number.isFinite(cost) || cost < 0)) {
+      setWoError('The cost estimate has to be a number, 0 or more.')
+      return
+    }
+
+    setWoSaving(true)
+    setWoError(null)
+    try {
+      await createWorkOrder({
+        title,
+        detection_ids: selectedItems.map(it => it.id),
+        crew_name: woForm.crew_name.trim() || null,
+        scheduled_for: woForm.scheduled_for || null,
+        due_date: woForm.due_date || null,
+        cost_estimate_ron: cost,
+        notes: woForm.notes.trim() || null,
+      })
+      setWoOpen(false)
+      setSelected(new Set())
+      navigate('/workorders')
+    } catch (err) {
+      setWoError(readErr(err, 'Could not create the work order.'))
+      setWoSaving(false)
+    }
+  }
 
   const printWorkOrder = () => {
     const rows = selectedItems.length > 0 ? selectedItems : items.slice(0, 20)

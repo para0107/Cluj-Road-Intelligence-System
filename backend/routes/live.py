@@ -37,21 +37,25 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from datetime import datetime, timedelta, timezone, date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import func, distinct
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from sqlalchemy import case, func, distinct
 from sqlalchemy.orm import Session
 from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_DWithin, ST_MakePoint, ST_SetSRID, ST_Distance
 
 from backend.database import get_db, SessionLocal
+from backend.models import Detection
 from backend.models_live import LiveEvent, LiveReport, LiveDevice
 from backend.models_auth import User
 from backend.auth import get_current_user, require_operator, create_token
+from backend import gamification
+from backend.ratelimit import Limiter, rate_limited
 from backend.schemas_live import (
     LiveReportCreate, LiveVoteRequest, LiveEventRead,
     LiveEventListResponse, LiveActionResponse, LiveStatsResponse,
     DevicePairRequest, DeviceClaimRequest, LiveDeviceRead,
     DeviceListResponse, DeviceClaimResponse,
+    TriageListResponse, PromoteResponse,
 )
 from backend.live_manager import manager
 from backend.notify import send_thankyou_email
@@ -68,6 +72,31 @@ _EVENT_TTL_H = float(os.getenv("LIVE_EVENT_TTL_H", "72"))
 _CONFIRM_DEVICES = int(os.getenv("LIVE_CONFIRM_DEVICES", "2"))
 _VERIFY_DEVICES = int(os.getenv("LIVE_VERIFY_DEVICES", "3"))
 _DISPUTE_MIN = int(os.getenv("LIVE_DISPUTE_MIN", "2"))
+
+# ── Abuse limits (in-process, per user unless noted) ────────────────────────
+# The client's drive mode already spaces auto-reports 8 s apart; the server
+# enforces its own floor plus a daily cap so points cannot be farmed and a
+# hostile script cannot flood the map. Votes and pairing get sane budgets.
+_report_cooldown = Limiter(
+    "live_report", max_events=1, window_s=15.0,
+    detail="You are reporting very fast. Wait a moment and try again.",
+)
+_report_daily = Limiter(
+    "live_report_daily", max_events=40, window_s=86400.0,
+    detail="Daily report limit reached. Thank you for today, try again tomorrow.",
+)
+_vote_limiter = Limiter(
+    "live_vote", max_events=30, window_s=3600.0,
+    detail="Too many confirmations or disputes this hour. Try again later.",
+)
+_pair_limiter = Limiter(
+    "device_pair", max_events=10, window_s=3600.0,
+    detail="Too many pairing attempts. Try again later.",
+)
+_claim_limiter = Limiter(
+    "device_claim", max_events=10, window_s=3600.0,
+    detail="Too many pairing code attempts from this address. Try again later.",
+)
 
 # ── Read micro-cache ────────────────────────────────────────────────────────
 # GET /live/events and /live/stats are the polling fallback for clients
@@ -212,7 +241,13 @@ def _touch_device(db: Session, device_id: str, counted: bool = False) -> None:
 # POST /live/reports — sight damage (auto-cluster or create)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/live/reports", response_model=LiveActionResponse, status_code=201)
+@router.post(
+    "/live/reports", response_model=LiveActionResponse, status_code=201,
+    dependencies=[
+        Depends(rate_limited(_report_cooldown, by="user")),
+        Depends(rate_limited(_report_daily, by="user")),
+    ],
+)
 def create_report(
     payload: LiveReportCreate,
     db: Session = Depends(get_db),
@@ -256,6 +291,7 @@ def create_report(
     report = LiveReport(
         event_id=event.id,
         device_id=payload.device_id,
+        user_id=user.id,
         kind="sighting",
         latitude=payload.latitude,
         longitude=payload.longitude,
@@ -273,7 +309,17 @@ def create_report(
     event.last_reported = _now()
     event.expires_at = _new_expiry()
 
+    # Flush so _recount's distinct-device queries see THIS report too
+    # (autoflush is off; without this the counters lagged one signal behind
+    # the documented LIVE_CONFIRM/VERIFY_DEVICES thresholds).
+    old_status = "unverified" if created else (event.status or "unverified")
+    db.flush()
     _recount(db, event)
+
+    # Streaks/badges for the reporter; points only on validation crossings.
+    gamification.record_report(db, user)
+    gamification.award_status_crossings(db, event, old_status)
+
     db.commit()
     db.refresh(event)
 
@@ -297,12 +343,15 @@ def create_report(
 # Confirm / dispute / resolve
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/live/events/{event_id}/confirm", response_model=LiveActionResponse)
+@router.post(
+    "/live/events/{event_id}/confirm", response_model=LiveActionResponse,
+    dependencies=[Depends(rate_limited(_vote_limiter, by="user"))],
+)
 def confirm_event(
     event_id: UUID,
     payload: LiveVoteRequest,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     event = _get_active_event(db, event_id)
     _touch_device(db, payload.device_id)
@@ -310,12 +359,17 @@ def confirm_event(
     # Idempotent per device — confirming twice does not double-count
     if not _has_vote(db, event.id, payload.device_id, ("sighting", "confirm")):
         db.add(LiveReport(
-            event_id=event.id, device_id=payload.device_id,
+            event_id=event.id, device_id=payload.device_id, user_id=user.id,
             kind="confirm", note=payload.note,
         ))
     event.last_reported = _now()
     event.expires_at = _new_expiry()
+
+    old_status = event.status or "unverified"
+    db.flush()   # make the pending confirm visible to _recount (autoflush off)
     _recount(db, event)
+    gamification.award_status_crossings(db, event, old_status)
+
     db.commit()
     db.refresh(event)
 
@@ -323,21 +377,25 @@ def confirm_event(
     return LiveActionResponse(action="confirmed", event=_read(event))
 
 
-@router.post("/live/events/{event_id}/dispute", response_model=LiveActionResponse)
+@router.post(
+    "/live/events/{event_id}/dispute", response_model=LiveActionResponse,
+    dependencies=[Depends(rate_limited(_vote_limiter, by="user"))],
+)
 def dispute_event(
     event_id: UUID,
     payload: LiveVoteRequest,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     event = _get_active_event(db, event_id)
     _touch_device(db, payload.device_id)
 
     if not _has_vote(db, event.id, payload.device_id, ("dispute",)):
         db.add(LiveReport(
-            event_id=event.id, device_id=payload.device_id,
+            event_id=event.id, device_id=payload.device_id, user_id=user.id,
             kind="dispute", note=payload.note,
         ))
+    db.flush()   # make the pending dispute visible to _recount (autoflush off)
     _recount(db, event)
 
     # Enough independent "not there" signals remove the hazard from the map
@@ -365,10 +423,116 @@ def resolve_event(
     event = _get_active_event(db, event_id)
     event.resolved = True
     event.is_active = False
+
+    label = (event.damage_type or "hazard").replace("_", " ")
+    gamification.award_event_outcome(
+        db, event, "event_fixed",
+        "A hazard you reported was fixed",
+        f"The city resolved the {label} you reported. Thank you. +25 points.",
+    )
     db.commit()
 
     _broadcast("event_removed", None, event_id=event.id)
     return LiveActionResponse(action="resolved", event=None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Triage (operator): citizen events → official detections
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/live/triage", response_model=TriageListResponse)
+def triage_inbox(
+    status_eq: str | None = Query(None, alias="status", pattern="^(unverified|confirmed|verified)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _op: User = Depends(require_operator),
+):
+    """Active citizen events waiting for an operator decision.
+
+    Most community-validated first (verified, then confirmed), newest signal
+    first within each tier.
+    """
+    _sweep_expired(db)
+    q = db.query(LiveEvent).filter(LiveEvent.is_active.is_(True))
+    if status_eq:
+        q = q.filter(LiveEvent.status == status_eq)
+    total = q.count()
+    tier = case(
+        (LiveEvent.status == "verified", 2),
+        (LiveEvent.status == "confirmed", 1),
+        else_=0,
+    )
+    items = (
+        q.order_by(tier.desc(), LiveEvent.last_reported.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return TriageListResponse(total=total, items=[_read(e) for e in items])
+
+
+@router.post("/live/events/{event_id}/promote", response_model=PromoteResponse)
+def promote_event(
+    event_id: UUID,
+    db: Session = Depends(get_db),
+    _op: User = Depends(require_operator),
+):
+    """Turn a citizen-reported live event into an official detection row.
+
+    The detection lands on the survey map, in the priority queue, and in
+    work-order planning like any pipeline result; the live event leaves the
+    map and every supporting reporter is credited and notified.
+    """
+    event = _get_active_event(db, event_id)
+
+    today = date.today()
+    detection = Detection(
+        geom=ST_SetSRID(ST_MakePoint(event.longitude, event.latitude), 4326),
+        latitude=event.latitude,
+        longitude=event.longitude,
+        damage_type=event.damage_type,
+        confidence=event.max_confidence or 0.5,
+        severity=event.severity,
+        first_detected=event.first_reported.date() if event.first_reported else today,
+        last_detected=today,
+        detection_count=max(event.report_count or 1, 1),
+        survey_date=today,
+        survey_video_file="live_promotion",
+    )
+    detection.compute_priority_score()
+    db.add(detection)
+    db.flush()
+
+    event.promoted_detection_id = detection.id
+    event.is_active = False
+
+    label = (event.damage_type or "hazard").replace("_", " ")
+    gamification.award_event_outcome(
+        db, event, "event_promoted",
+        "Your report is now official",
+        f"The city accepted the {label} you reported as an official damage record. +20 points.",
+    )
+    db.commit()
+
+    _broadcast("event_removed", None, event_id=event.id)
+    return PromoteResponse(event_id=event.id, detection_id=detection.id)
+
+
+@router.post("/live/events/{event_id}/dismiss", response_model=LiveActionResponse)
+def dismiss_event(
+    event_id: UUID,
+    db: Session = Depends(get_db),
+    _op: User = Depends(require_operator),
+):
+    """Operator triage: not actionable (duplicate, off-road, bad signal)."""
+    event = _get_active_event(db, event_id)
+    event.dismissed_at = _now()
+    event.is_active = False
+    db.commit()
+
+    _broadcast("event_removed", None, event_id=event.id)
+    return LiveActionResponse(action="dismissed", event=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -438,7 +602,10 @@ def _new_pair_code() -> str:
     return "".join(secrets.choice(_PAIR_CODE_ALPHABET) for _ in range(_PAIR_CODE_LEN))
 
 
-@router.post("/live/devices/pair", response_model=LiveDeviceRead, status_code=201)
+@router.post(
+    "/live/devices/pair", response_model=LiveDeviceRead, status_code=201,
+    dependencies=[Depends(rate_limited(_pair_limiter, by="user"))],
+)
 def pair_device(
     payload: DevicePairRequest,
     db: Session = Depends(get_db),
@@ -493,7 +660,10 @@ def pair_device(
     return device
 
 
-@router.post("/live/devices/claim", response_model=DeviceClaimResponse)
+@router.post(
+    "/live/devices/claim", response_model=DeviceClaimResponse,
+    dependencies=[Depends(rate_limited(_claim_limiter, by="ip"))],
+)
 def claim_device(payload: DeviceClaimRequest, db: Session = Depends(get_db)):
     """
     Exchange a pairing code for a JWT (called by the edge agent — the vehicle
@@ -597,14 +767,30 @@ def disconnect_device(
 # WebSocket — push channel
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Comma-separated allow-list shared with the CORS middleware. "*" disables the
+# WS origin check (dev-friendly); real deployments set CORS_ORIGINS and get it.
+_WS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+_WS_MAX_MSG_CHARS = 512
+_WS_MAX_MSGS_PER_MIN = 30
+
+
 @router.websocket("/live/ws")
 async def live_ws(ws: WebSocket):
     """
     On connect: send {"type": "hello", "events": [...]} with the current
     snapshot, then push every mutation as it happens. Incoming client
-    messages are treated as keep-alive pings and ignored.
+    messages are treated as keep-alive pings and ignored (size- and
+    rate-capped so a hostile client cannot spam the loop).
     """
-    await manager.connect(ws)
+    origin = ws.headers.get("origin")
+    if "*" not in _WS_ORIGINS and origin and origin.rstrip("/") not in _WS_ORIGINS:
+        await ws.close(code=4403)
+        return
+
+    ip = ws.headers.get("x-real-ip") or (ws.client.host if ws.client else "?")
+    if not await manager.connect(ws, ip):
+        await ws.close(code=1013)   # try again later: per-IP or total cap hit
+        return
 
     # Snapshot via a short-lived session (this handler is async — do not
     # borrow the request-scoped dependency machinery here).
@@ -627,9 +813,23 @@ async def live_ws(ws: WebSocket):
             {"type": "hello", "events": snapshot, "clients": manager.client_count},
             default=str,
         ))
+        msg_window_start = time.monotonic()
+        msg_count = 0
         while True:
-            await ws.receive_text()   # keep-alive; content ignored
+            text = await ws.receive_text()   # keep-alive; content ignored
+            if len(text) > _WS_MAX_MSG_CHARS:
+                await ws.close(code=1009)    # message too big
+                break
+            now_mono = time.monotonic()
+            if now_mono - msg_window_start > 60.0:
+                msg_window_start, msg_count = now_mono, 0
+            msg_count += 1
+            if msg_count > _WS_MAX_MSGS_PER_MIN:
+                await ws.close(code=1008)    # policy violation: ping flood
+                break
     except WebSocketDisconnect:
-        await manager.disconnect(ws)
+        pass
     except Exception:
+        pass
+    finally:
         await manager.disconnect(ws)

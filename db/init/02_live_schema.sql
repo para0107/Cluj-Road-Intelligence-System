@@ -27,7 +27,12 @@ CREATE TABLE IF NOT EXISTS live_events (
 
     first_reported    TIMESTAMPTZ DEFAULT now(),
     last_reported     TIMESTAMPTZ DEFAULT now(),
-    expires_at        TIMESTAMPTZ NOT NULL
+    expires_at        TIMESTAMPTZ NOT NULL,
+
+    -- Triage audit trail (operator promoted the event into a detection, or
+    -- dismissed it from the inbox).
+    promoted_detection_id UUID REFERENCES detections(id) ON DELETE SET NULL,
+    dismissed_at      TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_live_events_geom   ON live_events USING GIST (geom);
@@ -40,6 +45,8 @@ CREATE TABLE IF NOT EXISTS live_reports (
 
     event_id    UUID NOT NULL REFERENCES live_events(id) ON DELETE CASCADE,
     device_id   VARCHAR(64) NOT NULL,
+    -- user_id (REFERENCES users) is added by db/init/06_engagement.sql — the
+    -- users table does not exist yet at this point in the init order.
     kind        VARCHAR(10) NOT NULL,          -- sighting | confirm | dispute
 
     latitude    DOUBLE PRECISION,

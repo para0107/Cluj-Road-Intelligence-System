@@ -4,14 +4,14 @@
  * The operational map of Cluj-Napoca.
  *  - severity + class + repaired-status filtering
  *  - three basemaps (dark / streets / satellite)
- *  - detection detail drawer (mark repaired · delete · zoom)
- *  - box-select zone analysis with confidence histogram
+ *  - detection detail drawer (evidence photo · mark repaired · delete · zoom)
+ *  - box-select zone analysis with confidence histogram + "create work order"
  *  - heatmap mode, landmark fly-to, printable report
  *  - silent live refresh while a pipeline job runs (localStorage['rids_active_job'])
  */
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts'
 import { MapContainer, TileLayer, CircleMarker, useMap, useMapEvents, Rectangle } from 'react-leaflet'
 import {
@@ -27,6 +27,7 @@ import { fmtCoord, fmtDate, fmtPct } from '../utils/format'
 import {
   fetchDetections, fetchStats, fetchJobStatus,
   updateDetectionStatus, deleteDetectionsBulk, fetchCityLandmarks,
+  fetchEvidenceUrl,
 } from '../utils/api'
 import { SevBadge, ClassChip, ClassDot, KvRow, Spinner, Toggle } from '../components/ui'
 import { useIsDark } from '../hooks/useTheme'
@@ -55,6 +56,12 @@ function FitBounds({ detections }) {
 }
 
 // ── Imperative fly-to helper ───────────────────────────────────────────────
+function ZoomTracker({ onZoom }) {
+  const map = useMapEvents({ zoomend: () => onZoom(map.getZoom()) })
+  useEffect(() => { onZoom(map.getZoom()) }, [map, onZoom])
+  return null
+}
+
 function FlyTo({ target }) {
   const map = useMap()
   useEffect(() => {
@@ -242,6 +249,7 @@ export default function MapPage() {
   const basemap = basemapChoice ?? (isDark ? 'dark' : 'voyager')
   const [flyTarget, setFlyTarget] = useState(null)
   const [landmarksOpen, setLandmarksOpen] = useState(false)
+  const [mapZoom, setMapZoom] = useState(13)
 
   // Map opens on the operator's own city (geocoded once, cached — never a
   // hardcoded default).
@@ -274,6 +282,7 @@ export default function MapPage() {
   // Focus request coming from ExplorerPage ("Show on map")
   const routerLocation = useLocation()
   const focusDone = useRef(false)
+  const navigate = useNavigate()
 
   // Zone drawing
   const [drawingMode, setDrawingMode] = useState(false)
@@ -376,6 +385,41 @@ export default function MapPage() {
     })
   }, [])
 
+  // ── Evidence photo for the selected detection ────────────────────────────
+  // The media route needs the Bearer header, so an <img src> cannot load it:
+  // fetch the JPG as a blob and hand the <img> an object URL. Every URL is
+  // revoked when the selection changes, otherwise clicking through a few
+  // hundred sites would hold every photo in memory for the life of the tab.
+  const [evidenceUrl, setEvidenceUrl] = useState(null)
+  const [evidenceLoading, setEvidenceLoading] = useState(false)
+
+  useEffect(() => {
+    if (!selected?.id || !selected?.has_evidence) {
+      setEvidenceUrl(null)
+      setEvidenceLoading(false)
+      return undefined
+    }
+    let alive = true
+    let objectUrl = null
+    setEvidenceUrl(null)
+    setEvidenceLoading(true)
+    fetchEvidenceUrl(selected.id)
+      .then(url => {
+        if (!alive) {
+          if (url) URL.revokeObjectURL(url)
+          return
+        }
+        objectUrl = url
+        setEvidenceUrl(url)
+      })
+      .catch(() => { if (alive) setEvidenceUrl(null) })
+      .finally(() => { if (alive) setEvidenceLoading(false) })
+    return () => {
+      alive = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [selected?.id, selected?.has_evidence])
+
   // ── Detail-drawer actions ────────────────────────────────────────────────
   const [actionBusy, setActionBusy] = useState(false)
 
@@ -423,6 +467,14 @@ export default function MapPage() {
     return true
   }), [detections, activeClasses, activeSeverities, showFixed, currentRect])
 
+  // City-wide zoom with thousands of marks: draw only severity 3+ until the
+  // user zooms in. Zone analytics and counters still use the full list.
+  const declutterActive = !heatmapMode && visible.length > 3000 && mapZoom < 14
+  const rendered = useMemo(
+    () => (declutterActive ? visible.filter(d => (d.severity || 0) >= 3) : visible),
+    [visible, declutterActive],
+  )
+
   const displayStats = currentRect ? {
     total_detections: visible.length,
     critical_count: visible.filter(d => d.severity >= 4).length,
@@ -455,10 +507,12 @@ export default function MapPage() {
         zoom={zoom}
         maxZoom={20}
         minZoom={3}
+        preferCanvas={true}
         style={{ width: '100%', height: '100%', cursor: drawingMode ? 'crosshair' : 'grab' }}
         zoomControl={false}
       >
         <TileLayer key={basemap} url={tiles.url} attribution={tiles.attr} maxZoom={20} maxNativeZoom={19} />
+        <ZoomTracker onZoom={setMapZoom} />
         <FitBounds detections={detections} />
         <FlyTo target={flyTarget} />
         {/* First visit on this browser: glide to the user's city once it
@@ -485,7 +539,7 @@ export default function MapPage() {
           <Rectangle bounds={[rectStart, rectEnd]} pathOptions={{ color: '#eaff3d', fillColor: '#eaff3d', fillOpacity: 0.08, weight: 2, dashArray: '4' }} />
         )}
 
-        {visible.map(d => {
+        {rendered.map(d => {
           const color = CLASS_COLORS[d.damage_type] || '#888'
           const sevColor = SEVERITY_COLORS[d.severity] || color
           const isSel = selected && selected.id === d.id
@@ -518,6 +572,15 @@ export default function MapPage() {
                 · {new Date(lastRefresh).toLocaleTimeString()}
               </span>
             )}
+          </div>
+        )}
+
+        {declutterActive && (
+          <div className="glass" style={{
+            padding: '4px 10px', borderRadius: 999, fontSize: 11,
+            color: 'var(--text-dim)', border: '1px solid var(--border)',
+          }}>
+            Showing severity 3+ only. Zoom in to see everything.
           </div>
         )}
 
@@ -713,6 +776,28 @@ export default function MapPage() {
             </div>
           </div>
         )}
+
+        {/* Hand the zone straight to the repair board. WorkOrdersPage reads
+            location.state.detectionIds and opens its create modal with them. */}
+        {finishedRect && (
+          <div style={{ padding: '10px 14px 12px', borderTop: '1px solid var(--border)' }}>
+            <button
+              className="btn btn-sm btn-accent"
+              style={{ width: '100%', justifyContent: 'center' }}
+              disabled={visible.length === 0}
+              onClick={() => navigate('/workorders', {
+                state: { detectionIds: visible.slice(0, 200).map(d => d.id) },
+              })}
+            >
+              <Wrench size={13} /> Create work order from this zone
+            </button>
+            {visible.length > 200 && (
+              <div style={{ marginTop: 6, fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Only the first 200 sites in this zone will be added.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Detail drawer (right) ────────────────────────────────────────── */}
@@ -763,6 +848,33 @@ export default function MapPage() {
           </div>
 
           <div style={{ padding: '4px 18px 8px', overflowY: 'auto', flex: 1 }}>
+            {selected.reopened && (
+              <div style={styles.reopenedWarn}>
+                <div style={styles.reopenedTitle}>
+                  <AlertTriangle size={12} /> Seen again after repair
+                </div>
+                <div style={styles.reopenedText}>
+                  This site was marked repaired on {fmtDate(selected.fixed_at)} but damage was
+                  detected here again.
+                </div>
+              </div>
+            )}
+
+            {selected.has_evidence && (evidenceLoading || evidenceUrl) && (
+              <div style={{ marginBottom: 12 }}>
+                {evidenceLoading ? (
+                  // .skeleton has no intrinsic height — give the placeholder the
+                  // photo's box so the drawer does not jump when it lands.
+                  <div className="skeleton" style={{ ...styles.evidenceBox, height: 200 }} />
+                ) : (
+                  <img src={evidenceUrl} alt="" style={styles.evidenceBox} />
+                )}
+                <div style={styles.evidenceCaption}>
+                  Photo captured by the survey pipeline.
+                </div>
+              </div>
+            )}
+
             <KvRow k="Priority score" v={(selected.priority_score || 0).toFixed(4)} mono />
             <KvRow k="Times observed" v={`${selected.detection_count}×`} mono />
             <KvRow k="First detected" v={fmtDate(selected.first_detected)} />
@@ -980,6 +1092,46 @@ const styles = {
     gap: 8,
     padding: '12px 18px 16px',
     borderTop: '1px solid var(--border)',
+  },
+
+  evidenceBox: {
+    display: 'block',
+    width: '100%',
+    maxHeight: 200,
+    objectFit: 'cover',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius)',
+  },
+  evidenceCaption: {
+    marginTop: 5,
+    fontSize: 10.5,
+    color: 'var(--text-muted)',
+    lineHeight: 1.5,
+  },
+
+  reopenedWarn: {
+    marginBottom: 12,
+    padding: '8px 10px',
+    background: 'rgba(255,93,93,0.1)',
+    border: '1px solid var(--red)',
+    borderRadius: 'var(--radius)',
+    color: 'var(--red)',
+  },
+  reopenedTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
+    fontSize: 11,
+    fontWeight: 700,
+    fontFamily: 'var(--font-mono)',
+    letterSpacing: '.05em',
+    textTransform: 'uppercase',
+  },
+  reopenedText: {
+    marginTop: 5,
+    fontSize: 11,
+    lineHeight: 1.55,
+    opacity: 0.9,
   },
 
   overlay: {

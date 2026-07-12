@@ -2,19 +2,26 @@
  * frontend/src/components/Navbar.jsx
  *
  * Fixed top navigation — var(--nav-h) tall.
- * Brand · nav links · live pipeline indicator · API health dot · clock · theme.
+ * Brand · nav links · live pipeline indicator · notifications · API health dot ·
+ * clock · theme · user menu.
+ *
+ * The app grew to a dozen pages, so operator pages are grouped behind two
+ * dropdowns (Survey and Operations) instead of a single long row. Citizens
+ * still see a flat, short list: Command, Live, My impact, Assistant, System.
  */
 
 import React, { useState, useEffect, useRef } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
   Info, Sun, Moon, Activity, Radio, LogOut, Shield, MapPin, ChevronDown,
-  Trash2, Menu, X,
+  Trash2, Menu, X, Award, Inbox, Wrench, Gauge, Sparkles, Compass, HelpCircle,
 } from 'lucide-react'
 import { fetchHealth, deleteMyAccount } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
+import NotificationsBell from './NotificationsBell'
+import { restartTour } from './OnboardingTour'
 
 const ROLE_COLORS = {
   admin: 'var(--red)',
@@ -22,17 +29,37 @@ const ROLE_COLORS = {
   user: 'var(--green)',
 }
 
-// Pages flagged `operator` are visible to municipality/admin only; citizens
-// get Command, Live, and System (the backend enforces the same split).
-const NAV_ITEMS = [
-  { to: '/',         label: 'Command',  icon: LayoutDashboard },
-  { to: '/live',     label: 'Live',     icon: Radio, live: true },
-  { to: '/map',      label: 'Map',      icon: Map,        operator: true },
-  { to: '/explorer', label: 'Explorer', icon: Table,      operator: true },
-  { to: '/stats',    label: 'Stats',    icon: BarChart2,  operator: true },
-  { to: '/priority', label: 'Repairs',  icon: ListOrdered, operator: true },
-  { to: '/ingest',   label: 'Upload',   icon: Upload,     operator: true },
-  { to: '/about',    label: 'System',   icon: Info },
+// Flat links every signed-in account sees.
+const CITIZEN_ITEMS = [
+  { to: '/',          label: 'Command',   icon: LayoutDashboard },
+  { to: '/live',      label: 'Live',      icon: Radio, live: true },
+  { to: '/impact',    label: 'My impact', icon: Award },
+  { to: '/assistant', label: 'Assistant', icon: Sparkles },
+  { to: '/about',     label: 'System',    icon: Info },
+]
+
+// Operator pages, grouped so the bar stays readable.
+const OPERATOR_GROUPS = [
+  {
+    label: 'Survey',
+    icon: Compass,
+    items: [
+      { to: '/map',      label: 'Map',      icon: Map,      hint: 'Detected damage on the map' },
+      { to: '/explorer', label: 'Explorer', icon: Table,    hint: 'Every record in a table' },
+      { to: '/stats',    label: 'Stats',    icon: BarChart2, hint: 'Analytics and operations' },
+      { to: '/ingest',   label: 'Upload',   icon: Upload,   hint: 'Process new dashcam video' },
+    ],
+  },
+  {
+    label: 'Operations',
+    icon: Wrench,
+    items: [
+      { to: '/triage',     label: 'Triage',      icon: Inbox,       hint: 'Review citizen reports' },
+      { to: '/workorders', label: 'Work orders', icon: Wrench,      hint: 'Plan and track repairs' },
+      { to: '/priority',   label: 'Repairs',     icon: ListOrdered, hint: 'Ranked repair queue' },
+      { to: '/quality',    label: 'Quality',     icon: Gauge,       hint: 'Road Quality Index' },
+    ],
+  },
 ]
 
 // Road-marking logo mark
@@ -46,9 +73,72 @@ function LogoMark() {
   )
 }
 
+function LiveDot() {
+  return (
+    <span style={{
+      width: 6, height: 6, borderRadius: '50%',
+      background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+      animation: 'pulse 1.6s ease-in-out infinite',
+    }} />
+  )
+}
+
+/** One operator dropdown (Survey / Operations). */
+function NavGroup({ group, activePath, onNavigate }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  const Icon = group.icon
+  const isActive = group.items.some(i => i.to === activePath)
+
+  useEffect(() => {
+    const onClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
+
+  return (
+    <div style={{ position: 'relative' }} ref={ref}>
+      <button
+        className={`nav-link${isActive ? ' active' : ''}`}
+        style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}
+        onClick={() => setOpen(v => !v)}
+      >
+        <Icon size={13} />
+        {group.label}
+        <ChevronDown size={11} style={{ opacity: 0.6 }} />
+      </button>
+
+      {open && (
+        <div className="glass anim-fade-in" style={styles.groupMenu}>
+          {group.items.map(({ to, label, icon: ItemIcon, hint }) => (
+            <button
+              key={to}
+              className="table-row-hover"
+              style={{
+                ...styles.groupItem,
+                color: to === activePath ? 'var(--accent)' : 'var(--text-dim)',
+              }}
+              onClick={() => { onNavigate(to); setOpen(false) }}
+            >
+              <ItemIcon size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                <span style={{ display: 'block', fontWeight: 600, fontSize: 12 }}>{label}</span>
+                <span style={{ display: 'block', fontSize: 10.5, color: 'var(--text-muted)' }}>{hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Navbar() {
   const { user, isAuthed, isAdmin, isOperator, logout, shareLocation } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const isMobile = useIsMobile()
   const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
   const [now, setNow] = useState(new Date())
@@ -66,6 +156,9 @@ export default function Navbar() {
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [])
+
+  // Close the mobile panel whenever the route changes
+  useEffect(() => { setNavOpen(false) }, [location.pathname])
 
   // Theme sync
   useEffect(() => {
@@ -116,7 +209,11 @@ export default function Navbar() {
     }
   }
 
-  const visibleItems = NAV_ITEMS.filter(item => !item.operator || isOperator)
+  // Every link the mobile panel should show, flattened.
+  const mobileItems = [
+    ...CITIZEN_ITEMS,
+    ...(isOperator ? OPERATOR_GROUPS.flatMap(g => g.items.map(i => ({ ...i, group: g.label }))) : []),
+  ]
 
   return (
     <nav style={styles.nav}>
@@ -130,27 +227,42 @@ export default function Navbar() {
         </div>
       </NavLink>
 
-      {/* Links (only when signed in; operator pages hidden from citizens) */}
+      {/* Links */}
       {!isMobile && (
         <div style={styles.links}>
-          {isAuthed && visibleItems.map(({ to, label, icon: Icon, live }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
-            >
-              <Icon size={13} />
-              {label}
-              {live && (
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
-                  animation: 'pulse 1.6s ease-in-out infinite',
-                }} />
-              )}
-            </NavLink>
-          ))}
+          {isAuthed ? (
+            <>
+              {CITIZEN_ITEMS.map(({ to, label, icon: Icon, live }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === '/'}
+                  className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+                >
+                  <Icon size={13} />
+                  {label}
+                  {live && <LiveDot />}
+                </NavLink>
+              ))}
+              {isOperator && OPERATOR_GROUPS.map(group => (
+                <NavGroup
+                  key={group.label}
+                  group={group}
+                  activePath={location.pathname}
+                  onNavigate={navigate}
+                />
+              ))}
+            </>
+          ) : (
+            <>
+              <NavLink to="/pricing" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
+                Pricing
+              </NavLink>
+              <NavLink to="/developers" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
+                Developers
+              </NavLink>
+            </>
+          )}
         </div>
       )}
 
@@ -169,13 +281,17 @@ export default function Navbar() {
           </span>
         )}
 
+        {isAuthed && <NotificationsBell />}
+
         <span style={styles.health} title={`API ${health === 'ok' ? 'online' : health === 'down' ? 'offline' : 'checking…'}`}>
           <span style={{
             width: 7, height: 7, borderRadius: '50%', background: healthColor,
             boxShadow: `0 0 8px ${healthColor}`,
             animation: health === 'ok' ? 'none' : 'pulse 1.4s ease-in-out infinite',
           }} />
-          <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>API</span>
+          {!isMobile && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>API</span>
+          )}
         </span>
 
         <button
@@ -194,9 +310,11 @@ export default function Navbar() {
               <span style={{ ...styles.avatar, borderColor: `${ROLE_COLORS[user.role]}66`, color: ROLE_COLORS[user.role] }}>
                 {(user.username || '?')[0].toUpperCase()}
               </span>
-              <span style={{ fontSize: 12, fontWeight: 600, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {user.username}
-              </span>
+              {!isMobile && (
+                <span style={{ fontSize: 12, fontWeight: 600, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {user.username}
+                </span>
+              )}
               <ChevronDown size={11} style={{ color: 'var(--text-muted)' }} />
             </button>
 
@@ -224,6 +342,10 @@ export default function Navbar() {
                   onClick={() => { shareLocation(); setMenuOpen(false) }}>
                   <MapPin size={12} style={{ color: 'var(--cyan)' }} /> Update my location
                 </button>
+                <button className="table-row-hover" style={styles.menuItem}
+                  onClick={() => { setMenuOpen(false); restartTour() }}>
+                  <HelpCircle size={12} style={{ color: 'var(--accent)' }} /> Replay the tour
+                </button>
                 {isAdmin && (
                   <button className="table-row-hover" style={styles.menuItem}
                     onClick={() => { navigate('/admin'); setMenuOpen(false) }}>
@@ -246,7 +368,7 @@ export default function Navbar() {
         )}
 
         {/* Hamburger (phone) */}
-        {isMobile && isAuthed && (
+        {isMobile && (
           <button
             className="btn btn-ghost btn-sm"
             style={{ width: 36, height: 36, padding: 0 }}
@@ -259,28 +381,41 @@ export default function Navbar() {
       </div>
 
       {/* Mobile nav panel */}
-      {isMobile && navOpen && isAuthed && (
+      {isMobile && navOpen && (
         <div className="glass anim-fade-in" style={styles.mobilePanel}>
-          {visibleItems.map(({ to, label, icon: Icon, live }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              onClick={() => setNavOpen(false)}
-              className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
-              style={{ padding: '13px 16px', fontSize: 13 }}
-            >
-              <Icon size={15} />
-              {label}
-              {live && (
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
-                  animation: 'pulse 1.6s ease-in-out infinite',
-                }} />
-              )}
-            </NavLink>
-          ))}
+          {isAuthed ? (
+            mobileItems.map(({ to, label, icon: Icon, live, group }, i) => {
+              const prev = mobileItems[i - 1]
+              const showHeader = group && (!prev || prev.group !== group)
+              return (
+                <React.Fragment key={to}>
+                  {showHeader && (
+                    <div className="overline" style={styles.mobileGroupHeader}>{group}</div>
+                  )}
+                  <NavLink
+                    to={to}
+                    end={to === '/'}
+                    onClick={() => setNavOpen(false)}
+                    className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+                    style={{ padding: '13px 16px', fontSize: 13 }}
+                  >
+                    <Icon size={15} />
+                    {label}
+                    {live && <LiveDot />}
+                  </NavLink>
+                </React.Fragment>
+              )
+            })
+          ) : (
+            <>
+              <NavLink to="/pricing" onClick={() => setNavOpen(false)} className="nav-link" style={{ padding: '13px 16px', fontSize: 13 }}>
+                Pricing
+              </NavLink>
+              <NavLink to="/developers" onClick={() => setNavOpen(false)} className="nav-link" style={{ padding: '13px 16px', fontSize: 13 }}>
+                Developers
+              </NavLink>
+            </>
+          )}
         </div>
       )}
     </nav>
@@ -327,7 +462,29 @@ const styles = {
     alignItems: 'center',
     gap: 3,
     flex: 1,
-    overflowX: 'auto',
+  },
+  groupMenu: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    left: 0,
+    width: 240,
+    zIndex: 1100,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    padding: 4,
+  },
+  groupItem: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 9,
+    width: '100%',
+    padding: '9px 11px',
+    background: 'transparent',
+    border: 'none',
+    borderRadius: 'var(--radius)',
+    cursor: 'pointer',
+    textAlign: 'left',
   },
   right: {
     display: 'flex',
@@ -412,5 +569,10 @@ const styles = {
     padding: 6,
     maxHeight: 'calc(100vh - var(--nav-h) - 20px)',
     overflowY: 'auto',
+  },
+  mobileGroupHeader: {
+    padding: '10px 16px 4px',
+    fontSize: 9,
+    color: 'var(--text-muted)',
   },
 }

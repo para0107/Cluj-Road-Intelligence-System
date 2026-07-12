@@ -136,3 +136,80 @@ export const REPAIR_COST_RON = {
   pedestrian_crossing_blur:  340,
 }
 export const SEVERITY_COST_FACTOR = { 1: 0.5, 2: 0.8, 3: 1.0, 4: 1.45, 5: 2.1 }
+
+/** Estimated repair cost for one detection (client-side sketch, not a quote). */
+export function estimateRepairCost(damageType, severity) {
+  const base = REPAIR_COST_RON[damageType] ?? 700
+  const factor = SEVERITY_COST_FACTOR[severity] ?? 1.0
+  return Math.round(base * factor)
+}
+
+// ── Work orders (mirrors backend/models_work.py WO_STATUSES) ─────────────
+export const WORK_ORDER_STATUSES = [
+  'open', 'scheduled', 'in_progress', 'repaired', 'verified', 'cancelled',
+]
+
+export const WORK_ORDER_LABELS = {
+  open:        'Open',
+  scheduled:   'Scheduled',
+  in_progress: 'In progress',
+  repaired:    'Repaired',
+  verified:    'Verified',
+  cancelled:   'Cancelled',
+}
+
+export const WORK_ORDER_COLORS = {
+  open:        '#6ea8ff',
+  scheduled:   '#ffd60a',
+  in_progress: '#ff9f43',
+  repaired:    '#3ddc84',
+  verified:    '#2dd4bf',
+  cancelled:   '#94a3b8',
+}
+
+// The board shows the live flow; cancelled orders are reachable by filter.
+export const WORK_ORDER_BOARD = ['open', 'scheduled', 'in_progress', 'repaired', 'verified']
+
+// ── Badges (mirrors BADGES in backend/gamification.py) ───────────────────
+export const BADGES = {
+  first_report:   { label: 'First report',   icon: '🚩', description: 'Sent a first hazard report.' },
+  confirmed_10:   { label: 'Road scout',     icon: '🔎', description: 'Ten of your reports were confirmed.' },
+  confirmed_50:   { label: 'Road guardian',  icon: '🛡️', description: 'Fifty of your reports were confirmed.' },
+  verified_first: { label: 'Triple checked', icon: '✅', description: 'A report of yours reached verified.' },
+  streak_7:       { label: 'Week streak',    icon: '🔥', description: 'Reported on seven days in a row.' },
+  fixed_1:        { label: 'Fixer',          icon: '🔧', description: 'A hazard you reported was repaired.' },
+  fixed_5:        { label: 'City changer',   icon: '🏙️', description: 'Five hazards you reported were repaired.' },
+  night_reporter: { label: 'Night watch',    icon: '🌙', description: 'Reported a hazard late at night.' },
+}
+
+export const ALL_BADGE_KEYS = Object.keys(BADGES)
+
+// Plain-language names for the points ledger reasons.
+export const POINTS_REASONS = {
+  event_confirmed: 'Report confirmed by other drivers',
+  event_verified:  'Report verified',
+  event_fixed:     'Reported hazard was repaired',
+  event_promoted:  'Report accepted as an official record',
+}
+
+// ── Road Quality Index bands (mirrors backend/routes/quality.py) ─────────
+export const RQI_BANDS = {
+  A: { label: 'Very good', color: '#3ddc84', min: 85 },
+  B: { label: 'Good',      color: '#a3e635', min: 70 },
+  C: { label: 'Fair',      color: '#ffd60a', min: 50 },
+  D: { label: 'Poor',      color: '#ff9f43', min: 30 },
+  E: { label: 'Very poor', color: '#ff5d5d', min: 0 },
+}
+
+// ── Live event validation states ─────────────────────────────────────────
+export const LIVE_STATUS_LABELS = {
+  unverified: 'Reported once',
+  confirmed:  'Confirmed',
+  verified:   'Verified',
+}
+
+export const LIVE_STATUS_COLORS = {
+  unverified: '#94a3b8',
+  confirmed:  '#ffd60a',
+  verified:   '#3ddc84',
+}

@@ -6,6 +6,8 @@ GET /stats — city-wide summary statistics
 
 import os
 import sys
+import threading
+import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
@@ -20,11 +22,34 @@ from backend.schemas import StatsResponse, DamageTypeCount, SeverityCount
 
 router = APIRouter()
 
+# Micro-cache: /stats is on the Command page for every signed-in user, and the
+# aggregates only change when a survey lands or an operator edits. Ten seconds
+# of staleness is invisible; the DB saves a full-table aggregate per request.
+_CACHE_TTL_S = float(os.getenv("STATS_CACHE_S", "10.0"))
+_cache: dict = {}          # key -> (expires_monotonic, value)
+_cache_lock = threading.Lock()
+
+
+def _cached(key: str, build):
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+    value = build()
+    with _cache_lock:
+        _cache[key] = (now + _CACHE_TTL_S, value)
+    return value
+
 
 @router.get("/stats", response_model=StatsResponse)
 def get_stats(db: Session = Depends(get_db), _user=Depends(get_current_user)):
     # Any signed-in role may read the headline stats (the Command page shows
     # them to citizens too); the detailed survey pages are operator-only.
+    return _cached("stats", lambda: _build_stats(db))
+
+
+def _build_stats(db: Session) -> StatsResponse:
     total = db.query(func.count(Detection.id)).scalar() or 0
     last_survey = db.query(func.max(Detection.survey_date)).scalar()
 

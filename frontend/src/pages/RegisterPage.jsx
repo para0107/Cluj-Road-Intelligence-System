@@ -8,14 +8,15 @@
  * Full admin is granted only by an existing admin (Admin page).
  */
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   UserPlus, AlertTriangle, User as UserIcon, Landmark,
   MailCheck, ShieldCheck, RefreshCw,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { authVerifyEmail, authResendCode } from '../utils/api'
+import { authVerifyEmail, authResendCode, fetchAuthConfig } from '../utils/api'
+import CaptchaField, { HoneypotField } from '../components/CaptchaField'
 
 export default function RegisterPage() {
   const { register, adoptSession } = useAuth()
@@ -32,6 +33,17 @@ export default function RegisterPage() {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
+  // Anti-bot. Both are inert unless the backend has CAPTCHA_ENABLED set.
+  const [captchaEnabled, setCaptchaEnabled] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState(null)
+  const [honeypot, setHoneypot] = useState('')
+
+  useEffect(() => {
+    fetchAuthConfig()
+      .then(c => setCaptchaEnabled(Boolean(c.captcha_enabled)))
+      .catch(() => {})
+  }, [])
+
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
 
   const fail = (err, fallback) => {
@@ -45,6 +57,10 @@ export default function RegisterPage() {
       setError('Please select your city. The map opens on it.')
       return
     }
+    if (captchaEnabled && !captchaToken) {
+      setError('Finish the verification check first.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -52,6 +68,8 @@ export default function RegisterPage() {
         ...form,
         full_name: form.full_name.trim() || null,
         city: form.city.trim(),
+        altcha: captchaToken || undefined,
+        website: honeypot,   // must stay empty; only a script fills it in
       })
       if (outcome.status === 'verify_email') {
         setInfo(outcome.message)
@@ -235,6 +253,9 @@ export default function RegisterPage() {
             <input className="input" type="password" value={form.password} onChange={set('password')}
                    required minLength={8} autoComplete="new-password" />
           </label>
+
+          <HoneypotField value={honeypot} onChange={setHoneypot} />
+          <CaptchaField enabled={captchaEnabled} onToken={setCaptchaToken} />
 
           <button className="btn btn-accent" style={{ padding: '11px 0', marginTop: 6 }} disabled={busy}>
             <UserPlus size={15} /> {busy ? 'Creating…' : 'Create account'}

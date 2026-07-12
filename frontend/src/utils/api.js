@@ -43,8 +43,12 @@ api.interceptors.response.use(
 
 // ── Auth endpoints ─────────────────────────────────────────────────────────
 
-export const authLogin = (identifier, password) =>
-  api.post('/auth/login', { identifier, password }).then(r => r.data)
+export const authLogin = (identifier, password, extra = {}) =>
+  api.post('/auth/login', { identifier, password, ...extra }).then(r => r.data)
+
+/** A fresh proof-of-work challenge for the ALTCHA widget (public endpoint). */
+export const fetchCaptchaChallenge = () =>
+  api.get('/auth/captcha/challenge').then(r => r.data)
 
 export const authRegister = (payload) =>
   api.post('/auth/register', payload).then(r => r.data)
@@ -152,6 +156,99 @@ export const fetchPriority = (limit = 50) =>
 export const downloadCsv = () => {
   window.open('/api/export/csv', '_blank')
 }
+
+// ── Engagement: points, badges, leaderboard, notifications ────────────────
+
+export const fetchMyImpact = () =>
+  api.get('/engagement/me').then(r => r.data)
+
+export const fetchLeaderboard = (city = null, limit = 50) =>
+  api.get('/engagement/leaderboard', { params: { city: city || undefined, limit } })
+     .then(r => r.data)
+
+export const fetchNotifications = (page = 1, pageSize = 20) =>
+  api.get('/notifications', { params: { page, page_size: pageSize } }).then(r => r.data)
+
+export const markNotificationsRead = (ids = null, all = false) =>
+  api.post('/notifications/read', { ids, all }).then(r => r.data)
+
+// ── Triage (operator): citizen live events → official detections ──────────
+
+export const fetchTriage = (params = {}) =>
+  api.get('/live/triage', { params }).then(r => r.data)
+
+export const promoteEvent = (eventId) =>
+  api.post(`/live/events/${eventId}/promote`).then(r => r.data)
+
+export const dismissEvent = (eventId) =>
+  api.post(`/live/events/${eventId}/dismiss`).then(r => r.data)
+
+// ── Work orders (operator) ─────────────────────────────────────────────────
+
+export const fetchWorkOrders = (params = {}) =>
+  api.get('/work-orders', { params }).then(r => r.data)
+
+export const fetchWorkOrder = (id) =>
+  api.get(`/work-orders/${id}`).then(r => r.data)
+
+export const createWorkOrder = (payload) =>
+  api.post('/work-orders', payload).then(r => r.data)
+
+export const updateWorkOrder = (id, payload) =>
+  api.patch(`/work-orders/${id}`, payload).then(r => r.data)
+
+export const editWorkOrderItems = (id, addIds = [], removeIds = []) =>
+  api.post(`/work-orders/${id}/items`, { add_ids: addIds, remove_ids: removeIds })
+     .then(r => r.data)
+
+export const deleteWorkOrder = (id) =>
+  api.delete(`/work-orders/${id}`).then(r => r.data)
+
+// ── Operations analytics (operator) ────────────────────────────────────────
+
+export const fetchOpsAnalytics = () =>
+  api.get('/analytics/ops').then(r => r.data)
+
+// ── Road Quality Index ─────────────────────────────────────────────────────
+
+export const fetchQualityGrid = (bbox, cellM = 120) =>
+  api.get('/quality/grid', { params: { bbox, cell_m: cellM } }).then(r => r.data)
+
+/** Trigger a browser download of the quality grid export (operator). */
+export const downloadQualityExport = (format = 'csv', bbox = null) => {
+  const params = new URLSearchParams({ format })
+  if (bbox) params.set('bbox', bbox)
+  window.open(`${API_ORIGIN}/api/quality/export?${params.toString()}`, '_blank')
+}
+
+// ── Developer API keys ─────────────────────────────────────────────────────
+
+export const fetchApiKeys = () =>
+  api.get('/apikeys').then(r => r.data)
+
+export const createApiKey = (name) =>
+  api.post('/apikeys', { name }).then(r => r.data)
+
+export const revokeApiKey = (id) =>
+  api.delete(`/apikeys/${id}`).then(r => r.data)
+
+// ── Contact sales (public) ─────────────────────────────────────────────────
+
+export const contactSales = (payload) =>
+  api.post('/contact/sales', payload).then(r => r.data)
+
+// ── Evidence media ─────────────────────────────────────────────────────────
+
+/**
+ * Fetch a detection's evidence photo as an object URL (an <img> tag cannot
+ * send the Bearer header, so the JPG comes through axios as a blob).
+ * Returns null when the detection has no evidence (404).
+ * Caller must URL.revokeObjectURL() the result when done.
+ */
+export const fetchEvidenceUrl = (detectionId) =>
+  api.get(`/media/evidence/${detectionId}`, { responseType: 'blob' })
+    .then(r => URL.createObjectURL(r.data))
+    .catch(() => null)
 
 // ── Health ────────────────────────────────────────────────────────────────
 

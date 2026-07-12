@@ -70,8 +70,11 @@ export function AuthProvider({ children }) {
     return () => { alive = false }
   }, [logout, shareLocation])
 
-  const login = useCallback(async (identifier, password) => {
-    const data = await authLogin(identifier, password)
+  // `extra` carries the anti-bot proof (the ALTCHA payload) when the backend
+  // has CAPTCHA_ENABLED set. It is an empty object otherwise, so nothing about
+  // the normal flow changes.
+  const login = useCallback(async (identifier, password, extra = {}) => {
+    const data = await authLogin(identifier, password, extra)
     persist(data.access_token, data.user)
     shareLocation()
     return data.user
