@@ -67,6 +67,14 @@ class LiveEvent(Base):
     last_reported = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
+    # ── Triage audit trail ───────────────────────────────────────────────────
+    # Set when an operator promotes the event into an official detection or
+    # dismisses it from the triage inbox (both deactivate the event).
+    promoted_detection_id = Column(
+        UUID(as_uuid=True), ForeignKey("detections.id", ondelete="SET NULL")
+    )
+    dismissed_at = Column(DateTime(timezone=True))
+
     # NOTE: no explicit GIST index here — GeoAlchemy2 auto-creates a spatial
     # index named idx_live_events_geom for every Geometry column. Declaring it
     # again collides on the name and makes Base.metadata.create_all() fail,
@@ -134,6 +142,9 @@ class LiveReport(Base):
 
     event_id = Column(UUID(as_uuid=True), ForeignKey("live_events.id", ondelete="CASCADE"), nullable=False)
     device_id = Column(String(64), nullable=False)   # camera / browser / vehicle identity
+    # The signed-in account behind the signal (nullable: pre-upgrade rows).
+    # Gamification joins on this to award points when an event escalates.
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
     kind = Column(String(10), nullable=False)        # sighting | confirm | dispute
 
     latitude = Column(Float)
@@ -149,6 +160,8 @@ class LiveReport(Base):
         # degrades to a table scan as reports accumulate. Existing volumes get
         # it from the idempotent CREATE INDEX in main.py's startup hook.
         Index("idx_live_reports_created", "created_at"),
+        # Gamification: "my reports" and per-user awards join on user_id.
+        Index("idx_live_reports_user", "user_id", "created_at"),
     )
 
     def __repr__(self) -> str:

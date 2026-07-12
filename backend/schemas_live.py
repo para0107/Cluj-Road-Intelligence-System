@@ -54,6 +54,7 @@ class LiveEventRead(BaseModel):
     first_reported: Optional[datetime]
     last_reported: Optional[datetime]
     expires_at: Optional[datetime]
+    promoted_detection_id: Optional[UUID] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -62,6 +63,18 @@ class LiveEventListResponse(BaseModel):
     server_time: datetime
     count: int
     items: List[LiveEventRead]
+
+
+class TriageListResponse(BaseModel):
+    """Operator triage inbox: active citizen events, most-validated first."""
+    total: int
+    items: List[LiveEventRead]
+
+
+class PromoteResponse(BaseModel):
+    """Result of promoting a live event into an official detection."""
+    event_id: UUID
+    detection_id: UUID
 
 
 class LiveActionResponse(BaseModel):

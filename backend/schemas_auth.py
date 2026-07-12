@@ -24,6 +24,11 @@ class RegisterRequest(BaseModel):
     full_name: Optional[str] = Field(None, max_length=120)
     role: str = Field("user")                       # user | municipality (admin only by promotion)
     city: Optional[str] = Field(None, max_length=80)
+    # Anti-bot fields (enforced when CAPTCHA_ENABLED): the ALTCHA widget's
+    # solution payload, and a honeypot that must stay empty (hidden input —
+    # humans never see it, naive bots fill it).
+    altcha: Optional[str] = Field(None, max_length=2000)
+    website: Optional[str] = Field(None, max_length=200)
 
     @field_validator("role")
     @classmethod
@@ -37,6 +42,7 @@ class LoginRequest(BaseModel):
     # username OR email in the same field — friendlier login form
     identifier: str = Field(..., min_length=3, max_length=120)
     password: str = Field(..., min_length=1, max_length=128)
+    altcha: Optional[str] = Field(None, max_length=2000)
 
 
 class LocationUpdate(BaseModel):
@@ -93,6 +99,7 @@ class AuthConfigResponse(BaseModel):
     """Tells the frontend which optional providers are configured."""
     google_enabled: bool
     google_client_id: str = ""        # needed by Google Identity Services in the browser
+    captcha_enabled: bool = False     # ALTCHA proof-of-work on login/register
     apple_enabled: bool = False       # intentionally off: paid Apple program
     apple_disabled_reason: str = (
         "Sign in with Apple requires a paid Apple Developer membership "

@@ -78,10 +78,23 @@ stage-label maps in `frontend/src/pages/IngestionPage.jsx`.
 
 ## Database
 
-PostGIS, two tables (`backend/models.py` mirrors `db/init/01_schema.sql`): `detections` (one row
-per de-duplicated physical damage; upsert matches same `damage_type` within
-`DEDUP_CLUSTER_RADIUS_M` via `ST_DWithin` on geography and bumps `detection_count`) and
-`survey_log` (one row per `survey_date`).
+PostGIS. Core survey tables (`backend/models.py` mirrors `db/init/01_schema.sql`):
+`detections` (one row per de-duplicated physical damage; upsert matches same
+`damage_type` within `DEDUP_CLUSTER_RADIUS_M` via `ST_DWithin` on geography and bumps
+`detection_count`) and `survey_log` (one row per `survey_date`).
+
+Feature tables: `live_events` / `live_reports` / `live_devices` (live mode),
+`users` / `pending_registrations` / `city_landmarks` (auth), `user_points` /
+`user_stats` / `user_badges` / `notifications` (engagement), `work_orders` /
+`work_order_items` (repairs), `api_keys` (public API).
+
+**Adding a column or index to an EXISTING table means editing three places** —
+`create_all` will not do it for you: (1) the model, (2) an idempotent
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` in the
+`_upgrade_ddl` list in `main.py::startup_event` (for existing volumes), and (3) the
+matching `db/init/*.sql` (for fresh volumes). `db/init/06–08` add engagement, work
+orders and API keys; note `live_reports.user_id` lives in `06` rather than `02`
+because `users` does not exist yet at that point in the init order.
 
 **Port nuance:** inside Docker the backend uses `db:5432`; host-run code (pipeline, db_writer)
 uses `localhost:${POSTGRES_PORT}` — `.env` sets `POSTGRES_PORT=5433`.
@@ -105,12 +118,21 @@ class list lives in `frontend/src/utils/constants.js` and the detector config.
   **One global context only**: `AuthContext` (session/user). Everything else is
   page-local hooks; the cross-page pipeline signal is `localStorage['rids_active_job']`
   (set by IngestionPage, polled by MapPage every 10 s).
-- Every route except `/login` and `/register` is wrapped in `RequireAuth`; the
-  survey/analytics pages (`/map`, `/stats`, `/explorer`, `/priority`, `/ingest`) are
-  additionally wrapped in `RequireOperator` (`AuthContext` exposes `isOperator`/`isAdmin`)
-  — citizens get Home, Live, and About. The JWT lives in `localStorage['rids_token']`
-  and is attached by an axios interceptor in `utils/api.js` (a 401 outside `/auth/*`
-  clears the session and redirects to /login).
+- Public routes: `/login`, `/register`, `/pricing`, `/developers`. Everything else is
+  wrapped in `RequireAuth`; the survey/operations pages (`/map`, `/stats`, `/explorer`,
+  `/priority`, `/ingest`, `/triage`, `/workorders`, `/quality`) are additionally wrapped
+  in `RequireOperator` (`AuthContext` exposes `isOperator`/`isAdmin`) — citizens get
+  Command, Live, My impact, Assistant and About. The JWT lives in
+  `localStorage['rids_token']` and is attached by an axios interceptor in `utils/api.js`
+  (a 401 outside `/auth/*` clears the session and redirects to /login).
+- **All pages are `React.lazy` chunks** (`App.jsx`) and vendors are split in
+  `vite.config.js`. The navbar groups operator pages into two dropdowns (Survey,
+  Operations) so twelve pages still fit.
+- ReactBits components are **vendored** (JS-CSS variants) under `src/reactbits/`, not
+  installed as a package. `SpotlightCard.css` was re-pointed at the design tokens (it
+  shipped hardcoded `#111`, which broke the light theme). Gate every WebGL/GSAP effect
+  on `useMotionOk()` — `AnimatedContent` sets `visibility:hidden` until GSAP reveals it,
+  so rendering it with motion off hides the content.
 - Map tiles follow the app theme (dark → Carto dark, light → Carto voyager) via
   `hooks/useTheme.js`; MapPage's switcher overrides per-session, LivePage always follows.
 - **Maps never hardcode a city.** They open on the signed-in user's city via
@@ -222,10 +244,77 @@ this includes e-mails (`backend/notify.py`, signed "The RDDS team"), API error
 System"; internal keys (`rids_*` localStorage, `cluj_monitor_*` containers) are
 deliberately NOT renamed.
 
+## Citizen engagement (points, badges, notifications)
+
+`backend/gamification.py` + `backend/models_engagement.py` + `routes/engagement.py`.
+**A raw report earns zero points — this is load-bearing, not an oversight.** Points
+are granted only on outcomes a lone spammer cannot manufacture: the event reaching
+`confirmed` (+10) or `verified` (+15) through *distinct-device* escalation, an
+operator promoting it (+20), or the damage being fixed (+25). Awards go to every
+distinct `live_reports.user_id` supporting the event, and the ledger's unique
+`(user_id, reason, ref_id)` makes them idempotent (a replayed hook inserts nothing).
+`user_stats` is a denormalized snapshot so the leaderboard is one indexed scan, not
+a SUM over the ledger. Reports are additionally capped at 1/15 s and 40/day per user.
+
+Do NOT "fix" this by awarding points on report — it re-opens the farm.
+
+## Municipality suite (the revenue path)
+
+Detect → triage → plan → repair → verify, end to end:
+
+- **Triage** (`/live/triage`, `promote`, `dismiss`) turns a crowd report into a real
+  `detections` row (it then flows through the map, priority queue and work orders
+  like any pipeline result).
+- **Work orders** (`backend/routes/workorders.py`) group detections into one crew job
+  through `open → scheduled → in_progress → repaired → verified`. Moving to `repaired`
+  stamps `fixed_at` on every item.
+- **Repair verification**: a detection is *reopened* when `last_detected > fixed_at`
+  (the pipeline saw the damage again after it was signed off). A work order **cannot**
+  move to `verified` while any item is reopened — the route 409s with the offending
+  ids. This is the feature that makes the product defensible; do not soften it.
+- **Route planning** is client-side (`frontend/src/utils/routePlan.js`): haversine +
+  nearest-neighbour + 2-opt. **No routing API** — that would cost money and leak the
+  city's schedule.
+- **Road Quality Index** (`backend/routes/quality.py`): grid cells (~120 m) scored
+  `100·exp(-penalty/8)` from severity, recency and repair state, banded A–E. Grid math
+  is plain lat/lon — **no new geometry columns**, which also sidesteps the GeoAlchemy2
+  index trap.
+- **Evidence photos**: `pipeline/db_writer.py` crops the detection's bbox out of its
+  source frame into `<session>/07_db_write/evidence/` and stores a data-dir-relative
+  `crop_path`. Served only through `GET /media/evidence/{id}` (operator, path-validated
+  against `PROJECT_DATA_DIR`). Kill switch: `EVIDENCE_CROPS=false`. Never fatal — every
+  failure path silently skips the crop.
+
+## Public API & anti-bot
+
+`routes/public_api.py`: keys are `rdds_<hex>`, stored as SHA-256 + prefix only, shown
+once. `/v1/public/*` is GET-only, rate-limited per key, and exposes no user, device or
+photo data. `backend/altcha.py` is a **stdlib** proof-of-work captcha (no vendor, no
+outbound call) gated by `CAPTCHA_ENABLED`; off by default so dev and scripts keep
+working. `backend/ratelimit.py` is the shared limiter for every abusable route — see
+docs/SECURITY.md for the budget table.
+
+## The assistant (`/assistant`) — zero cost by construction
+
+Hybrid, entirely client-side. **Never add a paid model API here.**
+- Instant mode (default, every device): intent handlers answer *number* questions from
+  the real API (`assistant/intents.js`), and MiniSearch retrieves from a curated
+  knowledge base (`assistant/knowledge.js`). This is why the assistant cannot invent a
+  statistic: those questions never reach a model.
+- AI mode (opt-in): WebLLM runs Llama-3.2-1B in the user's browser on WebGPU, and
+  transformers.js adds dense retrieval. Both are **dynamic imports** — keep them that
+  way, or the 6 MB runtime lands in the initial bundle.
+- `assistant/graph.js` is an explicit state machine (guard → intents → retrieve →
+  conditional HyDE → generate → ground-check). `assistant/guard.js` drops any sentence
+  the retrieved context does not support and strips numbers that are not in the context.
+  There is deliberately **no LLM-as-judge** (a second pass on a 1B model costs latency
+  and buys little).
+
 ## Layout notes
 
 - `backend/` — FastAPI (routes: auth, detections, stats, heatmap, priority, export,
-  ingest, live, cities).
+  ingest, live, cities, engagement, workorders, analytics, quality, public_api, media,
+  contact).
 - `pipeline/` — the 7 stage modules + `orchestrator.py` + `job_watcher.py`.
 - `docs/` — `LIVE_MODE.md`, `FUNCTIONALITY.md`, `SECURITY.md`, `FREE_DEPLOYMENT.md`
   (free split hosting: Vercel static frontend + host backend via `VITE_API_URL`).

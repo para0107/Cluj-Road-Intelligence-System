@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import Optional, List
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, computed_field
 
 
 # ─────────────────────────────────────────────
@@ -63,8 +63,25 @@ class DetectionRead(DetectionBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    fixed_at: Optional[datetime] = None
+    # Raw evidence path stays server-side; clients get has_evidence and fetch
+    # the JPG through the authed /media/evidence/{id} route.
+    crop_path: Optional[str] = Field(None, exclude=True)
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def has_evidence(self) -> bool:
+        return bool(self.crop_path)
+
+    @computed_field
+    @property
+    def reopened(self) -> bool:
+        """Marked fixed, but the survey pipeline saw it again afterwards."""
+        if not (self.is_fixed and self.fixed_at and self.last_detected):
+            return False
+        return self.last_detected > self.fixed_at.date()
 
 
 # ─────────────────────────────────────────────

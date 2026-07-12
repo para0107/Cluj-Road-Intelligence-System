@@ -13,7 +13,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from uuid import UUID
 from typing import Optional
-from datetime import date
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -151,8 +151,11 @@ def update_detection_status(
     detection = db.query(Detection).filter(Detection.id == detection_id).first()
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found.")
-    
+
     detection.is_fixed = status_update.is_fixed
+    # fixed_at anchors the repair-verification loop: a later last_detected
+    # (the pipeline saw the damage again) flags the detection as reopened.
+    detection.fixed_at = datetime.now(tz=timezone.utc) if status_update.is_fixed else None
     db.commit()
     db.refresh(detection)
     return detection

@@ -20,27 +20,27 @@ from backend.models import Detection
 
 router = APIRouter()
 
-@router.get("/export/csv")
-def export_csv(db: Session = Depends(get_db), _op=Depends(require_operator)):
+_HEADERS = [
+    "id", "damage_type", "confidence", "latitude", "longitude",
+    "severity", "depth_estimate_cm", "surface_area_cm2",
+    "detection_count", "first_detected", "last_detected", "priority_score", "is_fixed"
+]
+
+_BATCH_ROWS = 500
+
+
+def _iter_csv(db: Session):
+    """Stream the table in batches so a large export never sits whole in RAM.
+
+    The request-scoped session stays open until the response finishes
+    (FastAPI runs dependency teardown after the body is sent).
     """
-    Export all detections as a CSV file.
-    """
-    detections = db.query(Detection).all()
-    
-    # Create an in-memory string buffer
-    f = StringIO()
-    writer = csv.writer(f)
-    
-    # Write the header
-    headers = [
-        "id", "damage_type", "confidence", "latitude", "longitude",
-        "severity", "depth_estimate_cm", "surface_area_cm2",
-        "detection_count", "first_detected", "last_detected", "priority_score", "is_fixed"
-    ]
-    writer.writerow(headers)
-    
-    # Write the rows
-    for det in detections:
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_HEADERS)
+
+    pending = 0
+    for det in db.query(Detection).yield_per(1000):
         writer.writerow([
             det.id,
             det.damage_type,
@@ -56,10 +56,21 @@ def export_csv(db: Session = Depends(get_db), _op=Depends(require_operator)):
             round(det.priority_score, 4) if det.priority_score is not None else "",
             det.is_fixed
         ])
-    
-    # Return as a streaming response with appropriate headers
-    f.seek(0)
-    response = StreamingResponse(iter([f.getvalue()]), media_type="text/csv")
+        pending += 1
+        if pending >= _BATCH_ROWS:
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+            pending = 0
+    if buf.tell() or pending:
+        yield buf.getvalue()
+
+
+@router.get("/export/csv")
+def export_csv(db: Session = Depends(get_db), _op=Depends(require_operator)):
+    """
+    Export all detections as a CSV file (streamed in batches).
+    """
+    response = StreamingResponse(_iter_csv(db), media_type="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=rids_detections_export.csv"
-    
     return response

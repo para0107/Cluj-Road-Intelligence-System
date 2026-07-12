@@ -29,15 +29,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Optional, Set
+import os
+from typing import Dict, Optional, Set
 
 from fastapi import WebSocket
 from loguru import logger
+
+# Connection caps keep one abusive client (or a socket-open flood) from
+# exhausting the process. Per-IP counts use the Nginx-provided X-Real-IP.
+_MAX_PER_IP = int(os.getenv("LIVE_WS_MAX_PER_IP", "4"))
+_MAX_TOTAL = int(os.getenv("LIVE_WS_MAX_TOTAL", "2000"))
 
 
 class ConnectionManager:
     def __init__(self) -> None:
         self._connections: Set[WebSocket] = set()
+        self._ws_ip: Dict[WebSocket, str] = {}
+        self._by_ip: Dict[str, int] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = asyncio.Lock()
 
@@ -47,15 +55,35 @@ class ConnectionManager:
         """Call once from an async startup hook so threads can reach the loop."""
         self._loop = asyncio.get_running_loop()
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket, ip: str = "?") -> bool:
+        """Accept the socket and register it. Returns False when a cap is hit
+        (the socket is accepted so a close code can be delivered; the caller
+        should close it)."""
         await ws.accept()
         async with self._lock:
+            if (len(self._connections) >= _MAX_TOTAL
+                    or self._by_ip.get(ip, 0) >= _MAX_PER_IP):
+                logger.warning("Live WS refused (caps) for {}", ip)
+                return False
             self._connections.add(ws)
+            self._ws_ip[ws] = ip
+            self._by_ip[ip] = self._by_ip.get(ip, 0) + 1
         logger.info("Live WS connected ({} total)", len(self._connections))
+        return True
+
+    def _drop_locked(self, ws: WebSocket) -> None:
+        self._connections.discard(ws)
+        ip = self._ws_ip.pop(ws, None)
+        if ip is not None:
+            n = self._by_ip.get(ip, 0) - 1
+            if n > 0:
+                self._by_ip[ip] = n
+            else:
+                self._by_ip.pop(ip, None)
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
-            self._connections.discard(ws)
+            self._drop_locked(ws)
         logger.info("Live WS disconnected ({} total)", len(self._connections))
 
     @property
@@ -83,7 +111,7 @@ class ConnectionManager:
         if dead:
             async with self._lock:
                 for ws in dead:
-                    self._connections.discard(ws)
+                    self._drop_locked(ws)
 
     def broadcast_from_thread(self, message: dict) -> None:
         """

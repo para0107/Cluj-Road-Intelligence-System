@@ -221,6 +221,27 @@ def send_thankyou_email(to_addr: str, username: str, damage_type: str) -> bool:
     return send_email_async(to_addr, "Thank you for your road damage report", body)
 
 
+def send_contact_sales_email(admin_addrs: list[str], name: str, email: str,
+                             organization: str, message: str) -> None:
+    """Forward a pricing-page inquiry to every admin (fire-and-forget)."""
+    body = (
+        "A new inquiry arrived through the RDDS pricing page:\n"
+        "\n"
+        f"    Name         : {name}\n"
+        f"    E-mail       : {email}\n"
+        f"    Organization : {organization or '-'}\n"
+        "\n"
+        "Message:\n"
+        f"{message}\n"
+        "\n"
+        "Reply directly to the sender's e-mail address.\n"
+        "\n"
+        "The RDDS team\n"
+    )
+    for addr in admin_addrs:
+        send_email_async(addr, "RDDS: new pricing inquiry", body)
+
+
 def send_welcome_email(to_addr: str, username: str, role: str, city: str | None = None) -> bool:
     """Notification for a freshly registered (local, e-mail based) account."""
     role_line = (

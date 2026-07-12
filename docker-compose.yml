@@ -10,7 +10,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB:       ${POSTGRES_DB}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Loopback-only: the host pipeline connects via localhost, and the DB is
+      # never reachable from the LAN/internet. Containers use db:5432 as before.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Auto-create the schema on FIRST start (empty pgdata volume only).
@@ -55,7 +57,10 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
 
     ports:
-      - "8000:8000"
+      # Loopback-only: browsers reach the API through the Nginx proxy on :3000,
+      # which sets a trustworthy X-Real-IP. Direct host access (dev tools,
+      # curl, the Vite dev proxy) still works via localhost.
+      - "127.0.0.1:8000:8000"
     volumes:
       # ── Shared data volume ───────────────────────────────────────────────
       - ./data:/app/data

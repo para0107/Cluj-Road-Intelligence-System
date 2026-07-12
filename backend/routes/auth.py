@@ -53,13 +53,15 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend import altcha as captcha
 from backend.database import get_db
 from backend.models_auth import User, PendingRegistration, ROLE_MUNICIPALITY, ROLE_ADMIN
+from backend.ratelimit import Limiter, client_ip, rate_limited
 from backend.auth import (
     hash_password, verify_password, create_token,
     get_current_user, require_admin, GOOGLE_CLIENT_ID,
@@ -82,58 +84,59 @@ _RESEND_MIN_GAP_S = 60.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Login rate limiting (in-process, zero-dependency)
+# Rate limiting (in-process, zero-dependency — shared module in backend/ratelimit.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
-_LOGIN_WINDOW_S = float(os.getenv("LOGIN_WINDOW_S", "900"))
-_LOGIN_LOCKOUT_S = float(os.getenv("LOGIN_LOCKOUT_S", "900"))
-
-_rl_lock = threading.Lock()
-_rl_failures: dict[str, tuple[int, float]] = {}   # key → (count, window_start)
-_rl_locked_until: dict[str, float] = {}
-
-
-def _client_ip(request: Request) -> str:
-    # Behind the bundled Nginx, X-Real-IP carries the true client address.
-    return request.headers.get("X-Real-IP") or (request.client.host if request.client else "?")
+_login_limiter = Limiter(
+    "login",
+    max_events=int(os.getenv("LOGIN_MAX_ATTEMPTS", "5")),
+    window_s=float(os.getenv("LOGIN_WINDOW_S", "900")),
+    lockout_s=float(os.getenv("LOGIN_LOCKOUT_S", "900")),
+    detail="Too many failed sign-in attempts. Wait a while and try again.",
+)
+_register_limiter = Limiter(
+    "register", max_events=5, window_s=3600.0,
+    detail="Too many registration attempts from this address. Try again later.",
+)
+_oauth_limiter = Limiter(
+    "oauth", max_events=20, window_s=3600.0,
+    detail="Too many sign-in attempts from this address. Try again later.",
+)
 
 
 def _rl_key(identifier: str, request: Request) -> str:
-    return f"{identifier.strip().lower()}|{_client_ip(request)}"
+    return f"{identifier.strip().lower()}|{client_ip(request)}"
 
 
-def _rl_check(key: str) -> None:
-    now = time.time()
-    with _rl_lock:
-        until = _rl_locked_until.get(key, 0.0)
-        if until > now:
-            raise HTTPException(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                f"Too many failed sign-in attempts. Try again in {int(until - now) + 1} s.",
-            )
-        if until:
-            _rl_locked_until.pop(key, None)
+_captcha_challenge_limiter = Limiter(
+    "captcha_challenge", max_events=30, window_s=60.0,
+    detail="Too many captcha requests. Try again in a minute.",
+)
 
 
-def _rl_fail(key: str) -> None:
-    now = time.time()
-    with _rl_lock:
-        count, start = _rl_failures.get(key, (0, now))
-        if now - start > _LOGIN_WINDOW_S:
-            count, start = 0, now
-        count += 1
-        if count >= _LOGIN_MAX_ATTEMPTS:
-            _rl_locked_until[key] = now + _LOGIN_LOCKOUT_S
-            _rl_failures.pop(key, None)
-        else:
-            _rl_failures[key] = (count, start)
+def _require_captcha(altcha_payload: str | None, honeypot: str | None = None) -> None:
+    """Enforce the ALTCHA proof-of-work (and honeypot) when enabled.
+
+    With CAPTCHA_ENABLED unset the fields are ignored entirely, keeping dev
+    setups and scripted flows working unchanged.
+    """
+    if not captcha.CAPTCHA_ENABLED:
+        return
+    if honeypot:
+        # A hidden field only bots fill in. Same message as a bad captcha so
+        # scripts learn nothing from the difference.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Verification failed. Refresh the page and try again.")
+    if not altcha_payload or not captcha.verify(altcha_payload):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Verification failed. Refresh the page and try again.")
 
 
-def _rl_ok(key: str) -> None:
-    with _rl_lock:
-        _rl_failures.pop(key, None)
-        _rl_locked_until.pop(key, None)
+@router.get("/auth/captcha/challenge")
+def captcha_challenge(request: Request):
+    """A fresh proof-of-work challenge for the ALTCHA widget (public)."""
+    _captcha_challenge_limiter.hit(f"captcha|{client_ip(request)}")
+    return captcha.create_challenge()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,8 +209,13 @@ def _create_user_from_pending(db: Session, pending: PendingRegistration) -> User
 # Registration — verify the e-mail BEFORE the account exists
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/auth/register", response_model=RegisterOutcome, status_code=201)
+@router.post(
+    "/auth/register", response_model=RegisterOutcome, status_code=201,
+    dependencies=[Depends(rate_limited(_register_limiter))],
+)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    _require_captcha(payload.altcha, honeypot=payload.website)
+
     # Every account is tied to a city — it is what the maps open on and what
     # municipality scoping uses. (Google sign-ins pick theirs on first login.)
     if not (payload.city and payload.city.strip()):
@@ -384,9 +392,11 @@ def resend_code(payload: ResendCodeRequest, db: Session = Depends(get_db)):
 
 @router.post("/auth/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    _require_captcha(payload.altcha)
+
     ident = payload.identifier.strip().lower()
     key = _rl_key(ident, request)
-    _rl_check(key)
+    _login_limiter.check(key)
 
     user = (
         db.query(User)
@@ -413,12 +423,12 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 status.HTTP_403_FORBIDDEN,
                 "Confirm your e-mail first. Check your inbox for the code.",
             )
-        _rl_fail(key)
+        _login_limiter.fail(key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong username/e-mail or password.")
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account disabled.")
 
-    _rl_ok(key)
+    _login_limiter.ok(key)
     user.last_login_at = _now()
     db.commit()
     db.refresh(user)
@@ -432,12 +442,16 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 @router.get("/auth/config", response_model=AuthConfigResponse)
 def auth_config():
     return AuthConfigResponse(
+        captcha_enabled=captcha.CAPTCHA_ENABLED,
         google_enabled=bool(GOOGLE_CLIENT_ID),
         google_client_id=GOOGLE_CLIENT_ID,
     )
 
 
-@router.post("/auth/oauth/google", response_model=TokenResponse)
+@router.post(
+    "/auth/oauth/google", response_model=TokenResponse,
+    dependencies=[Depends(rate_limited(_oauth_limiter))],
+)
 def google_login(body: dict, db: Session = Depends(get_db)):
     """
     Exchange a Google ID token (from Google Identity Services on the frontend)
@@ -579,9 +593,16 @@ def delete_me(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/auth/users", response_model=UserListResponse)
-def list_users(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    items = db.query(User).order_by(User.created_at.asc()).limit(500).all()
-    return UserListResponse(total=len(items), items=items)
+def list_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    q = db.query(User).order_by(User.created_at.asc())
+    total = q.count()
+    items = q.offset((page - 1) * page_size).limit(page_size).all()
+    return UserListResponse(total=total, items=items)
 
 
 @router.patch("/auth/users/{user_id}/role", response_model=UserRead)
@@ -650,15 +671,17 @@ def admin_delete_user(
 
 
 @router.get("/auth/registrations/pending", response_model=PendingListResponse)
-def pending_registrations(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+def pending_registrations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """Every half-finished registration; municipality ones can be approved."""
-    items = (
-        db.query(PendingRegistration)
-        .order_by(PendingRegistration.created_at.asc())
-        .limit(500)
-        .all()
-    )
-    return PendingListResponse(total=len(items), items=items)
+    q = db.query(PendingRegistration).order_by(PendingRegistration.created_at.asc())
+    total = q.count()
+    items = q.offset((page - 1) * page_size).limit(page_size).all()
+    return PendingListResponse(total=total, items=items)
 
 
 @router.post("/auth/registrations/{pending_id}/approve", response_model=UserRead)

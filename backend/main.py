@@ -19,10 +19,17 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from backend.database import check_connection, engine, Base
-from backend.routes import detections, stats, heatmap, priority, export, ingest, live, auth, cities
+from backend.middleware import SecurityHeadersMiddleware
+from backend.routes import (
+    detections, stats, heatmap, priority, export, ingest, live, auth, cities,
+    engagement, workorders, analytics, media, quality, public_api, contact,
+)
 from backend.live_manager import manager as live_ws_manager
-import backend.models_live  # noqa: F401 — register live_events/live_reports on Base.metadata
-import backend.models_auth  # noqa: F401 — register users/city_landmarks on Base.metadata
+import backend.models_live        # noqa: F401 — register live_events/live_reports on Base.metadata
+import backend.models_auth        # noqa: F401 — register users/city_landmarks on Base.metadata
+import backend.models_engagement  # noqa: F401 — register points/badges/notifications on Base.metadata
+import backend.models_work        # noqa: F401 — register work_orders on Base.metadata
+import backend.models_apikeys     # noqa: F401 — register api_keys on Base.metadata
 
 load_dotenv()
 
@@ -47,15 +54,19 @@ app = FastAPI(
 
 # Comma-separated list in .env, e.g. CORS_ORIGINS=https://rids.vercel.app
 # Default "*" keeps local/dev friction-free; set real origins when deploying.
+# Browsers reject the "*" + credentials pairing, and the app authenticates with
+# Bearer headers (not cookies), so credentials are only enabled for real origins.
 _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials="*" not in _cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # ─────────────────────────────────────────────
 # Routers
@@ -70,6 +81,13 @@ app.include_router(ingest.router,     prefix="/api", tags=["Ingest"])
 app.include_router(live.router,       prefix="/api", tags=["Live"])
 app.include_router(auth.router,       prefix="/api", tags=["Auth"])
 app.include_router(cities.router,     prefix="/api", tags=["Cities"])
+app.include_router(engagement.router, prefix="/api", tags=["Engagement"])
+app.include_router(workorders.router, prefix="/api", tags=["Work orders"])
+app.include_router(analytics.router,  prefix="/api", tags=["Analytics"])
+app.include_router(media.router,      prefix="/api", tags=["Media"])
+app.include_router(quality.router,    prefix="/api", tags=["Quality"])
+app.include_router(public_api.router, prefix="/api", tags=["Public API"])
+app.include_router(contact.router,    prefix="/api", tags=["Contact"])
 
 # ─────────────────────────────────────────────
 # Startup event
@@ -99,17 +117,34 @@ async def startup_event():
                 "missing and their endpoints will return 500. Fix the schema "
                 "error above and restart the backend."
             )
-        # create_all never adds NEW indexes to EXISTING tables, so indexes
-        # that arrived after a volume was created are ensured here instead.
+        # create_all never adds NEW columns or indexes to EXISTING tables, so
+        # everything that arrived after a volume was created is ensured here
+        # with idempotent DDL instead. Fresh volumes get identical schema from
+        # db/init/*.sql — keep the three definitions in sync.
+        _upgrade_ddl = [
+            # detections: evidence crops + repair verification loop
+            "ALTER TABLE detections ADD COLUMN IF NOT EXISTS crop_path TEXT",
+            "ALTER TABLE detections ADD COLUMN IF NOT EXISTS fixed_at TIMESTAMPTZ",
+            # live_reports: account linkage for gamification
+            "ALTER TABLE live_reports ADD COLUMN IF NOT EXISTS user_id UUID "
+            "REFERENCES users(id) ON DELETE SET NULL",
+            # live_events: triage audit trail
+            "ALTER TABLE live_events ADD COLUMN IF NOT EXISTS promoted_detection_id UUID "
+            "REFERENCES detections(id) ON DELETE SET NULL",
+            "ALTER TABLE live_events ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ",
+            # indexes on existing tables
+            "CREATE INDEX IF NOT EXISTS idx_live_reports_created "
+            "ON live_reports (created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_live_reports_user "
+            "ON live_reports (user_id, created_at)",
+        ]
         try:
             from sqlalchemy import text
             with engine.begin() as conn:
-                conn.execute(text(
-                    "CREATE INDEX IF NOT EXISTS idx_live_reports_created "
-                    "ON live_reports (created_at)"
-                ))
+                for ddl in _upgrade_ddl:
+                    conn.execute(text(ddl))
         except Exception:
-            logger.exception("Could not ensure secondary indexes (non-fatal).")
+            logger.exception("Could not ensure schema upgrades (non-fatal).")
         _seed_admin()
         logger.success("API ready.")
 

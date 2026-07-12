@@ -37,7 +37,9 @@ class Detection(Base):
     damage_type = Column(String(30), nullable=False)
     confidence = Column(Float, nullable=False)
     frame_path = Column(Text)
-    # crop_path = Column(Text)
+    # Data-dir-relative path of the evidence crop JPG written by the pipeline
+    # (pipeline/db_writer.py); served through GET /api/media/evidence/{id}.
+    crop_path = Column(Text)
 
     # ── SAM segmentation geometry ─────────────────────────────────────────────
     surface_area_cm2 = Column(Float)
@@ -72,6 +74,9 @@ class Detection(Base):
     
     # ── Status ────────────────────────────────────────────────────────────────
     is_fixed = Column(Boolean, default=False)
+    # Set when an operator (or a work order reaching "repaired") marks it
+    # fixed. A later last_detected means the pipeline saw it again → reopened.
+    fixed_at = Column(DateTime(timezone=True))
 
     def __repr__(self) -> str:
         return (
