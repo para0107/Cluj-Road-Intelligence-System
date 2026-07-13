@@ -15,7 +15,11 @@
 
 // About 880 MB of weights. Chosen over larger models because it must fit in
 // VRAM on an ordinary laptop and start answering in a few seconds.
-export const MODEL_ID = 'Llama-3.2-1B-Instruct-q4f16_1-MLC'
+// Override per deployment with VITE_WEBLLM_MODEL (any model id from the
+// WebLLM prebuilt list, e.g. Qwen2.5-1.5B-Instruct-q4f16_1-MLC for an
+// Apache-2.0 model with no attribution clause).
+const ENV = (typeof import.meta !== 'undefined' && import.meta.env) || {}
+export const MODEL_ID = ENV.VITE_WEBLLM_MODEL || 'Llama-3.2-1B-Instruct-q4f16_1-MLC'
 
 let engine = null
 let loadPromise = null

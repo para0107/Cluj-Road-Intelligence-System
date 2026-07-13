@@ -12,7 +12,12 @@
  * instant mode never touches it.
  */
 
-const MODEL_ID = 'Xenova/all-MiniLM-L6-v2'
+// Overridable per deployment; the default is a 25 MB Apache-2.0 model.
+// (`import.meta.env` exists under Vite; the guard keeps this file importable
+// from plain Node, where the embed-knowledge script reuses this constant.)
+const ENV = (typeof import.meta !== 'undefined' && import.meta.env) || {}
+export const EMBEDDER_MODEL_ID = ENV.VITE_EMBEDDER_MODEL || 'Xenova/all-MiniLM-L6-v2'
+const MODEL_ID = EMBEDDER_MODEL_ID
 
 let extractor = null
 let loadPromise = null

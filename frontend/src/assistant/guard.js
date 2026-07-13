@@ -95,12 +95,15 @@ export const REFUSALS = {
  * @returns {{ ok: boolean, reason?: string, question?: string }}
  */
 export function guardInput(raw) {
-  const question = (raw || '').trim()
+  let question = (raw || '').trim()
 
   if (!question) return { ok: false, reason: 'empty' }
 
+  // Truncate, then KEEP CHECKING. An early return here once let any input
+  // longer than the cap skip the injection and topic gates entirely, so
+  // padding a jailbreak past 500 characters walked straight through.
   if (question.length > MAX_QUESTION_CHARS) {
-    return { ok: true, question: question.slice(0, MAX_QUESTION_CHARS) }
+    question = question.slice(0, MAX_QUESTION_CHARS)
   }
 
   if (INJECTION_PATTERNS.some((re) => re.test(question))) {
@@ -126,10 +129,26 @@ const STOPWORDS = new Set([
   'when', 'where', 'which', 'who', 'how', 'what', 'why', 'there', 'here',
 ])
 
+/**
+ * Crude English stemmer, just enough that "repairs", "repaired" and
+ * "repairing" all count as "repair" during the overlap check. Without this
+ * the grounding gate dropped honest sentences whose only sin was using a
+ * different inflection than the knowledge entry.
+ */
+function stem(w) {
+  if (w.length <= 4) return w
+  return w
+    .replace(/ies$/, 'y')
+    .replace(/(sses|shes|ches|xes)$/, (m) => m.slice(0, -2))
+    .replace(/ings?$/, '')
+    .replace(/ed$/, '')
+    .replace(/s$/, '')
+}
+
 function contentWords(text) {
-  return (text.toLowerCase().match(/[a-z][a-z-]{2,}/g) || []).filter(
-    (w) => !STOPWORDS.has(w),
-  )
+  return (text.toLowerCase().match(/[a-z][a-z-]{2,}/g) || [])
+    .filter((w) => !STOPWORDS.has(w))
+    .map(stem)
 }
 
 function splitSentences(text) {

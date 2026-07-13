@@ -18,8 +18,8 @@
  */
 
 import MiniSearch from 'minisearch'
-import { KNOWLEDGE } from './knowledge'
-import { embed, embedBatch, isEmbedderReady } from './embedder'
+import { KNOWLEDGE, knowledgeHash } from './knowledge'
+import { embed, embedBatch, isEmbedderReady, EMBEDDER_MODEL_ID } from './embedder'
 
 // ── Sparse index ──────────────────────────────────────────────────────────
 
@@ -38,9 +38,37 @@ const mini = new MiniSearch({
 
 mini.addAll(KNOWLEDGE)
 
+// Everyday words people actually type, mapped to the domain vocabulary the
+// knowledge base uses. Sparse search is the only retrieval most users ever
+// get (instant mode), so closing this vocabulary gap is the cheapest
+// quality win in the whole assistant.
+const SYNONYMS = {
+  hole: 'pothole', holes: 'pothole', crater: 'pothole', bump: 'pothole',
+  broken: 'damage', wrecked: 'damage', ruined: 'damage', destroyed: 'damage',
+  reward: 'points', rewards: 'points', prize: 'points', score: 'points',
+  money: 'cost pricing', pay: 'cost pricing', fee: 'cost pricing',
+  photo: 'evidence picture', picture: 'evidence photo',
+  fixing: 'repair', fixes: 'repair', fixed: 'repair',
+  alert: 'notification', alerts: 'notification',
+  ranking: 'leaderboard', rankings: 'leaderboard',
+  car: 'vehicle drive', dashboard: 'stats',
+  town: 'city', council: 'municipality city',
+  worker: 'crew', workers: 'crew',
+  danger: 'hazard severity', dangerous: 'hazard severity',
+}
+
+function expandQuery(query) {
+  const words = query.toLowerCase().match(/[a-z]+/g) || []
+  const extra = new Set()
+  for (const w of words) {
+    if (SYNONYMS[w]) extra.add(SYNONYMS[w])
+  }
+  return extra.size ? `${query} ${[...extra].join(' ')}` : query
+}
+
 export function sparseSearch(query, k = 6) {
   return mini
-    .search(query)
+    .search(expandQuery(query))
     .slice(0, k)
     .map((r) => r.id)
 }
@@ -51,15 +79,33 @@ let denseVectors = null      // [{ id, vec }]
 let densePromise = null
 
 /**
- * Embed the whole knowledge base once. ~30 short entries, so this is a few
- * hundred milliseconds after the model is warm, and it never blocks the UI:
- * callers await it only in AI mode.
+ * Build the dense index. Prefers vectors precomputed at build time by
+ * `scripts/embed-knowledge.mjs` (a lazy-loaded ~100 kB JSON chunk), which
+ * turns "embed 33 entries on a phone" into "fetch one small file". Falls
+ * back to embedding the KB in the browser when the file is missing or stale.
  */
 export async function buildDenseIndex() {
   if (denseVectors) return denseVectors
   if (densePromise) return densePromise
 
   densePromise = (async () => {
+    try {
+      const { default: pre } = await import('./knowledge_vectors.json')
+      // Only trust the file if it was built from THIS knowledge base with
+      // THIS embedding model; query and index vectors must share a space.
+      if (pre?.hash === knowledgeHash() && pre.model === EMBEDDER_MODEL_ID && pre.vectors) {
+        const fromFile = KNOWLEDGE
+          .filter((k) => pre.vectors[k.id])
+          .map((k) => ({ id: k.id, vec: pre.vectors[k.id] }))
+        if (fromFile.length === KNOWLEDGE.length) {
+          denseVectors = fromFile
+          return denseVectors
+        }
+      }
+    } catch {
+      // No precomputed file in this build. Embedding at runtime below.
+    }
+
     const texts = KNOWLEDGE.map((k) => `${k.title}. ${k.text}`)
     const vecs = await embedBatch(texts)
     denseVectors = KNOWLEDGE.map((k, i) => ({ id: k.id, vec: vecs[i] }))

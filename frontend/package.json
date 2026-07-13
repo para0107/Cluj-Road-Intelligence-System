@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "embed:kb": "node scripts/embed-knowledge.mjs",
+    "test:assistant": "node scripts/test-assistant.mjs"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

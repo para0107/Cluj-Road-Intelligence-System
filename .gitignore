@@ -30,3 +30,8 @@ results.xlsx
 # Python bytecode
 *.pyc
 __pycache__/
+
+# Local-only documentation: the public repo keeps README.md only
+CLAUDE.md
+TODO_CurrentSession.md
+docs/*.md

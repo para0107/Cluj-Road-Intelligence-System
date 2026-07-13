@@ -32,6 +32,12 @@
 - [Live mode — crowd-validated hazards](#live-mode--crowd-validated-hazards)
 - [The lite pipeline — per-user edge agent](#the-lite-pipeline--per-user-edge-agent)
 - [Connected devices & phone drive mode](#connected-devices--phone-drive-mode)
+- [Citizen gamification](#citizen-gamification--points-badges-streaks-and-leaderboards)
+- [Municipality workflow](#municipality-workflow--triage-work-orders-repair-verification)
+- [Road Quality Index (RQI)](#road-quality-index-rqi--municipal-health-scoring)
+- [Public developer API](#public-developer-api--free-rate-limited-no-auth-overhead)
+- [In-browser assistant](#in-browser-assistant--rag--guardrails-zero-server-cost)
+- [Security hardening & scalability](#security-hardening--scalability)
 - [Accounts, roles & notifications](#accounts-roles--notifications)
 - [Database schema](#database-schema)
 - [REST API](#rest-api)
@@ -74,14 +80,22 @@ their **phone (drive mode — motion-sensor pothole detection in the browser)** 
 **dashcam PC (the lite RT-DETR pipeline)** to their account so detected damage uploads
 automatically. Stale hazards expire on their own; operators resolve repaired ones.
 
+Around those two workflows sits a complete **product layer**: citizen gamification
+(points, badges, streaks, leaderboards — farm-resistant by design), a municipality
+suite (triage → work orders → route planning → repair → verification with a
+reopened-damage guard), a Road Quality Index heatmap, a free public developer API,
+and an in-browser AI assistant with anti-hallucination guardrails.
+
 Everything is served through a **FastAPI** REST + WebSocket API and visualised in a
 **React + Leaflet** SPA: live hazard map, survey detection map, statistics dashboards,
-tabular explorer, ranked repair queue with cost sketches, ingestion tracker, and an admin
-console. Access is controlled by **JWT auth with three roles** (citizen / municipality
-operator / admin).
+tabular explorer, ranked repair queue with budget planning, triage inbox, work-order
+board, quality map, ingestion tracker, developer portal, and an admin console. Access
+is controlled by **JWT auth with three roles** (citizen / municipality operator / admin).
 
-**Zero-cost by construction:** open-source models, free map tiles, OpenStreetMap/Nominatim
-geocoding, stdlib-SMTP e-mail, optional free Google OAuth — no paid API anywhere.
+**Zero-cost by construction:** open-source models (including the assistant's LLM, which
+runs in the visitor's own browser), free map tiles, OpenStreetMap/Nominatim geocoding,
+Brevo HTTPS or stdlib-SMTP e-mail, optional free Google OAuth, self-hosted proof-of-work
+captcha — no paid API anywhere.
 
 ---
 
@@ -291,8 +305,8 @@ measurement quality and is reduced when the geometry depth-proxy substituted Mon
 
 ## Live mode — crowd-validated hazards
 
-Waze-style real-time layer, coexisting with Survey mode (full design:
-[`docs/LIVE_MODE.md`](docs/LIVE_MODE.md)).
+Waze-style real-time layer, coexisting with Survey mode (the full design
+notes live in the project's internal docs).
 
 - **Reporting** — `POST /api/live/reports` (JWT) clusters a sighting into the nearest
   active event of the same `damage_type` within `LIVE_CLUSTER_RADIUS_M` (default 25 m,
@@ -487,7 +501,7 @@ user questions to a remote LLM:
 
 ## Security hardening & scalability
 
-See [`docs/SECURITY.md`](docs/SECURITY.md) for the full audit log. Key defenses:
+Key defenses:
 
 - **Proof-of-work CAPTCHA** (ALTCHA): self-hosted, stdlib HMAC-SHA256, no vendor
   involvement. Enabled on login/register/contact forms; browser solves SHA-256 puzzle
@@ -520,7 +534,7 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the full audit log. Key defenses:
   admin is created only when `ADMIN_USERNAME/EMAIL/PASSWORD` are set in `.env`, and an
   unset `JWT_SECRET` produces a random per-process secret (sessions reset on restart)
   plus a loud warning. Login is **rate limited** per identifier+IP (5 failures / 15 min
-  → 15 min lockout). See [`docs/SECURITY.md`](docs/SECURITY.md) for the full hardening log.
+  → 15 min lockout).
 - **Roles & page visibility:**
   | Role | Pages | Powers |
   |------|-------|--------|
@@ -700,7 +714,7 @@ Interactive docs: **http://localhost:8000/docs** (Swagger) · `/redoc`.
 (used by the navbar dot — works on the login page, before any session exists).
 
 > CORS is currently `allow_origins=["*"]` — tighten before any real deployment.
-> The complete security-hardening log lives in [`docs/SECURITY.md`](docs/SECURITY.md).
+> The complete security-hardening log is kept in the project's internal docs.
 
 ---
 
@@ -811,7 +825,7 @@ ml/                      Training/research layer (never imported by the backend)
   weights/ best.pt  sam2.1_hiera_tiny.pt  mono_640x192/  networks/   (not in git)
 scripts/                 setup_db, run_survey, validate_*, dataset analysis
 scheduler/daily_job.py   APScheduler cron — optional nightly pipeline run
-docs/                    LIVE_MODE.md · FUNCTIONALITY.md · DEPLOYMENT_GUIDE.md · FREE_DEPLOYMENT.md
+docs/                    internal design notes (local only, not tracked in git)
 data/                    SHARED bind mount (jobs/, raw/, processed/sessions/, datasets/)
 docker-compose.yml  .env  requirements.txt (full host/ML deps)  CLAUDE.md
 ```
@@ -930,7 +944,7 @@ docker compose down                     # stop (keeps pgdata volume); add -v to 
   e-mail when SMTP is configured; Municipality accounts additionally need admin
   approval), or log in with the seed admin — **you must set
   `ADMIN_USERNAME/EMAIL/PASSWORD` and `JWT_SECRET` in `.env`**; no defaults ship in
-  the repo (see [`docs/SECURITY.md`](docs/SECURITY.md)).
+  the repo (documented in the project's internal docs).
 
 ### 2. Database schema — created automatically
 
@@ -1162,4 +1176,4 @@ Open-source project by **Paraschiv Tudor, 2026**.
 - Smartphone pothole sensing — Eriksson et al., *The Pothole Patrol*, MobiSys 2008.
 
 > See [`CLAUDE.md`](CLAUDE.md) for the condensed engineering guide and
-> [`docs/FUNCTIONALITY.md`](docs/FUNCTIONALITY.md) for the full functionality reference.
+> the project's internal docs for the full functionality reference.

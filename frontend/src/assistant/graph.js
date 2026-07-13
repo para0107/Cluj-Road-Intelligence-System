@@ -29,11 +29,14 @@ import { guardInput, groundAnswer, REFUSALS } from './guard'
 import { embed, isEmbedderReady } from './embedder'
 import { generate, hypotheticalAnswer, isModelReady } from './localModel'
 
+// Retrieval-confidence gates, overridable per deployment without a code
+// change (VITE_ASSISTANT_CONFIDENT / VITE_ASSISTANT_FLOOR).
+const ENV = (typeof import.meta !== 'undefined' && import.meta.env) || {}
 // Below this retrieval confidence we do not trust the top hit enough to feed
 // it to the model as if it were the answer.
-const CONFIDENT = 0.55
+const CONFIDENT = Number(ENV.VITE_ASSISTANT_CONFIDENT) || 0.55
 // Below this, even after HyDE, we refuse to generate at all.
-const FLOOR = 0.28
+const FLOOR = Number(ENV.VITE_ASSISTANT_FLOOR) || 0.28
 
 const MAX_CONTEXT_ENTRIES = 4
 

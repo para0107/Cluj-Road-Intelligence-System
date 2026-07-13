@@ -212,6 +212,12 @@ export const KNOWLEDGE = [
 
   // ── Privacy and data ────────────────────────────────────────────────────
   {
+    id: 'account-captcha',
+    title: 'The verification puzzle on sign in',
+    tags: ['captcha', 'puzzle', 'robot', 'bot', 'verification', 'checkbox'],
+    text: `Some forms show a small verification box that solves itself in a second or two. Your browser does a tiny bit of math to prove it is a real device, which makes it expensive for someone to create thousands of fake accounts. There is no picture quiz, nothing to click through, and no outside captcha company sees your visit.`,
+  },
+  {
     id: 'privacy-location',
     title: 'What location data RDDS stores',
     tags: ['privacy', 'data', 'location', 'street', 'address', 'gdpr'],
@@ -252,6 +258,20 @@ export const KNOWLEDGE = [
 
 /** Flat lookup by id, used by the grounding check to cite sources. */
 export const KNOWLEDGE_BY_ID = Object.fromEntries(KNOWLEDGE.map((k) => [k.id, k]))
+
+/**
+ * Stable hash of the knowledge texts (djb2). The precomputed vector file
+ * (scripts/embed-knowledge.mjs) stores the hash of the KB it was built from;
+ * retrieval.js compares it at load time so stale vectors are never used.
+ * Lives here, not in retrieval.js, so the Node embed script can import it
+ * without dragging in browser-only modules.
+ */
+export function knowledgeHash() {
+  const s = KNOWLEDGE.map((k) => `${k.title}. ${k.text}`).join(' ')
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0
+  return h.toString(36)
+}
 
 /** Suggested opening questions shown as chips on the Assistant page. */
 export const SUGGESTIONS = [

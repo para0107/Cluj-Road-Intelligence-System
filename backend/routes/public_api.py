@@ -54,7 +54,7 @@ _key_limiter = Limiter(
 # so a busy key does not cost one SELECT per request.
 _key_cache: dict = {}
 _key_cache_lock = threading.Lock()
-_KEY_CACHE_TTL_S = 30.0
+_KEY_CACHE_TTL_S = float(os.getenv("API_KEY_CACHE_S", "30.0"))
 
 
 def _now() -> datetime:

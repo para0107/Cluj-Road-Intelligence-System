@@ -47,11 +47,23 @@ from backend.models import Detection
 
 router = APIRouter()
 
-# Tuning knobs, all in one place.
-SEVERITY_WEIGHT = {1: 1.0, 2: 2.0, 3: 4.0, 4: 7.0, 5: 11.0}
-RECENCY_HALF_DAYS = 180.0
-FIXED_WEIGHT = 0.2
-PENALTY_SCALE = 8.0
+# Tuning knobs, all in one place. Env-overridable so a city can recalibrate
+# the index without a code change (RQI_SEV_WEIGHTS = five comma-separated
+# numbers for S1..S5).
+def _sev_weights() -> dict:
+    raw = os.getenv("RQI_SEV_WEIGHTS", "1,2,4,7,11")
+    try:
+        vals = [float(x) for x in raw.split(",")]
+        if len(vals) == 5:
+            return dict(zip((1, 2, 3, 4, 5), vals))
+    except ValueError:
+        pass
+    return {1: 1.0, 2: 2.0, 3: 4.0, 4: 7.0, 5: 11.0}
+
+SEVERITY_WEIGHT = _sev_weights()
+RECENCY_HALF_DAYS = float(os.getenv("RQI_RECENCY_HALF_DAYS", "180"))
+FIXED_WEIGHT = float(os.getenv("RQI_FIXED_WEIGHT", "0.2"))
+PENALTY_SCALE = float(os.getenv("RQI_PENALTY_SCALE", "8.0"))
 BANDS = (("A", 85), ("B", 70), ("C", 50), ("D", 30))   # else E
 
 _MAX_CELLS = int(os.getenv("RQI_MAX_CELLS", "5000"))
