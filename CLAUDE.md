@@ -4,12 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-RDDS — Road Degradation Detection System. Detects, classifies, and prioritizes road damage
-in Cluj-Napoca from dashcam video (.mp4 + optional .gpx) via a 7-stage CV pipeline
-(RT-DETR-L → SAM 2.1 → Monodepth2 → rule-based severity → DBSCAN dedup → PostGIS), served by a
-FastAPI API and a React + Leaflet SPA.
-The README.md is thorough and current — read it for full detail; this file is the condensed
-operating guide.
+RDDS — Road Degradation Detection System. A complete **municipal road-monitoring platform**:
+- Detects, classifies, and prioritizes road damage from dashcam video via a 7-stage CV pipeline
+  (RT-DETR-L → SAM 2.1 → Monodepth2 → rule-based severity → DBSCAN dedup → PostGIS)
+- Serves citizen gamification (points, badges, streaks, leaderboards) to drive engagement
+- Operates a municipality workflow suite (triage → work orders → repair verification with
+  reopened-damage guard)
+- Publishes a Road Quality Index (RQI) heatmap for city-level planning
+- Exposes a free public developer API with per-key rate limiting
+- Runs an in-browser AI assistant with guardrails (lexical grounding, injection defense,
+  no server-side model)
+- Hardened for scale: rate limiting, ALTCHA captcha, CSP, WebSocket origin/connection caps
+
+**The README.md is thorough and current** — read it for full architecture and feature detail.
+This file is the condensed operating & development guide.
 
 ## Commands
 

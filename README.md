@@ -371,6 +371,146 @@ damage uploads automatically:
 
 ---
 
+## Citizen gamification — points, badges, streaks, and leaderboards
+
+Every citizen who reports hazards earns **points, badges and streaks** on outcomes they can't
+manufacture alone — preventing farm attacks:
+
+- **Points** — awarded only on community-validated outcomes:
+  - Event confirmed (≥2 devices report it) → **+10 points** to every distinct reporter
+  - Event verified (≥3 devices) → **+15 more points**
+  - Hazard fixed by a municipality → **+25 points** to supporters
+  - Promoted by an operator (survey + live) → **+20 points** to supporters
+  - A raw report earns **zero points** (anti-spam) — the server-side report cooldown is
+    1 per 15 seconds + 40 per day per user
+- **Badges**: first report, road scout (10 confirmed), road guardian (50 confirmed),
+  triple-checked (one verified), week streak, fixer (one fixed), city changer (five fixed),
+  night watch (after 22:00 local time)
+- **Leaderboard**: global + city-scoped, ranked by total points; **distinct-device
+  escalation** in the live-validation engine ensures a single attacker cannot farm
+  (confirm/dispute votes by the same device count once; escalation requires independent
+  devices)
+- **Notifications bell** and in-app notification history tied to each citizen
+
+---
+
+## Municipality workflow — triage, work orders, repair verification
+
+The revenue-generating suite for municipal operations:
+
+- **Triage** (`/triage` page): operators review live crowd reports sorted by validation
+  tier (verified first), **promote** a report to a real detection with a single click
+  (creates a Detection row, awards +20 points to all supporters, removes from triage inbox),
+  or **dismiss** false alarms
+- **Work orders** (`/workorders` page): group detections into repair jobs with crew name,
+  scheduled/due dates, and cost estimates
+  - Status flow: `open` → `scheduled` → `in_progress` → `repaired` → `verified`
+  - **Repair verification guard**: when transitioning to `verified`, the system refuses
+    (409) if any detection shows `last_detected > fixed_at` (pipeline saw it again after
+    repair was signed off — **reopened**). Operators must resolve the reopened item or
+    reschedule. This is load-bearing against false repair claims.
+  - **Route optimization**: client-side haversine + nearest-neighbor + 2-opt, outputs total
+    km and estimated time; print route sheets with numbered stops and leg distances
+- **Repair indicators on the map**: detections show when they were fixed (fixed_at timestamp);
+  evidence photos (cropped from pipeline frames, JPG) are stored and visible in the
+  detection drawer (operator-only)
+- **Analytics dashboard** (`/stats` → Operations section): average time-to-repair, open
+  backlog by severity, weekly new-vs-repaired trend, work-order budget rollup,
+  reopened-count alert
+
+---
+
+## Road Quality Index (RQI) — municipal health scoring
+
+`/quality` page: a heatmap grid of ~120 m cells (configurable 40–1000 m), where each cell
+is scored based on the detected damage within it:
+
+```
+score = round(100 * exp(-penalty / 8))
+penalty = Σ severity_weight[S1..S5] × exp(-days_since_detection / 180) × (0.2 if fixed)
+Bands: A ≥85 (good) | B ≥70 | C ≥50 | D ≥30 | E <30 (poor)
+```
+
+- **Grid is stateless**: pure lat/lon math, no new geometry columns (avoids PostGIS index
+  traps)
+- **Decaying penalty**: fresher damage has higher weight; repaired damage is counted but
+  de-weighted (0.2)
+- **Exportable**: CSV and GeoJSON for import into GIS tools
+- Useful for city planning meetings and work-order prioritisation
+
+---
+
+## Public developer API — free, rate-limited, no auth overhead
+
+`/developers` page docs + `GET /v1/public/*` endpoints. Developers sign up and create API
+keys (`rdds_<40-char-token>`), stored as SHA-256 + prefix only (plaintext shown once on
+creation).
+
+- **Endpoints** (all GET, read-only):
+  - `/v1/public/detections` — paginated survey detections (bbox, damage_type filter, never
+    expose crop_path)
+  - `/v1/public/road-quality` — grid data like `/quality/grid`
+  - `/v1/public/stats` — total/open/fixed counts, by damage type, by severity
+- **Rate limits**: per-key (default 60 req/min, configurable per key); 429 responses include
+  `Retry-After` header
+- **3-key cap** per user to prevent runaway usage
+
+---
+
+## In-browser assistant — RAG + guardrails, zero server cost
+
+`/assistant` page: a hybrid knowledge bot running **entirely in the browser**, never sending
+user questions to a remote LLM:
+
+- **Instant mode** (default, always available):
+  - Keyword matching for common questions (live hazard count, my points, leaderboard, etc.)
+  - Sparse BM25 search (MiniSearch) over a curated knowledge base
+  - Returns top result + related links; no model inference
+
+- **AI mode** (opt-in):
+  - Download consent modal (900 MB Llama-3.2-1B model via WebLLM)
+  - Explicit state machine: guard input → check intents → retrieve docs → [confident?]
+    → conditional HyDE re-search → generate → lexical grounding → respond
+  - **Guardrails** (all client-side, no judge model):
+    - Injection pattern detection (ignore/forget/jailbreak/DAN/etc.)
+    - On-topic gate (RDDS/road keywords only; off-topic questions get polite deflection)
+    - Per-sentence lexical grounding against retrieved context (drops unsupported claims)
+    - Number grounding (any digit in the answer must appear in context or API data)
+  - Streaming tokens to UI with stage labels (thinking / writing / checking)
+
+- **Knowledge base**: 33 entries covering reporting, points, severity bands, municipality
+  workflow, API, privacy, pricing, navigation
+- **Efficiency**: KB embeddings pre-computed at build time; query embedding is fast (tens of ms);
+  HyDE only triggers on low-confidence searches
+
+---
+
+## Security hardening & scalability
+
+See [`docs/SECURITY.md`](docs/SECURITY.md) for the full audit log. Key defenses:
+
+- **Proof-of-work CAPTCHA** (ALTCHA): self-hosted, stdlib HMAC-SHA256, no vendor
+  involvement. Enabled on login/register/contact forms; browser solves SHA-256 puzzle
+  before POST. With CAPTCHA_ENABLED off (dev), forms work normally.
+- **Rate limiting**: centralized in-process limiter with configurable budgets per endpoint:
+  - Login: 5 failures / 15 min → 15-min lockout
+  - Register: 5 / hour / IP
+  - Live reports: 1 / 15 sec + 40 / day per user
+  - API keys, device pairing, contact forms: configurable per-route
+- **Security headers** (Nginx + FastAPI middleware):
+  - CSP: `script-src 'self' 'wasm-unsafe-eval'` (WebLLM), `style-src 'unsafe-inline'`,
+    `img-src blob: data:`, worker-src blob:
+  - X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy, Permissions-Policy
+  - gzip compression on responses (js/css/json/svg)
+- **WebSocket hardening**: origin check when CORS_ORIGINS set; per-IP connection cap (4);
+  total cap (2000); message-rate cap (30/min)
+- **Database binding**: DB and API listen on 127.0.0.1 loopback only (Docker + host both);
+  direct exposure requires explicit port mapping
+- **One Uvicorn worker**: all in-process state (rate limiters, caches, WS fan-out) stays
+  single-threaded; Redis pub/sub is the documented multi-worker upgrade path
+
+---
+
 ## Accounts, roles & notifications
 
 - **Auth:** JWT (PyJWT HS256, `JWT_SECRET`, TTL `JWT_TTL_H`, default 7 days). Passwords:
@@ -384,11 +524,15 @@ damage uploads automatically:
 - **Roles & page visibility:**
   | Role | Pages | Powers |
   |------|-------|--------|
-  | `user` (Citizen) | **Command, Live, System only** | Report/confirm/dispute live hazards, connect devices (drive mode / dashcam), delete own account |
-  | `municipality` | All pages (adds Map, Explorer, Stats, Repairs, Upload) | Everything a user can do **plus**: upload surveys, resolve live hazards, mark detections repaired, delete detections |
-  | `admin` | All pages + Admin | Full control: roles, enable/disable/delete accounts, approve municipality registrations |
+  | `user` (Citizen) | **Command, Live, Impact, Assistant, System** | Report/confirm/dispute hazards, connect devices, earn points/badges, view leaderboard |
+  | `municipality` | All pages (adds Map, Explorer, Stats, Triage, Repairs, Work Orders, Quality, Upload) | Everything a user can do **plus**: triage live reports, create/manage work orders, verify repairs, view RQI, access public API |
+  | `admin` | All pages + Admin | Full control: roles, enable/disable/delete accounts, approve registrations, manage API keys |
   The same split is enforced server-side: `/detections*`, `/heatmap`, `/priority-list`,
-  `/export/csv` and `/ingest/*` require the operator role; `/stats` any signed-in user.
+  `/export/csv`, `/ingest/*`, `/triage`, `/work-orders`, `/quality` require the operator
+  role; `/stats`, `/engagement`, `/notifications` are any authed user.
+- **Notifications** (`/notifications` endpoint): in-app alerts on points earned, badges
+  awarded, hazards fixed, promotions; polled every 60 s or pushed via bell dropdown; each
+  notification can link to a relevant page
 - **Registration with e-mail verification** (`/register`): the user picks **Citizen or
   Municipality** via role cards (municipality must name its city). Nothing is created
   yet — a **6-digit confirmation code** is e-mailed (30 min TTL, re-send with a 60 s
