@@ -25,9 +25,16 @@ ml/weights/*.pth
 ml/weights/*.json
 validation_logs/
 
+# Secrets — compose injects these via env_file; never bake them into the image
+.env
+.env.*
+
 # Git
 .git/
 .gitignore
+
+# Claude Code working files (contains full stale copies of the repo)
+.claude/
 
 # IDE / OS
 .idea/
