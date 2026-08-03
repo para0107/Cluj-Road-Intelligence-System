@@ -1,8 +1,13 @@
 # RDDS Detector — Experiment Log
 
-**Status: RUNNING. No results yet.** Everything below the "What we expect" headings is a
-prediction written *before* seeing the numbers, so that a wrong prediction is visible as
-a wrong prediction rather than quietly rewritten afterwards.
+**Status: RUNNING.** Everything under a "What we expect" heading is a prediction written
+*before* seeing the numbers, so that a wrong prediction stays visible as a wrong
+prediction rather than being quietly rewritten afterwards.
+
+**First results are in, and the headline is a refutation.** E1 tested the shape
+hypothesis that motivated the programme's intended contribution (E4) and found no
+support: ρ = +0.188, p = 0.607. **E4 is cancelled.** See §6, E1. The predictions in this
+document are being kept exactly as written, including the wrong ones.
 
 Started 3 August 2026 · **Europe AI Summer Research Program**, in partnership with AWS
 Run on **Amazon SageMaker Unified Studio**, `ml.g6.xlarge` (NVIDIA L4, 24 GB) — see §2
@@ -269,7 +274,69 @@ suppresses the aggregate, and refuses to report it.
 
 ### E1 — Are elongated classes harder to detect? (analysis, no training)
 
-**Status: waiting on E0's per-class AP.**
+> ## RESULT: HYPOTHESIS REFUTED — 3 August 2026
+>
+> **Spearman ρ = +0.188, permutation p = 0.607** (100,000 permutations, 10 classes,
+> E0-baseline seed 1337, test split).
+>
+> The sign is *positive*, meaning more elongated classes scored marginally **better** —
+> the opposite of the prediction — and the correlation is nowhere near significant.
+> Box area does not explain it either: ρ = −0.248, p = 0.491.
+>
+> **Neither shape nor size predicts per-class accuracy on this dataset.**
+>
+> **E4 (shape-aware detection) is cancelled.** Its entire motivation was this
+> correlation. Building an orientation-aware decoder prior would now be solving a
+> problem the data says does not exist.
+>
+> ### Why the prior was wrong
+>
+> The pre-registered guesses about which classes are geometrically elongated were
+> simply incorrect once measured:
+>
+> | Class | Predicted | Measured median AR | Anisotropy | AP@50 |
+> |---|---|---:|---:|---:|
+> | manhole_cover | compact | **2.82** | 1.49 | **0.798** |
+> | transverse_crack | elongated | 5.15 | 2.37 | 0.460 |
+> | lane_line_blur | elongated | **1.04** | 0.42 | 0.451 |
+> | longitudinal_crack | elongated | 0.58 | 0.85 | 0.478 |
+> | pothole | compact | 1.57 | 0.68 | 0.417 |
+> | alligator_crack | compact | 1.38 | 0.63 | 0.566 |
+>
+> Two assumptions collapsed. **`manhole_cover` is not circular in image space** — median
+> aspect ratio 2.82, because a round cover viewed from a moving vehicle projects to an
+> ellipse. It is the *most* anisotropic class after transverse cracks, and it is by far
+> the best detected. **`lane_line_blur` is essentially square** (AR 1.04); the annotated
+> boxes cover marking patches, not long line segments. And a long crack's bounding box
+> is only mildly elongated (AR 0.58) because real cracks meander rather than running
+> straight.
+>
+> The lesson generalises: geometric intuition about a class should be **measured before
+> a research programme is built on it**, not assumed from the class name. This cost a
+> few hours of analysis; had E1 not been placed before E4, it would have cost days of
+> GPU time and a wrong claim in the write-up.
+>
+> ### The question that replaces it
+>
+> `manhole_cover` reaches **0.798** while every damage class sits between 0.34 and 0.57.
+> It has a sixth of `longitudinal_crack`'s training data, and it is neither the largest
+> nor the most compact class — 81% of its boxes are under 1% of image area.
+>
+> What separates it is that it is a **manufactured object with a consistent physical
+> boundary**, while road damage is amorphous and its extent is a judgement call by the
+> annotator. The two worst classes, `repaired_crack` (0.339) and `patchy_road` (0.365),
+> are the two most subjective categories in the schema.
+>
+> This suggests the ceiling is **annotation consistency**, not architecture. It is a
+> hypothesis, not a result — it has not been tested, and no statistic here supports it
+> yet.
+>
+> **Programme response, per this section's own gate:** pivot to E3 (resolution) and E5
+> (operating point) as the main line.
+>
+> Artefacts: `runs/research/E1_anisotropy/`
+
+**Status: COMPLETE. Result above.** Original design follows.
 
 **Question.** Road damage classes are defined by *shape and orientation*, not appearance:
 longitudinal cracks run along the road, transverse across it, rutting is long and
