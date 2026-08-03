@@ -386,7 +386,7 @@ def run_experiment(
         save_period=10,
         val=True,
         verbose=True,
-        project=str(run.path / "ultralytics"),
+        project=str(run.path.resolve() / "ultralytics"),
         name=spec.id,
         exist_ok=True,
         **spec.train_kwargs(),
@@ -443,7 +443,7 @@ def run_experiment(
             model.add_callback("on_fit_epoch_end", on_epoch_end)
             model.train(**shared, epochs=spec.freeze_epochs, freeze=23, patience=999)
 
-            last = run.path / "ultralytics" / spec.id / "weights" / "last.pt"
+            last = run.path.resolve() / "ultralytics" / spec.id / "weights" / "last.pt"
             if not last.exists():
                 print(f"[error] phase 1 produced no checkpoint at {last}", file=sys.stderr)
                 return 1
@@ -462,7 +462,7 @@ def run_experiment(
             model.add_callback("on_fit_epoch_end", on_epoch_end)
             model.train(**hp2, epochs=remaining, freeze=0, patience=20)
 
-        best = run.path / "ultralytics" / spec.id / "weights" / "best.pt"
+        best = run.path.resolve() / "ultralytics" / spec.id / "weights" / "best.pt"
         if not best.exists():
             print(f"[error] no best.pt at {best}", file=sys.stderr)
             return 1
