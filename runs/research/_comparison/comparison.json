@@ -1,0 +1,24 @@
+{
+  "summary": [
+    {
+      "experiment": "E0-baseline",
+      "n_seeds": 2,
+      "mean": 0.19707408983009939,
+      "std": 0.0021769293653917626,
+      "min": 0.19553476831366673,
+      "max": 0.19861341134653202,
+      "ci_low": 0.19553476831366673,
+      "ci_high": 0.19861341134653202,
+      "any_dirty": true,
+      "values": [
+        0.19553476831366673,
+        0.19861341134653202
+      ]
+    }
+  ],
+  "head_to_head": {
+    "status": "no_shared_classes",
+    "message": "no per_class_ap.json overlap between the two experiments"
+  },
+  "seed_noise_floor": 0.0021769293653917626
+}
