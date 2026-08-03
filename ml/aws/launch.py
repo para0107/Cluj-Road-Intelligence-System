@@ -200,7 +200,7 @@ def submit(
 
     for spec, seed in specs:
         inst = instance or spec.instance
-        hours = spec.est_gpu_hours / max(len(spec.seeds), 1)
+        hours = spec.hours_per_seed()
         rate = APPROX_HOURLY.get(inst, 1.52) * (SPOT_DISCOUNT if use_spot else 1.0)
         cost = hours * rate
         total_h += hours

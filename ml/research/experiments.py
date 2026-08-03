@@ -94,6 +94,39 @@ BASELINE_HP: dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
+# Runtime estimation, derived from THIS project's own measurements
+#
+# runs/detect/nrdd_2024/results.csv records 57 epochs in 42,292 s, a median of
+# 740 s/epoch. That was an RTX 2050 (4 GB) at 640px with batch 4 - the batch size was
+# forced by VRAM, not chosen.
+#
+# The research GPUs (A10G 24 GB / L4 24 GB) are roughly 3-4x faster on fp16 AND allow
+# batch 16, which improves utilisation further. GPU_FACTOR is set to the conservative
+# end of that range: over-estimating runtime wastes planning, under-estimating it
+# wastes a 72-hour window that cannot be extended.
+#
+# Compute time scales with pixel count, so resolution scales quadratically.
+#
+# These are estimates from one measurement, not a benchmark. Re-derive GPU_FACTOR
+# from your first real run's epoch timing before planning a whole weekend around it.
+# ---------------------------------------------------------------------------
+MEASURED_S_PER_EPOCH_640 = 740.0   # median, runs/detect/nrdd_2024/results.csv
+MEASURED_ON = "RTX 2050 4GB, batch 4, imgsz 640"
+GPU_FACTOR = 3.5                   # A10G / L4 vs the measured baseline
+
+
+def estimate_hours(epochs: int, imgsz: int | tuple[int, int], n_seeds: int = 1,
+                   gpu_factor: float = GPU_FACTOR) -> float:
+    """Estimated GPU-hours for a spec, derived from the project's measured epoch time."""
+    if epochs <= 0:
+        return 0.25   # evaluation-only experiments still need an instance briefly
+    px = imgsz * imgsz if isinstance(imgsz, int) else imgsz[0] * imgsz[1]
+    scale = px / (640 * 640)
+    s_per_epoch = (MEASURED_S_PER_EPOCH_640 / gpu_factor) * scale
+    return round(epochs * s_per_epoch * n_seeds / 3600.0, 1)
+
+
+# ---------------------------------------------------------------------------
 # Spec
 # ---------------------------------------------------------------------------
 @dataclass
@@ -127,9 +160,20 @@ class ExperimentSpec:
     # free-form notes that belong with the result, not in a commit message
     notes: str = ""
 
-    # compute hint for the launcher
+    # compute hint for the launcher.
+    #   instance      - for SageMaker training jobs (personal account)
+    #   est_gpu_hours - 0 means "derive it"; set a number only to override
     instance: str = "ml.g5.2xlarge"
     est_gpu_hours: float = 0.0
+
+    def hours(self, gpu_factor: float = GPU_FACTOR) -> float:
+        """Estimated GPU-hours for ALL seeds of this spec."""
+        if self.est_gpu_hours:
+            return self.est_gpu_hours
+        return estimate_hours(self.epochs, self.imgsz, len(self.seeds), gpu_factor)
+
+    def hours_per_seed(self, gpu_factor: float = GPU_FACTOR) -> float:
+        return estimate_hours(self.epochs, self.imgsz, 1, gpu_factor)
 
     def hyperparams(self) -> dict[str, Any]:
         """BASELINE_HP with this experiment's overrides applied."""
@@ -211,7 +255,6 @@ _reg(ExperimentSpec(
         "the first evaluated on a held-out test split. Expect the test number to be "
         "BELOW 0.2945: the published figure was selected on val over 57 epochs."
     ),
-    est_gpu_hours=3 * 12,
 ))
 
 # --- E2: architecture bake-off --------------------------------------------
@@ -247,7 +290,6 @@ for _key, (_w, _desc) in _E2_MODELS.items():
         freeze_epochs=10,
         seeds=(1337,),
         notes=_desc + " | Only the architecture varies; everything else is E0-identical.",
-        est_gpu_hours=12,
     ))
 
 # --- E3: resolution and input aspect ratio --------------------------------
@@ -283,7 +325,6 @@ for _name, _sz, _desc in _E3_SIZES:
         freeze_epochs=10,
         seeds=(1337,),
         notes=_desc,
-        est_gpu_hours=12 if _sz == 640 else 20,
     ))
 
 # --- E4: the contribution -------------------------------------------------
@@ -310,7 +351,6 @@ _reg(ExperimentSpec(
         "Requires a custom model YAML. Port of StripRFNet's SRFM (arXiv:2510.16115) "
         "into the RT-DETR encoder. Gated on the E1 correlation result."
     ),
-    est_gpu_hours=22,
 ))
 
 _reg(ExperimentSpec(
@@ -341,7 +381,6 @@ _reg(ExperimentSpec(
         "Highest-risk, highest-reward item in the program. Three seeds because the "
         "headline claim depends on it and a single run will not survive review."
     ),
-    est_gpu_hours=3 * 22,
 ))
 
 _reg(ExperimentSpec(
@@ -365,7 +404,6 @@ _reg(ExperimentSpec(
         "the custom loss term; the loss itself is a code change, not a hyperparameter. "
         "Do not report this spec as if the override alone were the experiment."
     ),
-    est_gpu_hours=22,
 ))
 
 # --- E5: recall-oriented operating point ----------------------------------
@@ -397,7 +435,6 @@ _reg(ExperimentSpec(
         "class imbalance E1 will quantify. Report false positives per kilometre "
         "alongside F2 - that is the number a municipality can act on."
     ),
-    est_gpu_hours=22,
 ))
 
 # --- E6: cross-dataset generalisation -------------------------------------
@@ -423,7 +460,6 @@ _reg(ExperimentSpec(
         "RDD2022 has no equivalent for several N-RDD2024 classes. Verify N-RDD2024's "
         "actual geographic composition from the Mendeley record; do not assume it."
     ),
-    est_gpu_hours=1,
 ))
 
 # --- E7: deployment Pareto ------------------------------------------------
@@ -446,7 +482,6 @@ _reg(ExperimentSpec(
         "pipeline/live_pipeline.py already uses, so the latency numbers describe the "
         "real deployment and not a synthetic one."
     ),
-    est_gpu_hours=2,
 ))
 
 
@@ -497,7 +532,6 @@ for _cs, _desc in _E8_SETS:
         dataset="nrdd2024",
         class_set=_cs,
         notes=_desc + " | Everything except the class set is E0-identical.",
-        est_gpu_hours=12,
     ))
 
 # --- E6 companions: the cross-dataset pair --------------------------------
@@ -530,7 +564,6 @@ for _src, _other in (("nrdd2024", "rdd2022"), ("rdd2022", "nrdd2024")):
             f"Evaluate against {_other}'s test split afterwards. Only the four "
             f"shared classes are measurable; report it that way."
         ),
-        est_gpu_hours=12,
     ))
 
 
@@ -622,10 +655,10 @@ def _main() -> int:
         return 0
 
     if args.budget:
-        total = sum(s.est_gpu_hours for s in REGISTRY.values())
+        total = sum(s.hours() for s in REGISTRY.values())
         by_stage: dict[str, float] = {}
         for s in REGISTRY.values():
-            by_stage[s.stage] = by_stage.get(s.stage, 0.0) + s.est_gpu_hours
+            by_stage[s.stage] = by_stage.get(s.stage, 0.0) + s.hours()
         print("Estimated GPU hours (rough, verify against real epoch timings):\n")
         for stage in sorted(by_stage):
             print(f"  {stage:4s}  {by_stage[stage]:7.1f} h")
@@ -646,7 +679,7 @@ def _main() -> int:
         size = f"{s.imgsz}" if isinstance(s.imgsz, int) else f"{s.imgsz[0]}x{s.imgsz[1]}"
         print(f"{s.id:24s} [{s.stage}] {s.title}")
         print(f"{'':24s} model={s.model} imgsz={size} epochs={s.epochs} "
-              f"seeds={len(s.seeds)} ~{s.est_gpu_hours:.0f} GPU-h")
+              f"seeds={len(s.seeds)} ~{s.hours():.1f} GPU-h")
     print(f"\n{len(specs)} experiment(s).")
     return 0
 
