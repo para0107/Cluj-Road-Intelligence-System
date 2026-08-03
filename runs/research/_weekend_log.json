@@ -1,0 +1,26 @@
+[
+  {
+    "experiment": "E0-baseline",
+    "seed": 1337,
+    "returncode": 1,
+    "estimated_h": 2.9,
+    "actual_h": 1.01,
+    "finished_at": "2026-08-03T11:31:12.678652"
+  },
+  {
+    "experiment": "E0-baseline",
+    "seed": 1338,
+    "returncode": 1,
+    "estimated_h": 2.9,
+    "actual_h": 1.01,
+    "finished_at": "2026-08-03T12:31:38.227675"
+  },
+  {
+    "experiment": "E0-baseline",
+    "seed": 1337,
+    "returncode": 0,
+    "estimated_h": 2.9,
+    "actual_h": 3.06,
+    "finished_at": "2026-08-03T16:17:31.451584"
+  }
+]

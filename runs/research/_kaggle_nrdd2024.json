@@ -1,0 +1,131 @@
+{
+	"root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1",
+	"format": "yolo",
+	"yolo_roots": [
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/train/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/train/labels",
+			"n_images": 5856,
+			"n_matched": 5856,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/train"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/train/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/train/labels",
+			"n_images": 3843,
+			"n_matched": 3843,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/train"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/norway_txt/train/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/norway_txt/train/labels",
+			"n_images": 2242,
+			"n_matched": 2242,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/norway_txt/train"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/train/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/train/labels",
+			"n_images": 1581,
+			"n_matched": 1581,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/train"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/valid/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/valid/labels",
+			"n_images": 1342,
+			"n_matched": 1342,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/valid"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/train/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/train/labels",
+			"n_images": 976,
+			"n_matched": 976,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/train"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/valid/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/valid/labels",
+			"n_images": 961,
+			"n_matched": 961,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/valid"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/train/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/train/labels",
+			"n_images": 793,
+			"n_matched": 793,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/train"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/norway_txt/valid/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/norway_txt/valid/labels",
+			"n_images": 561,
+			"n_matched": 561,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/norway_txt/valid"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/valid/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/valid/labels",
+			"n_images": 396,
+			"n_matched": 396,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/valid"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/valid/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/valid/labels",
+			"n_images": 245,
+			"n_matched": 245,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/valid"
+		},
+		{
+			"images_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/valid/images",
+			"labels_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/valid/labels",
+			"n_images": 199,
+			"n_matched": 199,
+			"stage_root": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/valid"
+		}
+	],
+	"n_images": 62010,
+	"n_yolo_labels": 18995,
+	"n_voc_xml": 18995,
+	"n_coco_json": 12,
+	"yaml_files": [
+		"/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/Czech Republic_txt/data.yaml",
+		"/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/USA_txt/data.yaml",
+		"/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/china-motorbike_txt/data.yaml",
+		"/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/india_txt/data.yaml",
+		"/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_txt/data.yaml"
+	],
+	"existing_splits": [
+		"test"
+	],
+	"dominant_image_dir": "/home/sagemaker-user/.cache/kagglehub/datasets/sannyshankaranml/n-rdd2024/versions/1/N-RDD2024Road damage and defects/Training and Validation Dataset/japan_coco/train",
+	"declared_classes": [
+		"D00",
+		"D10",
+		"D20",
+		"D30",
+		"D40",
+		"D50",
+		"D60",
+		"D70",
+		"D80",
+		"D90"
+	],
+	"class_histogram": {
+		"0": 3799,
+		"1": 1843,
+		"2": 545,
+		"3": 40,
+		"4": 232,
+		"5": 73,
+		"6": 195,
+		"7": 252,
+		"8": 87,
+		"9": 4
+	},
+	"schema_ok": true,
+	"kaggle_id": "sannyshankaranml/n-rdd2024"
+}
