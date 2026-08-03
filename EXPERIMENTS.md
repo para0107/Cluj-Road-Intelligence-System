@@ -4,7 +4,8 @@
 prediction written *before* seeing the numbers, so that a wrong prediction is visible as
 a wrong prediction rather than quietly rewritten afterwards.
 
-Started 3 August 2026 · NVIDIA L4 (24 GB) · Europe AI Summer Research Program
+Started 3 August 2026 · **Europe AI Summer Research Program**, in partnership with AWS
+Run on **Amazon SageMaker Unified Studio**, `ml.g6.xlarge` (NVIDIA L4, 24 GB) — see §2
 
 ---
 
@@ -28,7 +29,68 @@ All new work goes through `ml/detection/train_experiment.py`.
 
 ---
 
-## 2. The starting point
+## 2. Compute and infrastructure — AWS
+
+Everything in this document runs on **Amazon Web Services**. The work is part of the
+**Europe AI Summer Research Program**, run in partnership with AWS, and the compute is
+provided through that partnership.
+
+### What is actually being used
+
+| Service | Role here |
+|---|---|
+| **Amazon SageMaker Unified Studio** | The development environment. Project `admin-project-788757560353`. |
+| **SageMaker Code Editor space** | VS Code-based IDE where the code is edited and the experiment queue is launched. |
+| **`ml.g6.xlarge` compute** | NVIDIA L4, 24 GB VRAM, 100 GB EBS. **Every number in this document was produced on this instance.** |
+| **Amazon S3** | Dataset staging and result export. |
+| **Amazon EC2** | Indirect — the Studio space runs on EC2, but direct `ec2:RunInstances` is blocked by IAM policy on the event account. |
+| **Kiro** | AWS's spec-driven agentic IDE. Project context lives in `.kiro/steering/`. |
+
+### Event constraints, and how they shaped the engineering
+
+These are not incidental — several design decisions in `ml/aws/` exist only because of
+them.
+
+- **GPU access comes from a temporary AWS account** provisioned for a fixed window and
+  funded by the event, separate from any personal credits.
+- **That account is destroyed when the window closes, with no recovery.** This is why
+  `ml/aws/weekend.py` exports results after *every single run* rather than once at the
+  end: an unexpected cutoff then costs one experiment instead of the whole weekend.
+- **`ec2:RunInstances` is blocked.** Compute must be obtained through SageMaker Unified
+  Studio, which is why the training queue runs on the attached GPU rather than
+  submitting managed jobs.
+- **A hard wall-clock deadline.** `weekend.py` schedules against it and refuses to start
+  a run that cannot finish in the time left.
+- **Personal accounts use the AWS Free Tier credit model** ($100, up to $200 with the
+  onboarding activities). SageMaker draws directly on those credits — there is no
+  separate free allowance for ML services — so the research weekend is where GPU-heavy
+  work belongs.
+
+### Built for AWS, ready but not exercised this weekend
+
+| Component | What it does | Why it is idle |
+|---|---|---|
+| `ml/aws/launch.py` | Submits experiments as managed **SageMaker Training Jobs**, with managed spot instances and `/opt/ml/checkpoints` sync so an interruption costs one checkpoint interval | The event account blocks the classic training-job path; `weekend.py` runs on the attached GPU instead. This is the route for a personal account. |
+| `ml/aws/stage_dataset.py --s3` | Uploads the staged dataset to **S3** so training jobs can pull it as an input channel | Data is local this weekend, and no jobs are being submitted |
+| `ml/tracking.py` | Logs runs to the **managed MLflow** tracking server available in Studio | Deferred: the temporary account's MLflow and the personal-account export profile create a credential conflict not worth debugging against a deadline. Local CSV and `run.json` remain authoritative either way. |
+
+### Cost
+
+GPU time during the research weekend is **event-funded and consumes no personal
+credits**. For reference, the full experiment programme on a personal account is
+estimated at **~127 GPU-hours**, roughly $190 at on-demand `ml.g5.2xlarge` pricing and
+substantially less on managed spot. Re-derive it any time with:
+
+```bash
+python ml/research/experiments.py --budget
+```
+
+Those estimates are computed from this project's own measured epoch times rather than
+assumed — see `estimate_hours()` in `ml/research/experiments.py`.
+
+---
+
+## 3. The starting point
 
 What the previous model achieved, taken from `runs/detect/nrdd_2024/results.csv`:
 
@@ -52,7 +114,7 @@ on. The true held-out performance is unknown and is almost certainly lower.
 
 ---
 
-## 3. The data we are actually training on
+## 4. The data we are actually training on
 
 Source: **N-RDD2024** (Kaya & Çodur, doi:10.17632/27c8pwsd6v.3), Kaggle mirror
 `sannyshankaranml/n-rdd2024`.
@@ -110,7 +172,7 @@ does not match this data.
 
 ---
 
-## 4. Training configuration
+## 5. Training configuration
 
 Identical for every experiment, so that any difference between runs is caused by the one
 thing that was varied.
@@ -145,7 +207,7 @@ comparisons hold, but it should be fixed next time by setting `close_mosaic=0`.
 
 ---
 
-## 5. The experiments
+## 6. The experiments
 
 ### E0 — Establish a real baseline and measure the noise floor
 
@@ -311,7 +373,7 @@ because it flatters the result.
 
 ---
 
-## 6. What is running right now
+## 7. What is running right now
 
 ```
 E0-baseline   seed 1337   10 classes   ~1h50m
@@ -334,7 +396,7 @@ Each run produces, under `runs/research/<timestamp>_<experiment>_s<seed>/`:
 
 ---
 
-## 7. How the results will be judged
+## 8. How the results will be judged
 
 Three rules, enforced in code rather than left to memory:
 
@@ -362,7 +424,7 @@ python ml/research/visualise.py --runs runs/research --out runs/research/_figure
 
 ---
 
-## 8. Mistakes made and corrected today
+## 9. Mistakes made and corrected today
 
 Recorded because they affect how the numbers should be read.
 
@@ -391,7 +453,7 @@ reordered class list is still blocked.
 
 ---
 
-## 9. Known limitations
+## 10. Known limitations
 
 - **20 epochs is not convergence.** Absolute scores understate what this configuration can
   reach. Comparisons between runs remain valid.
@@ -405,7 +467,7 @@ reordered class list is still blocked.
 
 ---
 
-## 10. References
+## 11. References
 
 - RT-DETR — Zhao et al., 2023. [arXiv:2304.08069](https://arxiv.org/abs/2304.08069)
 - N-RDD2024 — Kaya & Çodur, 2024. [doi:10.17632/27c8pwsd6v.3](https://doi.org/10.17632/27c8pwsd6v.3)
