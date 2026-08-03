@@ -138,7 +138,13 @@ fi
 # Ultralytics' real runtime deps, minus torch/torchvision which we handled above.
 # opencv-python-headless rather than opencv-python: no display on a server, and the
 # GUI build pulls X11 libraries that are not present.
+# numpy is PINNED. Unpinned, pip upgrades it past what the preinstalled torch,
+# OpenCV, numba and sagemaker-studio builds support. Those all cross the C
+# extension boundary with numpy, so a mismatch shows up as a segfault or a strange
+# dtype error partway through the first epoch rather than at install time.
+# <2.3 satisfies sagemaker-studio (<2.3.0) and numba (<2.5) simultaneously.
 PIP_PKGS=(
+    "numpy<2.3"
     "opencv-python-headless" "pillow" "pyyaml" "requests" "scipy"
     "matplotlib" "pandas" "tqdm" "psutil" "py-cpuinfo" "ultralytics-thop"
     "boto3" "mlflow" "sagemaker-mlflow"
@@ -245,6 +251,17 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+if [ "$FAILED" -eq 0 ] && [ "$CHECK_ONLY" -eq 0 ]; then
+    say "7/7  smoke test (proves the stack actually works, not just imports)"
+    if $PY ml/aws/smoke_test.py --quick; then
+        ok "stack verified"
+    else
+        bad "smoke test failed - see the guidance above"
+        FAILED=1
+    fi
+    echo
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     say "${GRN}environment ready${RST}"
     cat <<'NEXT'
