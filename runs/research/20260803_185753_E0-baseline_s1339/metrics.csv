@@ -1,0 +1,2 @@
+epoch,phase,train_loss,val_mAP50,val_mAP50-95,val_precision,val_recall,lr,elapsed_s
+0,frozen,,0.02717,0.01034,0.42485,0.11155,0.0004459752246328784,389.3
