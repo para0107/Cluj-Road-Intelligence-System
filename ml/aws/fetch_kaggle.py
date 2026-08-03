@@ -200,9 +200,12 @@ def inspect(root: Path) -> dict:
     parents = Counter(p.parent for p in images)
     dominant = parents.most_common(1)[0][0] if parents else root
 
+    yolo_roots = find_yolo_roots(images, yolo_labels)
+
     return {
         "root": str(root),
         "format": fmt,
+        "yolo_roots": yolo_roots,
         "n_images": len(images),
         "n_yolo_labels": len(yolo_labels),
         "n_voc_xml": len(voc_xmls),
@@ -214,6 +217,122 @@ def inspect(root: Path) -> dict:
         "_yolo_labels": yolo_labels,
         "_yamls": yamls,
     }
+
+
+def find_yolo_roots(images: list[Path], yolo_labels: list[Path],
+                    top: int = 40) -> list[dict]:
+    """
+    Find the subtree(s) that actually contain MATCHED image/label pairs.
+
+    Necessary because research archives ship the same photographs several times over:
+    once per annotation format (coco / voc / yolo) and once per country. Picking "the
+    directory with the most images" lands in a COCO folder that has no YOLO labels at
+    all, and staging then silently produces an empty dataset.
+
+    Matching is by file STEM, which is the only thing YOLO actually relies on: an
+    image at .../images/x.jpg is paired with .../labels/x.txt.
+
+    Returns candidate roots sorted by matched-pair count, so the caller can choose
+    the real one and the user can see the alternatives that were rejected.
+    """
+    label_stems: dict[Path, set[str]] = {}
+    for lp in yolo_labels:
+        label_stems.setdefault(lp.parent, set()).add(lp.stem)
+
+    image_stems: dict[Path, set[str]] = {}
+    for ip in images:
+        image_stems.setdefault(ip.parent, set()).add(ip.stem)
+
+    candidates: list[dict] = []
+    for img_dir, stems in image_stems.items():
+        best_dir, best_n = None, 0
+        # ONLY the sibling `labels/` dir, or labels alongside the images. Matching
+        # against any label directory that happens to share stems is too permissive:
+        # these archives ship <country>_coco/, <country>_voc/ and <country>_txt/ with
+        # IDENTICAL filenames, so a loose match pairs the COCO copy of a photo with
+        # the YOLO labels and every image gets pooled two or three times over.
+        for cand in (img_dir.parent / "labels", img_dir):
+            if cand not in label_stems:
+                continue
+            n = len(stems & label_stems[cand])
+            if n > best_n:
+                best_dir, best_n = cand, n
+        if best_n:
+            candidates.append({
+                "images_dir": str(img_dir),
+                "labels_dir": str(best_dir),
+                "n_images": len(stems),
+                "n_matched": best_n,
+                # The root stage_dataset.py should be pointed at: the parent holding
+                # both images/ and labels/.
+                "stage_root": str(img_dir.parent),
+            })
+
+    candidates.sort(key=lambda c: -c["n_matched"])
+    return candidates[:top]
+
+
+def build_merged_view(roots: list[dict], dest: Path) -> dict:
+    """
+    Pool every matched image/label subtree into one images/ + labels/ pair.
+
+    Needed because these archives are organised by COUNTRY and by FORMAT:
+
+        Training and Validation Dataset/
+            japan_txt/train/{images,labels}      <- YOLO, usable
+            japan_txt/valid/{images,labels}      <- YOLO, usable
+            japan_coco/...                       <- same photos, COCO
+            japan_voc/...                        <- same photos, VOC
+
+    Pointing the stager at any single subtree throws away five sixths of the data;
+    pointing it at the common parent sweeps in the coco/voc copies as label-less
+    images, which YOLO would then train on as empty background frames.
+
+    So the matched subtrees are symlinked into one flat view. Filenames are prefixed
+    with their subtree tag, because two countries can legitimately contain the same
+    stem and a silent overwrite would drop images without telling you.
+
+    The unlabelled "Test Dataset" is excluded automatically - it has no labels, so it
+    produces no matched pairs. That is correct: the official test annotations are
+    withheld, which is exactly why our own test split has to be carved from the
+    labelled data.
+    """
+    img_dir, lab_dir = dest / "images", dest / "labels"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    lab_dir.mkdir(parents=True, exist_ok=True)
+
+    linked = skipped = 0
+    per_subtree: dict[str, int] = {}
+
+    for r in roots:
+        src_img, src_lab = Path(r["images_dir"]), Path(r["labels_dir"])
+        # Tag from the last two path components, e.g. "japan_txt_train".
+        parts = [p for p in Path(r["stage_root"]).parts[-2:]]
+        tag = "_".join(parts).replace(" ", "-").replace(".", "")
+        n_here = 0
+
+        for ip in sorted(src_img.iterdir()):
+            if ip.suffix.lower() not in IMAGE_EXTS:
+                continue
+            lp = src_lab / f"{ip.stem}.txt"
+            if not lp.exists():
+                skipped += 1
+                continue
+            stem = f"{tag}__{ip.stem}"
+            di, dl = img_dir / f"{stem}{ip.suffix}", lab_dir / f"{stem}.txt"
+            for src, dst in ((ip, di), (lp, dl)):
+                if dst.exists() or dst.is_symlink():
+                    continue
+                try:
+                    os.symlink(src, dst)
+                except OSError:
+                    shutil.copy2(src, dst)
+            linked += 1
+            n_here += 1
+        per_subtree[tag] = n_here
+
+    return {"dest": str(dest), "linked_pairs": linked,
+            "skipped_unlabelled": skipped, "per_subtree": per_subtree}
 
 
 def read_declared_classes(yamls: list[Path], root: Path) -> Optional[list[str]]:
@@ -290,6 +409,30 @@ def class_histogram(labels: list[Path], limit: int = 3000) -> Counter:
     return c
 
 
+def _canonicalise(names: list[str], expected: list[str]) -> tuple[list[str], bool]:
+    """
+    Translate Japanese D-codes to canonical English names.
+
+    The N-RDD2024 and RDD2022 releases label classes as D00, D10, D20 ... D90. Those
+    are the SAME categories as the English names, and ml/research/datasets.py already
+    carries the mapping. Comparing "d00" against "longitudinal_crack" as raw strings
+    reports a schema mismatch on a dataset that is in fact perfectly correct - which
+    is a false alarm that costs an hour of doubt at exactly the wrong moment.
+
+    Returns (translated_names, was_translated).
+    """
+    from ml.research.datasets import DATASETS
+
+    code_to_name: dict[str, str] = {}
+    for ds in DATASETS.values():
+        for name, code in ds.d_codes.items():
+            code_to_name[code.lower()] = name.lower()
+
+    if not all(n.lower() in code_to_name for n in names):
+        return names, False
+    return [code_to_name[n.lower()] for n in names], True
+
+
 def verify_schema(declared: Optional[list[str]], expected: list[str],
                   hist: Counter) -> tuple[bool, list[str]]:
     """
@@ -325,6 +468,11 @@ def verify_schema(declared: Optional[list[str]], expected: list[str],
 
     norm = [n.strip().lower().replace(" ", "_").replace("-", "_") for n in declared]
     exp = [n.lower() for n in expected]
+
+    norm, translated = _canonicalise(norm, exp)
+    if translated:
+        msgs.append("note dataset labels classes by Japanese D-code (D00..D90); "
+                    "translated to canonical names via ml/research/datasets.py")
 
     if norm == exp:
         msgs.append(f"ok   class names and ORDER match the canonical schema "
@@ -369,7 +517,29 @@ def report(name: str, info: dict, declared: Optional[list[str]],
     if info["n_coco_json"]:
         print(f"  coco json       {info['n_coco_json']}")
     print(f"  existing splits {info['existing_splits'] or '(none)'}")
-    print(f"  main image dir  {info['dominant_image_dir']}")
+
+    roots = info.get("yolo_roots") or []
+    if roots:
+        print(f"\n  matched image/label subtrees ({len(roots)} found):")
+        for i, r in enumerate(roots):
+            mark = ""
+            short = r["stage_root"]
+            if len(short) > 78:
+                short = "..." + short[-75:]
+            print(f"    {r['n_matched']:6,} pairs  {short}{mark}")
+        total_pairs = sum(r["n_matched"] for r in roots)
+        print(f"    {total_pairs:6,} pairs  TOTAL - all of these are pooled")
+        if info["n_images"] > total_pairs * 1.5:
+            print(f"\n  NOTE {info['n_images']:,} images but only {total_pairs:,} "
+                  f"matched pairs across these subtrees.\n"
+                  f"       Research archives commonly ship the same photographs once "
+                  f"per annotation format\n       (coco / voc / yolo) and once per "
+                  f"country. Only the matched subtree is usable.")
+    else:
+        print(f"  main image dir  {info['dominant_image_dir']}")
+        print("\n  NO matched image/label pairs found. The YOLO labels do not share "
+              "stems with any\n  image directory, so this archive needs conversion "
+              "before staging.")
 
     if info["format"] != "yolo":
         print(f"\n  NOTE format is '{info['format']}', not YOLO. stage_dataset.py "
@@ -406,7 +576,8 @@ def report(name: str, info: dict, declared: Optional[list[str]],
 # Main
 # ---------------------------------------------------------------------------
 def process(name: str, stage_to: Optional[str], s3: Optional[str],
-            inspect_only: bool, force: bool) -> int:
+            inspect_only: bool, force: bool,
+            source_subdir: Optional[str] = None) -> int:
     src = KAGGLE_SOURCES[name]
     print(f"\n### {name}  ({src['kaggle_id']})")
 
@@ -443,10 +614,28 @@ def process(name: str, stage_to: Optional[str], s3: Optional[str],
         return 0
 
     stage_dir = stage_to or f"/tmp/staged_{name}"
+    roots = info.get("yolo_roots") or []
+    if not roots and not source_subdir:
+        print("\n[abort] no matched image/label pairs - nothing to stage.",
+              file=sys.stderr)
+        return 2
+
+    if source_subdir:
+        source = source_subdir
+        print(f"\n[stage] source (manual): {source}")
+    else:
+        merged = Path("/tmp") / f"merged_{name}"
+        print(f"\n[merge] pooling {len(roots)} matched subtree(s) into {merged}")
+        m = build_merged_view(roots, merged)
+        for tag, n in sorted(m["per_subtree"].items(), key=lambda kv: -kv[1]):
+            print(f"    {n:7,}  {tag}")
+        print(f"[merge] {m['linked_pairs']:,} image/label pairs pooled"
+              + (f", {m['skipped_unlabelled']:,} unlabelled images skipped"
+                 if m["skipped_unlabelled"] else ""))
+        source = str(merged)
+
     cmd = [sys.executable, str(ROOT / "ml/aws/stage_dataset.py"),
-           "--source", info["dominant_image_dir"].rsplit("/images", 1)[0]
-           if "/images" in info["dominant_image_dir"] else str(path),
-           "--out", stage_dir]
+           "--source", source, "--out", stage_dir]
     if s3:
         cmd += ["--s3", s3]
 
@@ -471,6 +660,8 @@ def main() -> int:
     ap.add_argument("--s3", metavar="URI", help="also upload the staged result")
     ap.add_argument("--force", action="store_true",
                     help="proceed despite a schema or disk warning")
+    ap.add_argument("--source-subdir", metavar="PATH",
+                    help="stage from this directory instead of the auto-detected one")
     args = ap.parse_args()
 
     names = list(KAGGLE_SOURCES) if args.all else [args.dataset]
@@ -480,7 +671,8 @@ def main() -> int:
         s3 = args.s3
         if args.all and s3:
             s3 = s3.rstrip("/") + f"/{n}"
-        rc |= process(n, args.stage, s3, args.inspect_only, args.force)
+        rc |= process(n, args.stage, s3, args.inspect_only, args.force,
+                      args.source_subdir)
     return rc
 
 
