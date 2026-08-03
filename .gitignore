@@ -11,13 +11,38 @@ ml/weights
 frontend/node_modules
 frontend/dist
 # 1. Ignore everything in runs
-runs/*
+runs/detect/chain_fine_tune
+runs/detect/nrdd_2024
+runs/detect/rtdetr_road
 scripts/*
 # 2. Un-ignore the specific parent folder `detect` so git can look inside
 !runs/detect/
 latex/*
 # 3. Ignore everything inside `detect` (this prevents other folders like `train` from being tracked)
 runs/detect/*
+
+# ---------------------------------------------------------------------------
+# runs/ — keep the small research artefacts, ignore everything heavy
+#
+# The research output is a few hundred KB of JSON and CSV: run.json (git SHA,
+# seed, dataset hash), config.json, metrics.csv, per_class_ap.json and
+# test_metrics.json. Those are irreplaceable — a lost metrics.csv cannot be
+# reconstructed. Model weights CAN be retrained from the recorded seed and
+# config, which is the whole point of the reproducibility harness, so they stay
+# out of git. (best.pt is 66 MB; GitHub hard-rejects anything over 100 MB.)
+# ---------------------------------------------------------------------------
+runs/*
+!runs/research/
+!runs/weekend*.log
+
+# Ultralytics writes its own run trees (weights + plots) under these
+runs/research/**/ultralytics/
+runs/research/_checkpoints/
+runs/research/_calibration/
+
+# Never commit checkpoints, wherever they land
+*.pt
+*.pth
 
 # 4. Un-ignore the specific folders you want inside `detect`
 !runs/detect/val/
