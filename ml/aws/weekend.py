@@ -162,7 +162,8 @@ def calibrate(data_yaml: str, device: str = "0") -> float:
 # ---------------------------------------------------------------------------
 # Planning
 # ---------------------------------------------------------------------------
-def plan(queue: list[str], deadline: datetime, gpu_factor: float) -> list[dict]:
+def plan(queue: list[str], deadline: datetime, gpu_factor: float,
+         epochs: Optional[int] = None) -> list[dict]:
     """Walk the queue against the clock, marking what fits and what does not."""
     cursor = _now()
     cutoff = deadline - timedelta(hours=EXPORT_RESERVE_H)
@@ -176,7 +177,7 @@ def plan(queue: list[str], deadline: datetime, gpu_factor: float) -> list[dict]:
             continue
 
         for seed in spec.seeds:
-            h = estimate_hours(spec.epochs, spec.imgsz, 1, gpu_factor)
+            h = estimate_hours(epochs or spec.epochs, spec.imgsz, 1, gpu_factor)
             finish = cursor + timedelta(hours=h)
             fits = finish <= cutoff
             rows.append({
@@ -265,6 +266,7 @@ def export(runs_root: Path, s3_uri: str, quiet: bool = False) -> bool:
 def run_queue(
     queue: list[str], data_yaml: str, deadline: datetime, gpu_factor: float,
     export_uri: Optional[str], runs_root: Path, device: str,
+    epochs: Optional[int] = None,
 ) -> int:
     cutoff = deadline - timedelta(hours=EXPORT_RESERVE_H)
     runs_root.mkdir(parents=True, exist_ok=True)
@@ -287,7 +289,8 @@ def run_queue(
             continue
 
         for seed in spec.seeds:
-            h = estimate_hours(spec.epochs, spec.imgsz, 1, gpu_factor)
+            n_ep = epochs if epochs else spec.epochs
+            h = estimate_hours(n_ep, spec.imgsz, 1, gpu_factor)
             remaining = (cutoff - _now()).total_seconds() / 3600
 
             if remaining <= 0:
@@ -310,6 +313,8 @@ def run_queue(
                 "--data", data_yaml, "--device", device,
                 "--runs-root", str(runs_root),
             ]
+            if epochs:
+                cmd += ["--epochs", str(epochs)]
             t0 = time.time()
             rc = subprocess.run(cmd).returncode
             took = (time.time() - t0) / 3600
@@ -384,6 +389,9 @@ def main() -> int:
     ap.add_argument("--deadline", help="'YYYY-MM-DD HH:MM' when the account dies")
     ap.add_argument("--hours-left", type=float, help="alternative to --deadline")
     ap.add_argument("--gpu-factor", type=float, default=GPU_FACTOR)
+    ap.add_argument("--epochs", type=int,
+                    help="override every spec's epoch count. Use the SAME "
+                         "value for every experiment or comparisons break.")
     ap.add_argument("--runs-root", default="runs/research")
     ap.add_argument("--device", default="0")
     args = ap.parse_args()
@@ -403,7 +411,8 @@ def main() -> int:
     deadline = parse_deadline(args.deadline, args.hours_left)
 
     if args.plan or not args.run:
-        print_plan(plan(queue, deadline, args.gpu_factor), deadline, args.gpu_factor)
+        print_plan(plan(queue, deadline, args.gpu_factor, args.epochs),
+                   deadline, args.gpu_factor)
         if not args.run:
             print("\n(--plan only. Add --run --data <yaml> --export s3://... to execute.)")
         return 0
@@ -419,7 +428,7 @@ def main() -> int:
             return 130
 
     return run_queue(queue, args.data, deadline, args.gpu_factor,
-                     args.export, runs_root, args.device)
+                     args.export, runs_root, args.device, args.epochs)
 
 
 if __name__ == "__main__":
