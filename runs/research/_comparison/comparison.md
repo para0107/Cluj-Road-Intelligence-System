@@ -2,13 +2,13 @@
 
 Metric: **mAP50-95** on the **test** split.
 
-Measured seed-noise floor: **0.0022**. Any difference smaller than this is not a result.
+Measured seed-noise floor: **0.0039**. Any difference smaller than this is not a result.
 
 ## Leaderboard
 
 | Experiment | Seeds | Mean | Std | Min | Max | 95% CI |
 |---|---:|---:|---:|---:|---:|---|
-| E0-baseline ⚠dirty | 2 | 0.1971 | 0.0022 | 0.1955 | 0.1986 | [0.1955, 0.1986] |
+| E0-baseline ⚠dirty | 3 | 0.1991 | 0.0039 | 0.1955 | 0.2032 | [0.1955, 0.2032] |
 
 *⚠dirty = at least one run was produced from an uncommitted working tree and is not reportable.*
 
