@@ -30,5 +30,13 @@
     "estimated_h": 2.9,
     "actual_h": 2.67,
     "finished_at": "2026-08-03T18:57:51.515407"
+  },
+  {
+    "experiment": "E0-baseline",
+    "seed": 1339,
+    "returncode": 0,
+    "estimated_h": 2.9,
+    "actual_h": 2.58,
+    "finished_at": "2026-08-03T21:32:39.832079"
   }
 ]
