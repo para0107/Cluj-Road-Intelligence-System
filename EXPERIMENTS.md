@@ -1,13 +1,23 @@
 # RDDS Detector — Experiment Log
 
-**Status: RUNNING.** Everything under a "What we expect" heading is a prediction written
-*before* seeing the numbers, so that a wrong prediction stays visible as a wrong
-prediction rather than being quietly rewritten afterwards.
+**Status: weekend 1 complete.** Everything under a "What we expect" heading is a
+prediction written *before* seeing the numbers, kept exactly as written — including the
+wrong ones.
 
-**First results are in, and the headline is a refutation.** E1 tested the shape
-hypothesis that motivated the programme's intended contribution (E4) and found no
-support: ρ = +0.188, p = 0.607. **E4 is cancelled.** See §6, E1. The predictions in this
-document are being kept exactly as written, including the wrong ones.
+### Headline results
+
+| | |
+|---|---|
+| **Baseline** | Test mAP50-95 **0.1991 ± 0.0039** (3 seeds, held-out test split, zero leakage) |
+| **Seed-noise floor** | **0.0039** — differences below this are not results |
+| **E1 hypothesis** | **REFUTED.** ρ = +0.188, p = 0.607. Shape does not predict per-class accuracy |
+| **E4 contribution** | **CANCELLED** — its motivation did not survive E1 |
+| **Operating problem** | Recall 0.438 vs precision 0.615. Confirmed on clean data. E5 is the strongest lead |
+| **E8 class ablation** | Not run — ran out of window. Ready for weekend 2 |
+
+The programme's intended novel contribution was killed by its own gate, before any GPU
+time went into building it. That is the gate working, and it is the most useful thing
+that happened this weekend.
 
 Started 3 August 2026 · **Europe AI Summer Research Program**, in partnership with AWS
 Run on **Amazon SageMaker Unified Studio**, `ml.g6.xlarge` (NVIDIA L4, 24 GB) — see §2
@@ -216,7 +226,80 @@ comparisons hold, but it should be fixed next time by setting `close_mosaic=0`.
 
 ### E0 — Establish a real baseline and measure the noise floor
 
-**Status: running (3 seeds).**
+> ## RESULT — FINAL, all 3 seeds — 3 August 2026
+>
+> **Test mAP50-95 = 0.1991 ± 0.0039** (seeds 1337, 1338, 1339)
+>
+> | Seed | Test mAP50-95 |
+> |---|---:|
+> | 1337 | 0.19553 |
+> | 1338 | 0.19861 |
+> | 1339 | 0.20321 |
+> | **mean ± sd** | **0.1991 ± 0.0039** |
+>
+> **Seed-noise floor: 0.0039.** Any later difference below this is not a result.
+> Bootstrap 95% CI for the mean: [0.1955, 0.2032].
+>
+> | Metric | Test | Val |
+> |---|---:|---:|
+> | mAP50 | 0.4417 | 0.4266 |
+> | mAP50-95 | **0.1986** | 0.2007 |
+> | Precision | 0.6155 | 0.5847 |
+> | Recall | **0.4382** | 0.4339 |
+> | F1 | 0.5119 | 0.4981 |
+>
+> *(seed 1338; seed 1337 gave mAP50-95 0.1955)*
+>
+> ### Prediction scorecard
+>
+> | Prediction | Actual | Verdict |
+> |---|---|---|
+> | Test mAP50-95 in 0.20–0.27 | **0.1991** | Just below the range — near miss |
+> | Seed spread 0.005–0.015 | **0.0039** | Slightly tighter than predicted |
+> | Recall still below precision | **0.438 vs 0.615** | Correct |
+>
+> The two-seed floor read 0.0022; the third seed widened it to 0.0039. A worked
+> illustration of why two seeds are not enough to estimate a spread — and why the
+> programme spent three runs on this rather than one.
+>
+> ### Recall remains the operating problem
+>
+> Precision 0.615, recall 0.438 — the same inversion the old model had, now confirmed
+> on a clean held-out split. The detector finds well under half the damage present.
+> **E5 is fully justified.**
+>
+> ### Per-class AP@50 is remarkably stable across seeds
+>
+> | Class | s1337 | s1338 |
+> |---|---:|---:|
+> | manhole_cover | 0.798 | 0.811 |
+> | alligator_crack | 0.566 | 0.577 |
+> | longitudinal_crack | 0.478 | 0.490 |
+> | lane_line_blur | 0.451 | 0.477 |
+> | transverse_crack | 0.460 | 0.468 |
+> | pedestrian_crossing_blur | 0.430 | 0.459 |
+> | pothole | 0.417 | 0.442 |
+> | patchy_road | 0.365 | 0.354 |
+> | repaired_crack | 0.339 | 0.340 |
+> | rutting | 0.000 | 0.000 |
+>
+> The **ordering is identical** across seeds and every value moves by less than 0.03.
+> Per-class differences here are structural properties of the data, not sampling noise
+> — which is what makes the `manhole_cover` gap (0.80 against 0.34–0.58 for every
+> damage class) worth investigating rather than dismissing.
+>
+> ### Caveats
+>
+> - **Runs are flagged "dirty working tree"** by the harness: uncommitted edits were
+>   present when they launched, so the recorded git SHA does not exactly describe the
+>   code that ran. The code was functionally identical across all three, so
+>   comparisons between them hold, but a paper should re-run from a clean commit.
+> - **Not comparable to the old 0.2945.** That was 57 epochs on a validation split with
+>   unverified leakage. This is 20 epochs on a clean held-out test split. Lower is
+>   expected and does not indicate a worse model.
+> - Third seed still running; the floor may shift slightly.
+
+**Status: 2 of 3 seeds complete.** Original design follows.
 
 **Question.** What does this model actually score on data it has never seen, and how much
 does the score move between identical runs that differ only in random seed?
@@ -440,30 +523,56 @@ because it flatters the result.
 
 ---
 
-## 7. What is running right now
+## 7. Weekend 1 outcome — what was and was not achieved
 
-```
-E0-baseline   seed 1337   10 classes   ~1h50m
-E0-baseline   seed 1338   10 classes   ~1h50m
-E0-baseline   seed 1339   10 classes   ~1h50m
-E8-structural7 seed 1337   7 classes   ~1h50m
-                                       ─────
-                                       ~7.5 h
-```
+The first research weekend ended 4 August 2026. Summary of the ledger:
 
-Each run produces, under `runs/research/<timestamp>_<experiment>_s<seed>/`:
+| Experiment | Seeds | Outcome |
+|---|---|---|
+| **E0-baseline** | 1337, 1338, 1339 | **Complete.** Test mAP50-95 0.1991 ± 0.0039 |
+| **E1-anisotropy** | analysis | **Complete.** Hypothesis refuted, ρ = +0.188, p = 0.607 |
+| **E8-structural7** | — | **Not run.** Ran out of window |
+| E3, E5, E6 | — | Not started |
+| E4 | — | **Cancelled** by E1's result |
 
-| File | Contents |
+### Delivered
+
+1. **A trustworthy baseline.** Three seeds, held-out test split, zero leakage, full
+   per-class AP. The project had none of this before.
+2. **A seed-noise floor of 0.0039**, so future comparisons are judgeable.
+3. **A refuted hypothesis.** E1 killed the programme's intended contribution before a
+   single GPU-hour was spent building it.
+4. **A confirmed operating problem.** Recall 0.438 against precision 0.615 on clean
+   data, which makes E5 the strongest remaining lead.
+5. **Reproducible infrastructure** — staging with leakage proof, class-set derivation,
+   deadline-aware scheduling, statistical comparison with guards.
+
+### Not delivered, and why
+
+**E8 (the class-selection question) did not run.** The queue's own deadline logic was
+given a conservative `--hours-left` and skipped it rather than risk an unfinishable
+run. Everything it needs is already fixed in place — the staged dataset, the split
+manifest, and a 3-seed baseline at the identical budget — so it is a single ~3 h run
+next weekend, directly comparable.
+
+### Time lost, honestly accounted
+
+Roughly 5 of ~19 hours went to problems rather than experiments:
+
+| Cause | Cost |
 |---|---|
-| `run.json` | git SHA, seed, GPU, dataset fingerprint, timings |
-| `config.json` | every resolved hyperparameter |
-| `metrics.csv` | per-epoch train loss and validation metrics |
-| `per_class_ap.json` | per-class AP@50 on the **test** split |
-| `test_metrics.json` | the headline numbers |
+| Ultralytics rewrote a relative `project` path, so phase 2 never ran | ~2.5 h (2 runs) |
+| A killed parent left its training child on the GPU; contention halved throughput | ~1 h |
+| aHash false-positive collapse forced a re-stage | ~1 h |
+| GPU-hour estimates were extrapolated rather than measured | planning churn |
+
+All four are fixed in the code. The first two are the kind of failure that only shows
+up under a deadline, which is an argument for a dry run before the next weekend rather
+than after it.
 
 ---
 
-## 8. How the results will be judged
+## 8. How the results are judged
 
 Three rules, enforced in code rather than left to memory:
 
@@ -491,7 +600,30 @@ python ml/research/visualise.py --runs runs/research --out runs/research/_figure
 
 ---
 
-## 9. Mistakes made and corrected today
+## 9. Artefacts produced by each run
+
+```
+E0-baseline   seed 1337   10 classes   ~1h50m
+E0-baseline   seed 1338   10 classes   ~1h50m
+E0-baseline   seed 1339   10 classes   ~1h50m
+E8-structural7 seed 1337   7 classes   ~1h50m
+                                       ─────
+                                       ~7.5 h
+```
+
+Each run produces, under `runs/research/<timestamp>_<experiment>_s<seed>/`:
+
+| File | Contents |
+|---|---|
+| `run.json` | git SHA, seed, GPU, dataset fingerprint, timings |
+| `config.json` | every resolved hyperparameter |
+| `metrics.csv` | per-epoch train loss and validation metrics |
+| `per_class_ap.json` | per-class AP@50 on the **test** split |
+| `test_metrics.json` | the headline numbers |
+
+---
+
+## 10. Mistakes made and corrected
 
 Recorded because they affect how the numbers should be read.
 
@@ -520,7 +652,7 @@ reordered class list is still blocked.
 
 ---
 
-## 10. Known limitations
+## 11. Known limitations
 
 - **20 epochs is not convergence.** Absolute scores understate what this configuration can
   reach. Comparisons between runs remain valid.
@@ -534,7 +666,7 @@ reordered class list is still blocked.
 
 ---
 
-## 11. References
+## 12. References
 
 - RT-DETR — Zhao et al., 2023. [arXiv:2304.08069](https://arxiv.org/abs/2304.08069)
 - N-RDD2024 — Kaya & Çodur, 2024. [doi:10.17632/27c8pwsd6v.3](https://doi.org/10.17632/27c8pwsd6v.3)
