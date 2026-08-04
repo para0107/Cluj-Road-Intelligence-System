@@ -22,6 +22,11 @@ that happened this weekend.
 Started 3 August 2026 · **Europe AI Summer Research Program**, in partnership with AWS
 Run on **Amazon SageMaker Unified Studio**, `ml.g6.xlarge` (NVIDIA L4, 24 GB) — see §2
 
+> **Paper:** these results are written up in `paper/RDDS_Benchmark_2026.tex`
+> ("What a Held-Out Split Costs You"). This file is the working log; the paper is the
+> narrative version. Where they disagree, the run artefacts under `runs/research/`
+> are authoritative.
+
 ---
 
 ## 1. Why these experiments exist

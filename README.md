@@ -51,6 +51,7 @@
 - [Deployment (free)](#deployment-free)
 - [Validation utilities](#validation-utilities)
 - [Tech stack](#tech-stack)
+- [Detector research — held-out benchmark and a refuted hypothesis](#detector-research--held-out-benchmark-and-a-refuted-hypothesis)
 - [Known limitations](#known-limitations)
 - [License & attribution](#license--attribution)
 
@@ -1134,6 +1135,133 @@ runtime.
 | Severity | Rule-based | Weighted multi-signal, no learned model; same formula in survey stage 5 and lite proxies |
 | Dedup | DBSCAN | Haversine metric, eps = `DEDUP_CLUSTER_RADIUS_M` |
 | Phone sensing | Accelerometer heuristic | Jolt-threshold pothole detection in the browser (drive mode) |
+
+---
+
+## Detector research — held-out benchmark and a refuted hypothesis
+
+Run during the **Europe AI Summer Research Program 2026** on AWS, using SageMaker
+Unified Studio with an `ml.g6.xlarge` instance (NVIDIA L4, 24 GB). Everything lives
+under `ml/research/` and `ml/aws/`, and is written up in
+`paper/RDDS_Benchmark_2026.tex`. The working log with all the raw numbers is
+`EXPERIMENTS.md`.
+
+The point of this round was not to make the detector better. It was to find out whether
+the numbers the project had been quoting meant anything.
+
+### What was wrong with the old evaluation
+
+The deployed detector reported mAP50 0.577 and mAP50-95 0.305. Both came from the
+validation split, which is also the split 57 epochs of checkpoint selection ran
+against, so the figures are optimistically biased by an amount nobody had measured.
+Nothing had ever checked whether the same photograph appeared on both sides of the
+train/validation boundary, there was no per-class breakdown for the ten-class model,
+and with one run per configuration there was no way to tell a real improvement from a
+lucky seed.
+
+### The new baseline
+
+The dataset was rebuilt from scratch: 18,995 unique annotated images pooled from six
+countries, split 13,297 / 2,849 / 2,849, with duplicates grouped before splitting so a
+duplicate cannot cross a boundary that was drawn before it existed. An independent
+verification pass, written separately from the code that built the split, found zero
+images crossing.
+
+| | Test (this work) | Val (previous) |
+|---|---:|---:|
+| mAP50-95 | **0.1991 ± 0.0039** | 0.305 |
+| mAP50 | 0.4361 | 0.577 |
+| Precision | 0.6183 | 0.660 |
+| Recall | 0.4334 | 0.527 |
+| Seeds | 3 | 1 |
+| Held-out test | yes | no |
+| Leakage audited | yes | no |
+
+The two columns are not comparable, and that is the finding. Three things differ at
+once: the split, the epoch budget (20 against 57), and whether the score was measured
+on data used for selection. All three push a number upward.
+
+The seed spread of **0.0039** is the more useful output. It says any later difference
+below about 0.004 is noise, which means most future comparisons need only one seed.
+Two seeds had suggested 0.0022; the third widened it, which is a decent argument
+against estimating a spread from two runs.
+
+Recall (0.433) still sits below precision (0.618). For a municipal survey that is
+backwards, since a missed defect never gets scheduled while a false alarm costs an
+operator one click. The same inversion showed up in the earlier work and now holds on
+clean data, so it belongs to the model rather than the old evaluation.
+
+### Per-class results
+
+| Class | Train instances | AP@50 |
+|---|---:|---:|
+| manhole_cover | 2,704 | **0.804** |
+| alligator_crack | 5,473 | 0.571 |
+| longitudinal_crack | 16,104 | 0.484 |
+| lane_line_blur | 2,289 | 0.464 |
+| transverse_crack | 7,049 | 0.464 |
+| pedestrian_crossing_blur | 1,937 | 0.444 |
+| pothole | 1,576 | 0.429 |
+| patchy_road | 384 | 0.360 |
+| repaired_crack | 1,502 | 0.340 |
+| rutting | 12 | 0.000 |
+
+Both seeds produced the same ordering and no class moved by more than 0.03, so these
+gaps are structural rather than sampling noise. Training data volume explains very
+little of it: longitudinal crack has ten times pothole's instances and scores 0.055
+higher, while manhole cover has under a fifth of longitudinal's data and beats it by
+0.32.
+
+`rutting` has 12 training instances and 3 in test. Its AP carries no information and is
+listed only for completeness. That is a property of the dataset, and it suggests the
+ten-class schema asks for more than the data supports.
+
+### The hypothesis that failed
+
+Three separate groups have argued that road damage detectors need receptive fields
+shaped to match slender cracks. We predicted, and registered in code before measuring
+anything, that elongated classes would score worse than compact ones.
+
+Spearman correlation between per-class AP and box anisotropy came out at
+**ρ = +0.188, p = 0.607**. Wrong sign, not significant. Box area does not explain the
+ordering either (ρ = −0.248, p = 0.491).
+
+Part of why it failed is that the geometric assumptions were wrong once measured. A
+manhole cover has a median pixel aspect ratio of 2.82, because a round object seen from
+a moving vehicle projects to an ellipse, which makes it one of the *most* anisotropic
+classes and also the best detected. Lane line blur is nearly square at 1.04, since the
+boxes cover marking patches rather than line segments. And a long crack's bounding box
+is only mildly elongated at 0.58, because real cracks meander instead of running
+straight.
+
+The planned architectural work was cancelled on the strength of that result. It cost a
+few hours of analysis on data we already had; running it after the architecture work
+would have cost days and produced a number with no explanation attached.
+
+### What is still open
+
+`manhole_cover` reaches 0.804 while every damage class sits between 0.34 and 0.57, on
+less data, with 81% of its boxes under 1% of image area. It is not winning on volume,
+size or compactness. What separates it is that it is a manufactured object with an edge
+two annotators would draw in the same place. Road damage is not, and the two worst
+classes are the two most subjective ones in the schema. That points at annotation
+consistency rather than architecture as the ceiling, though it is a hypothesis and has
+not been tested.
+
+### Reproducing it
+
+```bash
+python ml/aws/fetch_kaggle.py --dataset nrdd2024 --stage /tmp/staged   # verifies class order
+python ml/aws/weekend.py --plan --hours-left 12 --epochs 20            # what fits
+python ml/aws/weekend.py --run --queue E0-baseline --data <yaml> ...   # train
+python ml/research/compare.py --runs runs/research                     # noise floor
+python ml/research/anisotropy.py --labels ... --per-class-ap ...       # the null result
+python ml/research/visualise.py --runs runs/research                   # figures
+```
+
+Every run records its seed, git commit, resolved hyperparameters and a SHA-256
+fingerprint of the data it read. `ml/detection/train.py` is left untouched for
+provenance, since the older published numbers came from it.
 
 ---
 
