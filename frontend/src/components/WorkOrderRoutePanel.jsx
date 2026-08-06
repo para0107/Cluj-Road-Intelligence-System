@@ -24,7 +24,7 @@ import { EmptyState } from './ui'
 const MINUTES_PER_STOP = 20
 const AVG_SPEED_KMH = 25
 
-const ACCENT_FALLBACK = '#eaff3d'
+const ACCENT_FALLBACK = '#cf5a30'
 
 /** Leaflet needs a real colour, not a CSS variable. Read the token at render. */
 function readAccent() {

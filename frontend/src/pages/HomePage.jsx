@@ -24,9 +24,7 @@ import { Kpi, SectionTitle } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
 import useMotionOk from '../hooks/useMotionOk'
 import { useIsDark } from '../hooks/useTheme'
-import Aurora from '../reactbits/Aurora/Aurora'
 import SplitText from '../reactbits/SplitText/SplitText'
-import ShinyText from '../reactbits/ShinyText/ShinyText'
 
 const STAGE_ICONS = [ScanLine, Radar, Layers, Ruler, Gauge, Copy, Database]
 
@@ -64,19 +62,7 @@ export default function HomePage() {
 
   return (
     <div style={styles.page} className="page-grid-bg">
-      {/* Aurora sits behind the hero only, and only on a device that can spare
-          the frames. With motion off, .page-grid-bg carries the look. */}
-      {motionOk && (
-        <div style={styles.aurora}>
-          <Aurora
-            colorStops={isDark
-              ? ['#eaff3d', '#4cc9f0', '#3ddc84']
-              : ['#99a800', '#4cc9f0', '#3ddc84']}
-            amplitude={0.9}
-            blend={0.45}
-          />
-        </div>
-      )}
+      {/* Monograph: a plain ground carries the hero, no aurora glow. */}
 
       <div style={styles.inner}>
 
@@ -100,13 +86,13 @@ export default function HomePage() {
                   className="display"
                 />
                 <br />
-                <span className="text-gradient" style={{ textShadow: 'none' }}>Mapped &amp; ranked.</span>
+                <span style={{ color: 'var(--accent)' }}>Mapped &amp; ranked.</span>
               </h1>
             ) : (
               <h1 className="display anim-fade-up delay-1" style={styles.heroTitle}>
                 Every street.<br />
                 Every crack.<br />
-                <span className="text-gradient" style={{ textShadow: 'none' }}>Mapped &amp; ranked.</span>
+                <span style={{ color: 'var(--accent)' }}>Mapped &amp; ranked.</span>
               </h1>
             )}
 
@@ -121,9 +107,7 @@ export default function HomePage() {
               {/* Citizens land on the Live map — the operator pages 404 for them */}
               <Link to={isOperator ? '/map' : '/live'} className="btn btn-accent" style={{ padding: '11px 20px', fontSize: 13 }}>
                 <Map size={15} />
-                {motionOk
-                  ? <ShinyText text="Open the live map" speed={3} color="var(--accent-ink)" shineColor="#ffffff" />
-                  : 'Open the live map'}
+                Open the live map
                 <ArrowRight size={14} />
               </Link>
               {isOperator ? (

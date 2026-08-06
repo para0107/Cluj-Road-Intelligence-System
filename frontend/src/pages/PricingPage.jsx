@@ -154,12 +154,7 @@ export default function PricingPage() {
     <div className="page-grid-bg" style={styles.page}>
       <style>{PAGE_CSS}</style>
 
-      {/* Aurora glow behind the hero only. Desktop, motion-friendly visitors. */}
-      {motionOk && (
-        <div style={styles.auroraLayer} aria-hidden="true">
-          <Aurora colorStops={['#eaff3d', '#4cc9f0', '#3ddc84']} amplitude={0.8} blend={0.4} />
-        </div>
-      )}
+      {/* Monograph hero: a plain ground and hairline rules, no aurora glow. */}
 
       <div style={styles.content}>
 
@@ -281,9 +276,7 @@ function TierCard({ tier, delay, onTalk }) {
           <Icon size={17} />
         </span>
         {featured ? (
-          <span className="display" style={{ fontSize: 17, fontWeight: 700 }}>
-            <ShinyText text={tier.name} speed={3} color="var(--text)" shineColor="#eaff3d" />
-          </span>
+          <span className="display" style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent)' }}>{tier.name}</span>
         ) : (
           <span className="display" style={{ fontSize: 17, fontWeight: 700 }}>{tier.name}</span>
         )}

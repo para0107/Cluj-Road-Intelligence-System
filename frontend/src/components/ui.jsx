@@ -15,7 +15,7 @@ export function SevBadge({ s, compact = false }) {
   return (
     <span style={{
       background: `${color}22`, color, border: `1px solid ${color}55`,
-      borderRadius: 5, padding: compact ? '1px 6px' : '2px 8px',
+      borderRadius: 2, padding: compact ? '1px 6px' : '2px 8px',
       fontSize: compact ? 10 : 11, fontFamily: 'var(--font-mono)', fontWeight: 700,
       whiteSpace: 'nowrap',
     }}>
@@ -45,7 +45,7 @@ export function ClassChip({ cls, count, active = true, onClick }) {
       {count !== undefined && (
         <span style={{
           background: active ? `${color}2e` : 'var(--border)',
-          borderRadius: 8, padding: '0 6px', fontSize: 10,
+          borderRadius: 2, padding: '0 6px', fontSize: 10,
           fontFamily: 'var(--font-mono)',
           color: active ? color : 'var(--text-muted)',
         }}>
@@ -61,7 +61,7 @@ export function ClassDot({ cls, size = 26 }) {
   const color = CLASS_COLORS[cls] || '#888'
   return (
     <span style={{
-      width: size, height: size, borderRadius: 8, flexShrink: 0,
+      width: size, height: size, borderRadius: 2, flexShrink: 0,
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       background: `${color}1c`, border: `1px solid ${color}44`,
       color, fontSize: size * 0.55,
@@ -83,12 +83,7 @@ export function Kpi({ icon: Icon, label, value, countTo = null, decimals = 0, su
     <div className={`card card-accent-hover anim-fade-up ${delay}`} style={{ padding: '18px 20px', position: 'relative', overflow: 'hidden' }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-        background: `linear-gradient(90deg, ${color}, transparent 70%)`,
-      }} />
-      <div style={{
-        position: 'absolute', top: -34, right: -34, width: 96, height: 96, borderRadius: '50%',
-        background: `radial-gradient(circle, color-mix(in srgb, ${color} 14%, transparent), transparent 70%)`,
-        pointerEvents: 'none',
+        background: color,
       }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <span className="overline">{label}</span>
@@ -147,7 +142,7 @@ export function EmptyState({ icon: Icon, title, sub, action }) {
       <div style={{ textAlign: 'center', maxWidth: 380 }} className="anim-fade-up">
         {Icon && (
           <div style={{
-            width: 52, height: 52, borderRadius: 14, margin: '0 auto 14px',
+            width: 52, height: 52, borderRadius: 2, margin: '0 auto 14px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             background: 'var(--accent-dim)', border: '1px solid var(--border-accent)',
           }}>
@@ -164,15 +159,17 @@ export function EmptyState({ icon: Icon, title, sub, action }) {
 
 // ── Progress bar ──────────────────────────────────────────────────────────
 export function ProgressBar({ value, color = 'var(--accent)', height = 6 }) {
+  const pct = Math.max(0, Math.min(100, value))
   return (
     <div style={{
-      width: '100%', height, borderRadius: height, overflow: 'hidden',
+      width: '100%', height, borderRadius: 0, overflow: 'hidden',
       background: 'var(--border)',
     }}>
+      {/* transform:scaleX keeps the fill on the GPU — no layout thrash */}
       <div style={{
-        width: `${Math.max(0, Math.min(100, value))}%`, height: '100%',
-        background: color, borderRadius: height,
-        transition: 'width 0.4s cubic-bezier(0.4,0,0.2,1)',
+        width: '100%', height: '100%', background: color,
+        transformOrigin: 'left', transform: `scaleX(${pct / 100})`,
+        transition: 'transform 0.4s cubic-bezier(0.16,0.84,0.44,1)',
       }} />
     </div>
   )

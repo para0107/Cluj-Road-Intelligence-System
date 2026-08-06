@@ -583,7 +583,7 @@ export default function LivePage() {
               center={[ev.latitude, ev.longitude]}
               radius={isSel ? r + 3 : r}
               pathOptions={{
-                color: isSel ? '#eaff3d' : (STATUS_META[ev.status] ? sevColor : color),
+                color: isSel ? '#cf5a30' : (STATUS_META[ev.status] ? sevColor : color),
                 fillColor: color,
                 fillOpacity: ev.status === 'unverified' ? 0.5 : 0.9,
                 weight: isSel ? 3 : ev.status === 'verified' ? 2.5 : 1.5,
@@ -603,7 +603,7 @@ export default function LivePage() {
           <CircleMarker
             center={pickerAt}
             radius={10}
-            pathOptions={{ color: '#eaff3d', fillColor: '#eaff3d', fillOpacity: 0.25, weight: 2, dashArray: '4 4' }}
+            pathOptions={{ color: '#cf5a30', fillColor: '#cf5a30', fillOpacity: 0.25, weight: 2, dashArray: '4 4' }}
           />
         )}
       </MapContainer>

@@ -152,12 +152,12 @@ export default function PriorityPage() {
 <title>RDDS — Work order</title>
 <style>
   body { font-family:'Segoe UI',sans-serif; color:#10141c; margin:0; }
-  .cover { background:#05070b; color:#eaff3d; padding:44px 44px 30px; }
+  .cover { background:#1a1a18; color:#cf5a30; padding:44px 44px 30px; }
   .cover h1 { margin:0 0 6px; font-size:28px; }
   .cover p { margin:0; color:#a8b0c2; font-size:13px; }
   .body { padding:32px 44px; }
   table { width:100%; border-collapse:collapse; }
-  th { background:#05070b; color:#eaff3d; text-align:left; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; padding:10px 13px; }
+  th { background:#1a1a18; color:#cf5a30; text-align:left; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; padding:10px 13px; }
   td { padding:9px 13px; border-bottom:1px solid #eef0f4; font-size:12.5px; }
   .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; }
   .total { margin-top:18px; font-size:15px; font-weight:700; text-align:right; }

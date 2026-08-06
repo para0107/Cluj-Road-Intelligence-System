@@ -134,25 +134,25 @@ function generateReport(detections, stats, city) {
 <title>RDDS — ${cityTitle}</title>
 <style>
   body { font-family: 'Segoe UI', sans-serif; background: #f6f7f9; color: #10141c; margin:0; }
-  .cover { background: #05070b; color: #eaff3d; padding: 56px 48px 36px; }
+  .cover { background: #1a1a18; color: #cf5a30; padding: 56px 48px 36px; }
   .cover h1 { font-size: 34px; font-weight: 800; margin: 0 0 6px; letter-spacing: -1px; }
   .cover p { color: #a8b0c2; font-size: 13px; margin: 0; }
   .dash { height: 4px; width: 160px; margin-top: 18px;
-          background-image: linear-gradient(90deg,#eaff3d 0 26px, transparent 26px 42px);
+          background-image: linear-gradient(90deg,#cf5a30 0 26px, transparent 26px 42px);
           background-size: 42px 4px; }
   .body { padding: 36px 48px; }
   .section { margin-bottom: 34px; }
-  h2 { font-size: 19px; font-weight: 700; border-bottom: 2px solid #eaff3d; padding-bottom: 8px; margin: 0 0 18px; }
+  h2 { font-size: 19px; font-weight: 700; border-bottom: 2px solid #cf5a30; padding-bottom: 8px; margin: 0 0 18px; }
   .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 30px; }
   .stat-card { background: white; border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; }
   .stat-val { font-size: 30px; font-weight: 800; }
-  .stat-lbl { font-size: 11px; color: #626b80; margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+  .stat-lbl { font-size: 11px; color: #817c6e; margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
   table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-  th { background: #05070b; color: #eaff3d; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; padding: 11px 15px; text-align: left; }
+  th { background: #1a1a18; color: #cf5a30; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; padding: 11px 15px; text-align: left; }
   td { padding: 10px 15px; border-bottom: 1px solid #eef0f4; font-size: 12.5px; }
   tr:last-child td { border: none; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
-  .footer { background: #05070b; color: #626b80; padding: 22px 48px; font-size: 11.5px; text-align: center; margin-top: 36px; }
+  .footer { background: #1a1a18; color: #817c6e; padding: 22px 48px; font-size: 11.5px; text-align: center; margin-top: 36px; }
 </style>
 </head>
 <body>
@@ -202,12 +202,12 @@ function generateReport(detections, stats, city) {
         ${[...detections].sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0)).slice(0, 30).map((d, i) => {
           const sc = sevColors[d.severity] || '#888'
           return `<tr>
-            <td style="color:#626b80;font-size:11px">${i + 1}</td>
+            <td style="color:#817c6e;font-size:11px">${i + 1}</td>
             <td>${CLASS_LABELS[d.damage_type] || d.damage_type}</td>
             <td><span class="badge" style="background:${sc}22;color:${sc}">S${d.severity}</span></td>
             <td style="font-family:monospace">${(d.priority_score || 0).toFixed(4)}</td>
             <td style="font-family:monospace;font-size:11px">${d.latitude?.toFixed(5)}, ${d.longitude?.toFixed(5)}</td>
-            <td style="font-size:11px;color:#626b80">${d.last_detected || '—'}</td>
+            <td style="font-size:11px;color:#817c6e">${d.last_detected || '—'}</td>
           </tr>`
         }).join('')}
       </tbody>
@@ -533,10 +533,10 @@ export default function MapPage() {
         />
 
         {finishedRect && (
-          <Rectangle bounds={finishedRect} pathOptions={{ color: '#eaff3d', fillColor: '#eaff3d', fillOpacity: 0.08, weight: 2 }} />
+          <Rectangle bounds={finishedRect} pathOptions={{ color: '#cf5a30', fillColor: '#cf5a30', fillOpacity: 0.08, weight: 2 }} />
         )}
         {!finishedRect && rectStart && rectEnd && (
-          <Rectangle bounds={[rectStart, rectEnd]} pathOptions={{ color: '#eaff3d', fillColor: '#eaff3d', fillOpacity: 0.08, weight: 2, dashArray: '4' }} />
+          <Rectangle bounds={[rectStart, rectEnd]} pathOptions={{ color: '#cf5a30', fillColor: '#cf5a30', fillOpacity: 0.08, weight: 2, dashArray: '4' }} />
         )}
 
         {rendered.map(d => {
@@ -549,7 +549,7 @@ export default function MapPage() {
               center={[d.latitude, d.longitude]}
               radius={heatmapMode ? (d.severity * 8) : (isSel ? 11 : d.severity >= 4 ? 9 : d.severity === 3 ? 7 : 5)}
               pathOptions={{
-                color: heatmapMode ? 'transparent' : (isSel ? '#eaff3d' : sevColor),
+                color: heatmapMode ? 'transparent' : (isSel ? '#cf5a30' : sevColor),
                 fillColor: heatmapMode ? sevColor : (d.is_fixed ? '#3ddc84' : color),
                 fillOpacity: heatmapMode ? 0.3 : (d.is_fixed ? 0.45 : 0.85),
                 weight: heatmapMode ? 0 : (isSel ? 3 : d.severity >= 4 ? 2 : 1),

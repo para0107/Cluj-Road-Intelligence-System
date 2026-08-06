@@ -164,20 +164,7 @@ export default function LoginPage() {
 
   return (
     <div style={styles.page} className="page-grid-bg">
-      {/* A calm particle field behind the card. Skipped on phones and when the
-          visitor asked for reduced motion, where .page-grid-bg carries the look. */}
-      {motionOk && (
-        <div style={styles.particles}>
-          <Particles
-            particleCount={90}
-            particleSpread={9}
-            speed={0.06}
-            particleColors={isDark ? ['#eaff3d', '#4cc9f0'] : ['#99a800', '#4cc9f0']}
-            alphaParticles
-            moveParticlesOnHover={false}
-          />
-        </div>
-      )}
+      {/* Monograph login: a plain concrete/charcoal ground, no particle field. */}
 
       <div style={styles.cardWrap}>
         {motionOk
