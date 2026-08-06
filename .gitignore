@@ -61,12 +61,13 @@ results.xlsx
 /docs/*.md
 *.md
 !README.md
-
+.agents
 .claude
+skills-lock.json
 
 # One-off setup, validation and dataset utilities
 /scripts/*
-
+landing-concepts
 # Legacy directories, kept so they stay ignored if they reappear
 /Documentation
 /latex
