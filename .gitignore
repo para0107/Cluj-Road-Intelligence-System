@@ -59,6 +59,9 @@ results.xlsx
 /CLAUDE.md
 /TODO_CurrentSession.md
 /docs/*.md
+*.md
+!README.md
+
 .claude
 
 # One-off setup, validation and dataset utilities
