@@ -227,8 +227,6 @@ html, body, #root {
 .glass {
   background: var(--bg-glass);
   border: 1px solid var(--border-bright);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }

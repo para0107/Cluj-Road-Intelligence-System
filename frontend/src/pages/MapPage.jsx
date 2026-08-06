@@ -29,7 +29,7 @@ import {
   updateDetectionStatus, deleteDetectionsBulk, fetchCityLandmarks,
   fetchEvidenceUrl,
 } from '../utils/api'
-import { SevBadge, ClassChip, ClassDot, KvRow, Spinner, Toggle } from '../components/ui'
+import { SevBadge, ClassChip, ClassDot, KvRow, Spinner, Toggle, EmptyState } from '../components/ui'
 import { useIsDark } from '../hooks/useTheme'
 import { useAuth } from '../context/AuthContext'
 import useCityCenter from '../hooks/useCityCenter'
@@ -125,7 +125,7 @@ function generateReport(detections, stats, city) {
     byClass[d.damage_type] = (byClass[d.damage_type] || 0) + 1
     bySev[d.severity] = (bySev[d.severity] || 0) + 1
   })
-  const sevColors = { 1: '#3ddc84', 2: '#d4a900', 3: '#e08a30', 4: '#e04848', 5: '#a21caf' }
+  const sevColors = SEVERITY_COLORS
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -164,7 +164,7 @@ function generateReport(detections, stats, city) {
 <div class="body">
   <div class="stats-grid">
     <div class="stat-card"><div class="stat-val">${stats?.total_detections ?? detections.length}</div><div class="stat-lbl">Total detections</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:#e04848">${stats?.critical_count ?? 0}</div><div class="stat-lbl">Critical (S4–S5)</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:${SEVERITY_COLORS[4]}">${stats?.critical_count ?? 0}</div><div class="stat-lbl">Critical (S4–S5)</div></div>
     <div class="stat-card"><div class="stat-val">${stats?.avg_severity?.toFixed(1) ?? '—'}</div><div class="stat-lbl">Avg severity</div></div>
     <div class="stat-card"><div class="stat-val">${stats?.last_survey_date ?? '—'}</div><div class="stat-lbl">Last survey</div></div>
   </div>
@@ -294,6 +294,7 @@ export default function MapPage() {
   const [liveJobId, setLiveJobId] = useState(() => localStorage.getItem('rids_active_job') || null)
   const [liveActive, setLiveActive] = useState(false)
   const [lastRefresh, setLastRefresh] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
   const pollRef = useRef(null)
 
   const refreshData = useCallback(async (silent = false) => {
@@ -315,6 +316,14 @@ export default function MapPage() {
       if (!silent) setLoading(false)
     }
   }, [])
+
+  // Manual refresh gets visible feedback; the silent live-poll path stays quiet.
+  const manualRefresh = useCallback(async () => {
+    setRefreshing(true)
+    await refreshData(true)
+    setLastRefresh(new Date().toISOString())
+    setRefreshing(false)
+  }, [refreshData])
 
   useEffect(() => { refreshData(false) }, [refreshData])
 
@@ -422,6 +431,14 @@ export default function MapPage() {
 
   // ── Detail-drawer actions ────────────────────────────────────────────────
   const [actionBusy, setActionBusy] = useState(false)
+  const [toasts, setToasts] = useState([])
+  const pushToast = useCallback((toast) => {
+    const id = Date.now() + Math.random()
+    setToasts(prev => [...prev, { id, ...toast }])
+    if (toast.ttl !== 0) setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), toast.ttl || 3500)
+    return id
+  }, [])
+  const dismissToast = useCallback((id) => setToasts(prev => prev.filter(t => t.id !== id)), [])
 
   const markFixed = async (d, fixed) => {
     setActionBusy(true)
@@ -429,26 +446,50 @@ export default function MapPage() {
       const updated = await updateDetectionStatus(d.id, fixed)
       setDetections(prev => prev.map(x => (x.id === d.id ? { ...x, is_fixed: updated.is_fixed } : x)))
       setSelected(prev => (prev && prev.id === d.id ? { ...prev, is_fixed: updated.is_fixed } : prev))
+      pushToast({ tone: 'success', text: updated.is_fixed ? 'Marked repaired.' : 'Reopened.' })
     } catch (e) {
-      alert(`Could not update: ${e?.response?.data?.detail || e.message}`)
+      pushToast({ tone: 'error', text: `Could not update: ${e?.response?.data?.detail || e.message}` })
     } finally {
       setActionBusy(false)
     }
   }
 
-  const deleteOne = async (d) => {
-    if (!window.confirm(`Delete this ${CLASS_LABELS[d.damage_type] || d.damage_type} record? This cannot be undone.`)) return
-    setActionBusy(true)
-    try {
-      await deleteDetectionsBulk([d.id])
-      setDetections(prev => prev.filter(x => x.id !== d.id))
-      setSelected(null)
-    } catch (e) {
-      alert(`Could not delete: ${e?.response?.data?.detail || e.message}`)
-    } finally {
-      setActionBusy(false)
-    }
+  // Optimistic soft-delete: pull it from the map now, commit to the API after a
+  // 6s undo window. Undo restores it and cancels the call; an API failure puts
+  // the record back with an error toast. No irreversible browser confirm.
+  const deleteOne = (d) => {
+    setDetections(prev => prev.filter(x => x.id !== d.id))
+    setSelected(null)
+    let undone = false
+    const timer = setTimeout(async () => {
+      if (undone) return
+      try {
+        await deleteDetectionsBulk([d.id])
+      } catch (e) {
+        setDetections(prev => (prev.some(x => x.id === d.id) ? prev : [...prev, d]))
+        pushToast({ tone: 'error', text: `Could not delete: ${e?.response?.data?.detail || e.message}` })
+      }
+    }, 6000)
+    pushToast({
+      tone: 'default', ttl: 6000,
+      text: `Deleted ${CLASS_LABELS[d.damage_type] || d.damage_type}.`,
+      actionLabel: 'Undo',
+      onAction: () => { undone = true; clearTimeout(timer); setDetections(prev => (prev.some(x => x.id === d.id) ? prev : [...prev, d])) },
+    })
   }
+
+  // ── Keyboard: Escape closes the drawer, cancels a zone draw, folds menus ──
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (selected) setSelected(null)
+      else if (drawingMode || finishedRect) {
+        setDrawingMode(false); setFinishedRect(null); setRectStart(null); setRectEnd(null)
+      } else if (landmarksOpen) setLandmarksOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, drawingMode, finishedRect, landmarksOpen])
 
   // ── Derived data ─────────────────────────────────────────────────────────
   const classCounts = useMemo(() => {
@@ -496,6 +537,32 @@ export default function MapPage() {
     return Object.entries(bins).map(([name, count]) => ({ name, count }))
   }, [finishedRect, visible])
 
+  // ── Keyboard: step markers (j / k), act on the selected one (r / Delete),
+  // toggle heat (h). Gives the map a real keyboard path without a mouse. ──
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'j' || e.key === 'k') {
+        if (rendered.length === 0) return
+        e.preventDefault()
+        const idx = selected ? rendered.findIndex(d => d.id === selected.id) : -1
+        const next = e.key === 'j'
+          ? rendered[(idx + 1 + rendered.length) % rendered.length]
+          : rendered[(idx - 1 + rendered.length) % rendered.length]
+        if (next) { setSelected(next); setFlyTarget({ lat: next.latitude, lon: next.longitude, zoom: Math.max(mapZoom, 16) }) }
+      } else if (e.key === 'h' || e.key === 'H') {
+        setHeatmapMode(v => !v)
+      } else if (selected && (e.key === 'r' || e.key === 'R')) {
+        markFixed(selected, !selected.is_fixed)
+      } else if (selected && (e.key === 'Delete' || e.key === 'Backspace')) {
+        e.preventDefault(); deleteOne(selected)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [rendered, selected, mapZoom]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const tiles = BASEMAPS[basemap]
 
   return (
@@ -540,8 +607,7 @@ export default function MapPage() {
         )}
 
         {rendered.map(d => {
-          const color = CLASS_COLORS[d.damage_type] || '#888'
-          const sevColor = SEVERITY_COLORS[d.severity] || color
+          const sevColor = SEVERITY_COLORS[d.severity] || '#888'
           const isSel = selected && selected.id === d.id
           return (
             <CircleMarker
@@ -549,10 +615,13 @@ export default function MapPage() {
               center={[d.latitude, d.longitude]}
               radius={heatmapMode ? (d.severity * 8) : (isSel ? 11 : d.severity >= 4 ? 9 : d.severity === 3 ? 7 : 5)}
               pathOptions={{
-                color: heatmapMode ? 'transparent' : (isSel ? '#cf5a30' : sevColor),
-                fillColor: heatmapMode ? sevColor : (d.is_fixed ? '#3ddc84' : color),
-                fillOpacity: heatmapMode ? 0.3 : (d.is_fixed ? 0.45 : 0.85),
-                weight: heatmapMode ? 0 : (isSel ? 3 : d.severity >= 4 ? 2 : 1),
+                // Severity leads the fill (it is what dispatches a crew); repaired
+                // reads as the earthed green. A thin ink ring gives every dot a
+                // monograph hairline; selection turns that ring brick.
+                color: heatmapMode ? 'transparent' : (isSel ? '#cf5a30' : 'rgba(26,26,24,0.55)'),
+                fillColor: heatmapMode ? sevColor : (d.is_fixed ? '#7ba05b' : sevColor),
+                fillOpacity: heatmapMode ? 0.3 : (d.is_fixed ? 0.5 : 0.9),
+                weight: heatmapMode ? 0 : (isSel ? 3 : 1.5),
                 className: heatmapMode ? 'heatmap-blob' : (d.severity === 5 ? 'marker-critical' : ''),
               }}
               eventHandlers={{ click: () => !heatmapMode && setSelected(d) }}
@@ -646,8 +715,13 @@ export default function MapPage() {
         >
           <Flame size={13} /> Heat
         </button>
-        <button className="btn btn-sm glass" onClick={() => refreshData(true)} title="Refresh map data">
-          <RefreshCw size={13} />
+        <button className="btn btn-sm glass" onClick={manualRefresh} disabled={refreshing} title="Refresh map data">
+          <RefreshCw size={13} style={refreshing ? { animation: 'spin 0.8s linear infinite' } : undefined} />
+          {lastRefresh && !isMobile && (
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+              {new Date(lastRefresh).toLocaleTimeString('en-GB')}
+            </span>
+          )}
         </button>
         <button
           className="btn btn-sm btn-accent"
@@ -755,6 +829,21 @@ export default function MapPage() {
             <div style={{ padding: '8px 14px 12px', borderTop: '1px solid var(--border)' }}>
               <Toggle checked={showFixed} onChange={setShowFixed} label="Show repaired" />
             </div>
+
+            {/* Legend — decode the marker without recall */}
+            <div style={{ padding: '2px 14px 12px', borderTop: '1px solid var(--border)' }}>
+              <span className="overline" style={{ display: 'block', marginBottom: 8 }}>Legend</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
+                {[1, 2, 3, 4, 5].map(s => (
+                  <span key={s} title={SEVERITY_LABELS[s]} style={{ width: 12, height: 12, borderRadius: '50%', background: SEVERITY_COLORS[s], border: '1px solid rgba(26,26,24,0.35)' }} />
+                ))}
+                <span>dot colour = severity</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: 'var(--text-dim)' }}>
+                <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#7ba05b', border: '1px solid rgba(26,26,24,0.35)' }} />
+                <span>green = repaired · larger = worse</span>
+              </div>
+            </div>
           </>
         )}
 
@@ -803,6 +892,8 @@ export default function MapPage() {
       {/* ── Detail drawer (right) ────────────────────────────────────────── */}
       {selected && (
         <div
+          role="dialog"
+          aria-label={`${CLASS_LABELS[selected.damage_type] || selected.damage_type} detection detail`}
           style={{
             ...styles.drawer,
             ...(isMobile ? { left: 8, right: 8, width: 'auto', top: 'auto', bottom: 8, maxHeight: '62vh' } : null),
@@ -929,6 +1020,40 @@ export default function MapPage() {
           <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 8 }}>
             Make sure the backend is running on port 8000
           </span>
+        </div>
+      )}
+
+      {/* ── Toasts (undo / success / error) ─────────────────────────────── */}
+      {toasts.length > 0 && (
+        <div style={styles.toastWrap} aria-live="polite">
+          {toasts.map(t => (
+            <div key={t.id} className="glass" style={{
+              ...styles.toast,
+              borderColor: t.tone === 'error' ? 'var(--red)' : t.tone === 'success' ? 'var(--green)' : 'var(--border-bright)',
+            }}>
+              <span style={{ color: t.tone === 'error' ? 'var(--red)' : t.tone === 'success' ? 'var(--green)' : 'var(--text)' }}>{t.text}</span>
+              {t.actionLabel && (
+                <button className="btn btn-sm btn-ghost" style={{ padding: '3px 10px' }}
+                  onClick={() => { if (t.onAction) t.onAction(); dismissToast(t.id) }}>
+                  {t.actionLabel}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Empty state (fresh city, no data) ───────────────────────────── */}
+      {!loading && !error && detections.length === 0 && (
+        <div style={styles.emptyWrap}>
+          <div className="glass" style={styles.emptyCard}>
+            <EmptyState
+              icon={MapPin}
+              title={`No detections in ${user?.city || 'your city'} yet`}
+              sub="Process a dashcam survey and the map fills with scored, ranked road damage."
+              action={<button className="btn btn-accent btn-sm" onClick={() => navigate('/ingest')}>Upload a survey</button>}
+            />
+          </div>
         </div>
       )}
     </div>
@@ -1161,5 +1286,41 @@ const styles = {
     fontSize: 12,
     fontWeight: 600,
     backdropFilter: 'blur(8px)',
+  },
+  emptyWrap: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 850,
+    pointerEvents: 'none',
+  },
+  emptyCard: {
+    pointerEvents: 'auto',
+    padding: '26px 30px',
+    maxWidth: 400,
+  },
+  toastWrap: {
+    position: 'absolute',
+    bottom: 78,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 950,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  toast: {
+    pointerEvents: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '9px 14px',
+    fontSize: 12.5,
+    minWidth: 220,
+    justifyContent: 'space-between',
   },
 }
