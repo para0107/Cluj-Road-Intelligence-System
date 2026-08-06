@@ -242,6 +242,8 @@ export default function MapPage() {
   // Phones start with the layer panel folded — the map is the point.
   const [showLegend, setShowLegend] = useState(() => !window.matchMedia('(max-width: 768px)').matches)
   const [heatmapMode, setHeatmapMode] = useState(false)
+  const [showTech, setShowTech] = useState(false)
+  const [showAllClasses, setShowAllClasses] = useState(false)
   // Basemap follows the app theme (dark → Dark tiles, light → Streets tiles)
   // until the user picks one explicitly with the switcher.
   const isDark = useIsDark()
@@ -811,10 +813,11 @@ export default function MapPage() {
               })}
             </div>
 
-            {/* Class chips */}
+            {/* Class chips — top 5 by count, the rest behind "more" */}
             <div style={styles.filterList}>
               {Object.entries(classCounts)
                 .sort((a, b) => b[1] - a[1])
+                .slice(0, showAllClasses ? undefined : 5)
                 .map(([cls, cnt]) => (
                   <ClassChip
                     key={cls}
@@ -824,6 +827,12 @@ export default function MapPage() {
                     onClick={() => toggleClass(cls)}
                   />
                 ))}
+              {Object.keys(classCounts).length > 5 && (
+                <button className="chip" onClick={() => setShowAllClasses(v => !v)}
+                  style={{ color: 'var(--accent)', borderColor: 'var(--border-accent)' }}>
+                  {showAllClasses ? 'Show less' : `+${Object.keys(classCounts).length - 5} more`}
+                </button>
+              )}
             </div>
 
             <div style={{ padding: '8px 14px 12px', borderTop: '1px solid var(--border)' }}>
@@ -972,14 +981,30 @@ export default function MapPage() {
             <KvRow k="Last detected" v={fmtDate(selected.last_detected)} />
             <KvRow k="Survey" v={selected.survey_video_file || '—'} mono />
             <KvRow k="Lighting" v={selected.lighting_condition || '—'} />
-            <KvRow k="Surface area (mask px)" v={selected.surface_area_cm2 != null ? Math.round(selected.surface_area_cm2).toLocaleString() : '—'} mono />
-            <KvRow k="Depth estimate" v={selected.depth_estimate_cm != null ? `${selected.depth_estimate_cm.toFixed(1)} (rel)` : '—'} mono />
-            <KvRow k="Depth confidence" v={selected.depth_confidence != null ? fmtPct(selected.depth_confidence) : '—'} mono />
-            <KvRow k="Edge sharpness" v={selected.edge_sharpness != null ? selected.edge_sharpness.toFixed(2) : '—'} mono />
-            <KvRow k="Interior contrast" v={selected.interior_contrast != null ? selected.interior_contrast.toFixed(2) : '—'} mono />
-            <KvRow k="Mask compactness" v={selected.mask_compactness != null ? selected.mask_compactness.toFixed(3) : '—'} mono />
-            <KvRow k="Severity confidence" v={selected.severity_confidence != null ? fmtPct(selected.severity_confidence) : '—'} mono />
             <KvRow k="ID" v={String(selected.id).slice(0, 8) + '…'} mono />
+
+            {/* The pipeline's raw signals sit below a fold — they are not an
+                operator's decision inputs, so they no longer crowd the action. */}
+            <button
+              className="btn btn-sm btn-ghost"
+              style={{ width: '100%', justifyContent: 'space-between', marginTop: 8, fontSize: 11 }}
+              onClick={() => setShowTech(v => !v)}
+              aria-expanded={showTech}
+            >
+              Technical measurements
+              <ChevronDown size={12} style={{ transform: showTech ? 'rotate(180deg)' : 'none', transition: 'transform .18s' }} />
+            </button>
+            {showTech && (
+              <div style={{ marginTop: 2 }}>
+                <KvRow k="Surface area (mask px)" v={selected.surface_area_cm2 != null ? Math.round(selected.surface_area_cm2).toLocaleString() : '—'} mono />
+                <KvRow k="Depth estimate" v={selected.depth_estimate_cm != null ? `${selected.depth_estimate_cm.toFixed(1)} (rel)` : '—'} mono />
+                <KvRow k="Depth confidence" v={selected.depth_confidence != null ? fmtPct(selected.depth_confidence) : '—'} mono />
+                <KvRow k="Edge sharpness" v={selected.edge_sharpness != null ? selected.edge_sharpness.toFixed(2) : '—'} mono />
+                <KvRow k="Interior contrast" v={selected.interior_contrast != null ? selected.interior_contrast.toFixed(2) : '—'} mono />
+                <KvRow k="Mask compactness" v={selected.mask_compactness != null ? selected.mask_compactness.toFixed(3) : '—'} mono />
+                <KvRow k="Severity confidence" v={selected.severity_confidence != null ? fmtPct(selected.severity_confidence) : '—'} mono />
+              </div>
+            )}
           </div>
 
           <div style={styles.drawerActions}>
