@@ -1,70 +1,68 @@
-.venv
-.idea/
-Documentation
-# Secrets — never commit environment files of any flavour
+# ---------------------------------------------------------------------------
+# RDDS — .gitignore
+#
+# The public repo carries the deployable system only: backend/, pipeline/,
+# frontend/, db/, ml/detection/, README.md and the compose + requirements files.
+# The research layer, the papers, the local docs and every heavy or regenerable
+# artefact stay out (see "Local-only" at the bottom).
+#
+# Patterns that name a specific top-level directory of THIS repo are anchored
+# with a leading slash, so a future frontend/src/data/ or backend/logs/ is not
+# silently swallowed. Patterns meant to match anywhere are left unanchored.
+# ---------------------------------------------------------------------------
+
+# Secrets — never commit environment files of any flavour.
+# Deliberately redundant: *.env already covers .env, but this line is the one
+# that must never be accidentally deleted.
 .env
 .env.*
 *.env
-data
-rtdetr-l.pt
-ml/weights
-frontend/node_modules
-frontend/dist
-# 1. Ignore everything in runs
-runs/detect/chain_fine_tune
-runs/detect/nrdd_2024
-runs/detect/rtdetr_road
-scripts/*
-# 2. Un-ignore the specific parent folder `detect` so git can look inside
-!runs/detect/
-latex/*
-# 3. Ignore everything inside `detect` (this prevents other folders like `train` from being tracked)
-runs/detect/*
 
-# ---------------------------------------------------------------------------
-# runs/ — keep the small research artefacts, ignore everything heavy
-#
-# The research output is a few hundred KB of JSON and CSV: run.json (git SHA,
-# seed, dataset hash), config.json, metrics.csv, per_class_ap.json and
-# test_metrics.json. Those are irreplaceable — a lost metrics.csv cannot be
-# reconstructed. Model weights CAN be retrained from the recorded seed and
-# config, which is the whole point of the reproducibility harness, so they stay
-# out of git. (best.pt is 66 MB; GitHub hard-rejects anything over 100 MB.)
-# ---------------------------------------------------------------------------
-runs/*
-!runs/research/
-!runs/weekend*.log
-
-# Ultralytics writes its own run trees (weights + plots) under these
-runs/research/**/ultralytics/
-runs/research/_checkpoints/
-runs/research/_calibration/
-
-# Never commit checkpoints, wherever they land
-*.pt
-*.pth
-
-# 4. Un-ignore the specific folders you want inside `detect`
-!runs/detect/val/
-!runs/detect/val2/
-logs
-yolov8n.pt
-runs.zip
-results.xlsx
+# Local tooling / IDE
+/.venv
+.idea/
 
 # Python bytecode
 *.pyc
 __pycache__/
 
-# Local-only documentation: the public repo keeps README.md only
-CLAUDE.md
-TODO_CurrentSession.md
-docs/*.md
-CLAUDE.md
-TODO_CurrentSession.md
-paper
-ml/aws
-ml/research
-ml/depth
-ml/evaluation
-runs
+# Node
+/frontend/node_modules
+/frontend/dist
+
+# Model checkpoints, wherever they land.
+# best.pt is 66 MB and GitHub hard-rejects anything over 100 MB. Weights are
+# reproducible from the recorded seed + config, which is what ml/repro.py is for.
+*.pt
+*.pth
+/ml/weights
+
+# Heavy or regenerable output
+/data
+/logs
+/runs
+runs.zip
+results.xlsx
+
+# ---------------------------------------------------------------------------
+# Local-only — present on disk, deliberately absent from the public repo
+# ---------------------------------------------------------------------------
+
+# Research layer (tooling, experiment artefacts and write-ups)
+/ml/aws
+/ml/research
+/ml/depth
+/ml/evaluation
+/paper
+
+# Internal documentation: the public repo keeps README.md alone
+/CLAUDE.md
+/TODO_CurrentSession.md
+/docs/*.md
+
+# One-off setup, validation and dataset utilities
+/scripts/*
+
+# Legacy directories, kept so they stay ignored if they reappear
+/Documentation
+/latex
