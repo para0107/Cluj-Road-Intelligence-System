@@ -1,15 +1,15 @@
 // ── Damage class colours ──────────────────────────────────────────────────
 export const CLASS_COLORS = {
-  longitudinal_crack:        '#6ea8ff',   // blue
-  transverse_crack:          '#f472b6',   // pink
-  alligator_crack:           '#ff9f43',   // orange
-  repaired_crack:            '#3ddc84',   // green
-  pothole:                   '#ff5d5d',   // red
-  pedestrian_crossing_blur:  '#b388ff',   // purple
-  lane_line_blur:            '#ffd60a',   // amber
-  manhole_cover:             '#2dd4bf',   // teal
-  patchy_road:               '#e879f9',   // fuchsia
-  rutting:                   '#94a3b8',   // slate
+  longitudinal_crack:        '#6b93b8',   // steel
+  transverse_crack:          '#b07a9a',   // mauve
+  alligator_crack:           '#d98a3f',   // earth orange
+  repaired_crack:            '#7ba05b',   // olive
+  pothole:                   '#c0492a',   // brick red
+  pedestrian_crossing_blur:  '#9d7bb0',   // violet
+  lane_line_blur:            '#caa23f',   // ochre
+  manhole_cover:             '#4f9a92',   // teal
+  patchy_road:               '#a878a0',   // plum
+  rutting:                   '#8a8578',   // warm slate
 }
 
 export const CLASS_LABELS = {
@@ -42,11 +42,11 @@ export const ALL_CLASSES = Object.keys(CLASS_LABELS)
 
 // ── Severity ──────────────────────────────────────────────────────────────
 export const SEVERITY_COLORS = {
-  1: '#3ddc84',   // S1 — green
-  2: '#ffd60a',   // S2 — amber
-  3: '#ff9f43',   // S3 — orange
-  4: '#ff5d5d',   // S4 — red
-  5: '#c026d3',   // S5 — magenta / critical
+  1: '#7ba05b',   // S1 · olive · monitor
+  2: '#d0a83f',   // S2 · amber · schedule
+  3: '#d67f34',   // S3 · orange · priority
+  4: '#cf4f2c',   // S4 · brick-red · urgent
+  5: '#b0221a',   // S5 · deep red · emergency
 }
 
 export const SEVERITY_LABELS = {
@@ -159,12 +159,12 @@ export const WORK_ORDER_LABELS = {
 }
 
 export const WORK_ORDER_COLORS = {
-  open:        '#6ea8ff',
-  scheduled:   '#ffd60a',
-  in_progress: '#ff9f43',
-  repaired:    '#3ddc84',
-  verified:    '#2dd4bf',
-  cancelled:   '#94a3b8',
+  open:        '#6b93b8',
+  scheduled:   '#d0a83f',
+  in_progress: '#d67f34',
+  repaired:    '#7ba05b',
+  verified:    '#4f9a92',
+  cancelled:   '#8a8578',
 }
 
 // The board shows the live flow; cancelled orders are reachable by filter.
@@ -194,11 +194,11 @@ export const POINTS_REASONS = {
 
 // ── Road Quality Index bands (mirrors backend/routes/quality.py) ─────────
 export const RQI_BANDS = {
-  A: { label: 'Very good', color: '#3ddc84', min: 85 },
-  B: { label: 'Good',      color: '#a3e635', min: 70 },
-  C: { label: 'Fair',      color: '#ffd60a', min: 50 },
-  D: { label: 'Poor',      color: '#ff9f43', min: 30 },
-  E: { label: 'Very poor', color: '#ff5d5d', min: 0 },
+  A: { label: 'Very good', color: '#7ba05b', min: 85 },
+  B: { label: 'Good',      color: '#a9b45a', min: 70 },
+  C: { label: 'Fair',      color: '#d0a83f', min: 50 },
+  D: { label: 'Poor',      color: '#d67f34', min: 30 },
+  E: { label: 'Very poor', color: '#c0492a', min: 0 },
 }
 
 // ── Live event validation states ─────────────────────────────────────────
@@ -209,7 +209,7 @@ export const LIVE_STATUS_LABELS = {
 }
 
 export const LIVE_STATUS_COLORS = {
-  unverified: '#94a3b8',
-  confirmed:  '#ffd60a',
-  verified:   '#3ddc84',
+  unverified: '#8a8578',
+  confirmed:  '#d0a83f',
+  verified:   '#7ba05b',
 }

@@ -44,11 +44,11 @@
   --pink:   #c47a95;
 
   /* Severity S1→S5 — kept in step with constants.js until the severity pass */
-  --s1: #3ddc84;
-  --s2: #ffd60a;
-  --s3: #ff9f43;
-  --s4: #ff5d5d;
-  --s5: #c026d3;
+  --s1: #7ba05b;
+  --s2: #d0a83f;
+  --s3: #d67f34;
+  --s4: #cf4f2c;
+  --s5: #b0221a;
 
   /* Type — Chivo (grotesque) + Spline Sans Mono (figures & data) */
   --font-display: 'Chivo', system-ui, sans-serif;
