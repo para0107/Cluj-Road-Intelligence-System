@@ -129,7 +129,7 @@ function StageRow({ name, stageData, index, totalCompleted }) {
     <div style={{
       ...styles.stageRow,
       opacity: state === 'pending' ? 0.45 : 1,
-      borderLeft: `3px solid ${stateColor}`,
+      border: '1px solid var(--border)',
       background: state === 'running' ? 'var(--accent-dim)' : 'var(--bg-card2)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
@@ -229,11 +229,11 @@ function PipelineTracker({ job }) {
       {/* Progress bar */}
       <div style={{ height: 3, background: 'var(--border)', margin: '0 18px 14px', borderRadius: 2 }}>
         <div style={{
-          height: '100%',
-          width: `${Math.round((completedCount / STAGE_ORDER.length) * 100)}%`,
+          height: '100%', width: '100%', transformOrigin: 'left',
+          transform: `scaleX(${(completedCount / STAGE_ORDER.length) || 0})`,
           background: job.status === 'failed' ? 'var(--red)' : 'var(--accent)',
           borderRadius: 2,
-          transition: 'width 0.6s ease',
+          transition: 'transform 0.6s ease',
         }} />
       </div>
 
@@ -445,9 +445,10 @@ export default function IngestionPage() {
                   </div>
                   <div style={{ height: 4, background: 'var(--border)', borderRadius: 2 }}>
                     <div style={{
-                      height: '100%', width: `${uploadPct}%`,
+                      height: '100%', width: '100%',
+                      transformOrigin: 'left', transform: `scaleX(${(uploadPct || 0) / 100})`,
                       background: 'var(--accent)', borderRadius: 2,
-                      transition: 'width 0.2s ease',
+                      transition: 'transform 0.2s ease',
                     }} />
                   </div>
                 </div>

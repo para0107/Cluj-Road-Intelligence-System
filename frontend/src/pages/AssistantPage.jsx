@@ -225,7 +225,7 @@ export default function AssistantPage() {
             </span>
           </div>
           <div style={styles.progressTrack}>
-            <div style={{ ...styles.progressFill, width: `${Math.round((progress.pct || 0) * 100)}%` }} />
+            <div style={{ ...styles.progressFill, transform: `scaleX(${progress.pct || 0})` }} />
           </div>
           <div style={styles.loadingNote}>
             This happens once. The model is saved in your browser, so next time it starts straight away.
@@ -468,8 +468,9 @@ const styles = {
     border: '1px solid var(--border)', overflow: 'hidden',
   },
   progressFill: {
-    height: '100%', background: 'var(--grad-accent)',
-    transition: 'width 0.3s ease',
+    height: '100%', width: '100%', transformOrigin: 'left',
+    background: 'var(--grad-accent)',
+    transition: 'transform 0.3s ease',
   },
   loadingNote: { fontSize: 11.5, color: 'var(--text-muted)', marginTop: 8 },
 

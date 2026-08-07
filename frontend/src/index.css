@@ -626,17 +626,20 @@ html, body, #root {
   }
 
   /* Feed becomes a bottom sheet: a slim peek bar that expands on tap */
+  /* Bottom sheet: fixed 58vh height, revealed by translating on the GPU —
+     no height animation, no layout thrash. Peek shows the top 46px. */
   .live-feed {
     top: auto; left: 0; right: 0; bottom: 0;
-    width: auto;
+    width: auto; height: 58vh;
     border-radius: 16px 16px 0 0;
     border-bottom: none;
     z-index: 880;
-    transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     padding-bottom: env(safe-area-inset-bottom);
+    will-change: transform;
   }
-  .live-feed-peek { height: 46px; }
-  .live-feed-open { height: 58vh; }
+  .live-feed-peek { transform: translateY(calc(58vh - 46px)); }
+  .live-feed-open { transform: translateY(0); }
 
   .live-toasts {
     top: 112px;
