@@ -17,7 +17,7 @@ import {
   Info, Sun, Moon, Activity, Radio, LogOut, Shield, MapPin, ChevronDown,
   Trash2, Menu, X, Award, Inbox, Wrench, Gauge, Sparkles, Compass, HelpCircle,
 } from 'lucide-react'
-import { fetchHealth, deleteMyAccount } from '../utils/api'
+import { deleteMyAccount } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import NotificationsBell from './NotificationsBell'
@@ -77,7 +77,7 @@ function LiveDot() {
   return (
     <span style={{
       width: 6, height: 6, borderRadius: '50%',
-      background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+      background: 'var(--red)',
       animation: 'pulse 1.6s ease-in-out infinite',
     }} />
   )
@@ -141,8 +141,6 @@ export default function Navbar() {
   const location = useLocation()
   const isMobile = useIsMobile()
   const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
-  const [now, setNow] = useState(new Date())
-  const [health, setHealth] = useState(null)          // null | 'ok' | 'down'
   const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)       // mobile hamburger panel
@@ -166,26 +164,14 @@ export default function Navbar() {
     localStorage.setItem('rids_theme', dark ? 'dark' : 'light')
   }, [dark])
 
-  // Clock
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
-  // Health probe + active job flag (cheap, 30 s cadence)
+  // Active-job flag (cheap, 30 s cadence)
   useEffect(() => {
     let alive = true
-    const probe = async () => {
-      const h = await fetchHealth()
-      if (alive) setHealth(h.status === 'ok' ? 'ok' : 'down')
-      if (alive) setJobActive(Boolean(localStorage.getItem('rids_active_job')))
-    }
+    const probe = () => { if (alive) setJobActive(Boolean(localStorage.getItem('rids_active_job'))) }
     probe()
     const t = setInterval(probe, 30_000)
     return () => { alive = false; clearInterval(t) }
   }, [])
-
-  const healthColor = health === 'ok' ? 'var(--green)' : health === 'down' ? 'var(--red)' : 'var(--text-muted)'
 
   // Self-service account deletion (any role). Local accounts re-type their
   // password; Google accounts just confirm. The backend refuses to delete
@@ -275,24 +261,7 @@ export default function Navbar() {
           </span>
         )}
 
-        {!isMobile && (
-          <span style={styles.clock} className="mono" title="Local time">
-            {now.toLocaleTimeString('en-GB')}
-          </span>
-        )}
-
         {isAuthed && <NotificationsBell />}
-
-        <span style={styles.health} title={`API ${health === 'ok' ? 'online' : health === 'down' ? 'offline' : 'checking…'}`}>
-          <span style={{
-            width: 7, height: 7, borderRadius: '50%', background: healthColor,
-            boxShadow: `0 0 8px ${healthColor}`,
-            animation: health === 'ok' ? 'none' : 'pulse 1.4s ease-in-out infinite',
-          }} />
-          {!isMobile && (
-            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>API</span>
-          )}
-        </span>
 
         <button
           className="btn btn-ghost btn-sm"

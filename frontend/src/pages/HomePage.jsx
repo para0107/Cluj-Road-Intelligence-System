@@ -188,7 +188,7 @@ export default function HomePage() {
                 Live mode
                 <span style={{
                   display: 'inline-block', width: 6, height: 6, borderRadius: '50%', marginLeft: 7,
-                  background: 'var(--red)', boxShadow: '0 0 6px var(--red)',
+                  background: 'var(--red)',
                   animation: 'pulse 1.6s ease-in-out infinite',
                 }} />
               </span>

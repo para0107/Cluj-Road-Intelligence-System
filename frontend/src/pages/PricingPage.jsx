@@ -54,7 +54,7 @@ const PAGE_CSS = `
 }
 .pricing-card.pricing-card-featured.card-spotlight {
   border-color: var(--border-accent);
-  box-shadow: var(--shadow), 0 0 40px rgba(234, 255, 61, 0.06);
+  box-shadow: var(--shadow);
 }
 .pricing-card.pricing-card-featured.card-spotlight:hover {
   border-color: var(--accent);

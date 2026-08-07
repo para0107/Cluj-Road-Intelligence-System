@@ -191,7 +191,7 @@ function PipelineTracker({ job }) {
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
               background: statusColor,
-              boxShadow: job.status === 'running' ? `0 0 8px ${statusColor}` : 'none',
+              boxShadow: 'none',
               animation: (job.status === 'running' || job.status === 'initialising') ? 'pulse 1.5s ease-in-out infinite' : 'none',
               flexShrink: 0,
             }} />
