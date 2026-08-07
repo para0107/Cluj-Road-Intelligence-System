@@ -13,9 +13,7 @@ import { useAuth } from '../context/AuthContext'
 import { fetchAuthConfig } from '../utils/api'
 import CaptchaField from '../components/CaptchaField'
 import FadeContent from '../reactbits/FadeContent/FadeContent'
-import Particles from '../reactbits/Particles/Particles'
 import useMotionOk from '../hooks/useMotionOk'
-import { useIsDark } from '../hooks/useTheme'
 
 export default function LoginPage() {
   const { login, loginWithGoogle, isAuthed } = useAuth()
@@ -33,7 +31,6 @@ export default function LoginPage() {
   const googleBtnRef = useRef(null)
 
   const motionOk = useMotionOk()
-  const isDark = useIsDark()
 
   useEffect(() => {
     if (isAuthed) navigate(from, { replace: true })
@@ -67,8 +64,10 @@ export default function LoginPage() {
         client_id: googleClientId,
         callback: onGoogleCredential,
       })
+      // Fit the button to the card so it never overflows a narrow phone.
+      const w = Math.min(Math.max(googleBtnRef.current.clientWidth || 316, 200), 380)
       window.google.accounts.id.renderButton(googleBtnRef.current, {
-        theme: 'outline', size: 'large', width: 316, text: 'signin_with',
+        theme: 'outline', size: 'large', width: w, text: 'signin_with',
       })
     }
     if (window.google?.accounts?.id) { render(); return }
@@ -102,13 +101,13 @@ export default function LoginPage() {
   const card = (
     <div className="card" style={styles.card}>
       <div className="overline" style={{ color: 'var(--accent)', marginBottom: 8 }}>
-        CLUJ-NAPOCA · ROAD INTELLIGENCE
+        ROAD DEGRADATION DETECTION SYSTEM
       </div>
       <h1 className="display" style={styles.title}>Sign in</h1>
       <div className="road-divider" style={{ width: 120, margin: '14px 0 22px' }} />
 
         {error && (
-          <div style={styles.error}>
+          <div style={styles.error} role="alert">
             <AlertTriangle size={13} style={{ flexShrink: 0 }} />
             {error}
           </div>
@@ -133,7 +132,7 @@ export default function LoginPage() {
           </label>
           <CaptchaField enabled={captchaEnabled} onToken={setCaptchaToken} />
 
-          <button className="btn btn-accent" style={{ padding: '11px 0', marginTop: 6 }} disabled={busy}>
+          <button className="btn btn-accent" style={{ padding: '11px 0', marginTop: 6 }} disabled={busy} aria-busy={busy}>
             <LogIn size={15} /> {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
@@ -145,7 +144,7 @@ export default function LoginPage() {
               <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>or</span>
               <span style={styles.dividerLine} />
             </div>
-            <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center' }} />
+            <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center', width: '100%' }} />
           </>
         )}
 
@@ -184,12 +183,6 @@ const styles = {
     paddingTop: 'var(--nav-h)',
     position: 'relative',
   },
-  particles: {
-    position: 'fixed',
-    inset: 0,
-    zIndex: 0,
-    pointerEvents: 'none',
-  },
   cardWrap: { position: 'relative', zIndex: 1, width: '100%', display: 'flex', justifyContent: 'center' },
   card: { width: '100%', maxWidth: 380, padding: '30px 32px', margin: '40px 16px' },
   title: { fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' },
@@ -197,8 +190,9 @@ const styles = {
   input: { width: '100%' },
   error: {
     display: 'flex', alignItems: 'center', gap: 8,
-    padding: '9px 12px', marginBottom: 14, borderRadius: 8,
-    background: 'rgba(255,93,93,0.1)', border: '1px solid rgba(255,93,93,0.35)',
+    padding: '9px 12px', marginBottom: 14, borderRadius: 'var(--radius)',
+    background: 'color-mix(in srgb, var(--red) 12%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--red) 38%, transparent)',
     color: 'var(--red)', fontSize: 12,
   },
   divider: {
