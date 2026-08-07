@@ -68,6 +68,7 @@ skills-lock.json
 # One-off setup, validation and dataset utilities
 /scripts/*
 landing-concepts
+landing-redraw
 # Legacy directories, kept so they stay ignored if they reappear
 /Documentation
 /latex
