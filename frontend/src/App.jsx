@@ -28,6 +28,7 @@ const QualityPage    = lazy(() => import('./pages/QualityPage'))
 const AssistantPage  = lazy(() => import('./pages/AssistantPage'))
 const PricingPage    = lazy(() => import('./pages/PricingPage'))
 const DevelopersPage = lazy(() => import('./pages/DevelopersPage'))
+const LandingPage    = lazy(() => import('./pages/LandingPage'))
 
 /**
  * Everything except the public pages requires a session. Accounts without a
@@ -87,6 +88,18 @@ const operatorRoute = (element) => (
   <RequireAuth><RequireOperator>{element}</RequireOperator></RequireAuth>
 )
 
+/**
+ * The front door at "/". Logged-out visitors get the public marketing landing;
+ * signed-in users get their command dashboard (behind the usual city gate and
+ * onboarding tour that RequireAuth adds).
+ */
+function Root() {
+  const { isAuthed, booting } = useAuth()
+  if (booting) return <RouteFallback />
+  if (!isAuthed) return <LandingPage />
+  return <RequireAuth><HomePage /></RequireAuth>
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -99,8 +112,9 @@ export default function App() {
           <Route path="/pricing"    element={<PricingPage />} />
           <Route path="/developers" element={<DevelopersPage />} />
 
-          {/* Any signed-in role */}
-          <Route path="/"          element={<RequireAuth><HomePage /></RequireAuth>} />
+          {/* Public front door: marketing landing when logged out, dashboard when signed in */}
+          <Route path="/"          element={<Root />} />
+
           <Route path="/live"      element={<RequireAuth><LivePage /></RequireAuth>} />
           <Route path="/impact"    element={<RequireAuth><ImpactPage /></RequireAuth>} />
           <Route path="/assistant" element={<RequireAuth><AssistantPage /></RequireAuth>} />

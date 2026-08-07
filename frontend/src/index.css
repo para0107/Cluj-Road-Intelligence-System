@@ -100,6 +100,11 @@
   --grad-accent:   var(--accent);
 }
 
+/* ─── Landing: navbar rides transparently over the opening photograph ───── */
+.nav-transparent .nav-link { color: rgba(255, 255, 255, 0.86); }
+.nav-transparent .nav-link:hover,
+.nav-transparent .nav-link.active { color: #fff; }
+
 /* ─── Reset ─────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 

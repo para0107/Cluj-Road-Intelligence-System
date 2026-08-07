@@ -23,6 +23,7 @@ from backend.middleware import SecurityHeadersMiddleware
 from backend.routes import (
     detections, stats, heatmap, priority, export, ingest, live, auth, cities,
     engagement, workorders, analytics, media, quality, public_api, contact,
+    public_landing,
 )
 from backend.live_manager import manager as live_ws_manager
 import backend.models_live        # noqa: F401 — register live_events/live_reports on Base.metadata
@@ -88,6 +89,7 @@ app.include_router(media.router,      prefix="/api", tags=["Media"])
 app.include_router(quality.router,    prefix="/api", tags=["Quality"])
 app.include_router(public_api.router, prefix="/api", tags=["Public API"])
 app.include_router(contact.router,    prefix="/api", tags=["Contact"])
+app.include_router(public_landing.router, prefix="/api", tags=["Public landing"])
 
 # ─────────────────────────────────────────────
 # Startup event

@@ -144,6 +144,7 @@ export default function Navbar() {
   const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)       // mobile hamburger panel
+  const [heroTop, setHeroTop] = useState(true)        // sitting over the landing hero
   const menuRef = useRef(null)
 
   // Close the user menu on outside click
@@ -172,6 +173,18 @@ export default function Navbar() {
     const t = setInterval(probe, 30_000)
     return () => { alive = false; clearInterval(t) }
   }, [])
+
+  // On the public landing the navbar rides transparently over the opening
+  // photograph, then solidifies once the visitor scrolls past the hero.
+  const onLanding = !isAuthed && location.pathname === '/'
+  useEffect(() => {
+    if (!onLanding) { setHeroTop(false); return }
+    const onScroll = () => setHeroTop(window.scrollY < 40)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [onLanding])
+  const transparent = onLanding && heroTop
 
   // Self-service account deletion (any role). Local accounts re-type their
   // password; Google accounts just confirm. The backend refuses to delete
@@ -202,14 +215,19 @@ export default function Navbar() {
   ]
 
   return (
-    <nav style={styles.nav}>
-      <div className="navbar-hairline" />
+    <nav
+      className={transparent ? 'nav-transparent' : undefined}
+      style={transparent
+        ? { ...styles.nav, background: 'transparent', backdropFilter: 'none', WebkitBackdropFilter: 'none', borderBottom: '1px solid transparent' }
+        : styles.nav}
+    >
+      <div className="navbar-hairline" style={transparent ? { opacity: 0 } : undefined} />
       {/* Brand */}
       <NavLink to="/" style={styles.brand}>
         <LogoMark />
         <div style={{ lineHeight: 1.15 }}>
-          <div className="display" style={styles.brandName}>RDDS</div>
-          {!isMobile && <div style={styles.brandSub}>ROAD INTELLIGENCE NETWORK</div>}
+          <div className="display" style={{ ...styles.brandName, ...(transparent ? { color: '#fff' } : {}) }}>RDDS</div>
+          {!isMobile && <div style={{ ...styles.brandSub, ...(transparent ? { color: 'rgba(255,255,255,0.72)' } : {}) }}>ROAD INTELLIGENCE NETWORK</div>}
         </div>
       </NavLink>
 
@@ -265,7 +283,7 @@ export default function Navbar() {
 
         <button
           className="btn btn-ghost btn-sm"
-          style={{ width: 32, height: 32, padding: 0 }}
+          style={{ width: 32, height: 32, padding: 0, ...(transparent ? { color: '#fff', borderColor: 'rgba(255,255,255,0.35)' } : {}) }}
           onClick={() => setDark(v => !v)}
           title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
         >
@@ -340,7 +358,7 @@ export default function Navbar() {
         {isMobile && (
           <button
             className="btn btn-ghost btn-sm"
-            style={{ width: 36, height: 36, padding: 0 }}
+            style={{ width: 36, height: 36, padding: 0, ...(transparent ? { color: '#fff', borderColor: 'rgba(255,255,255,0.35)' } : {}) }}
             onClick={() => setNavOpen(v => !v)}
             aria-label="Menu"
           >

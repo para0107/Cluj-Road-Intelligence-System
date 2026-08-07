@@ -237,6 +237,29 @@ export const revokeApiKey = (id) =>
 export const contactSales = (payload) =>
   api.post('/contact/sales', payload).then(r => r.data)
 
+/**
+ * Request a municipal pilot from the public landing page. Reuses the defended
+ * /contact/sales capture (per-IP budget, honeypot, optional ALTCHA); the city
+ * is carried in `organization` and a pilot note is prefixed to the message so
+ * an admin can tell it apart from a generic sales enquiry.
+ */
+export const requestPilot = ({ name, email, city = '', message = '', altcha, website }) =>
+  api.post('/contact/sales', {
+    name,
+    email,
+    organization: city,
+    message: `[Pilot request] ${message}`.trim(),
+    altcha,
+    website,
+  }).then(r => r.data)
+
+// ── Public landing (no auth) ───────────────────────────────────────────────
+// One payload for the marketing front door: live city figures, a short
+// recent-activity feed, and a derived road-quality grade. Degrades to null.
+
+export const fetchLanding = () =>
+  api.get('/public/landing').then(r => r.data)
+
 // ── Evidence media ─────────────────────────────────────────────────────────
 
 /**
