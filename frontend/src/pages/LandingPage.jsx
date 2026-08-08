@@ -170,6 +170,19 @@ export default function LandingPage() {
         </div>
       </div></section>
 
+      {/* ── safety, for everyone ───────────────────────────────────────── */}
+      <section className="l-section" id="safety"><div className="l-wrap">
+        <div className="l-lede l-rv">
+          <h2>Safety first. A safer city <span className="l-em">for everyone in it.</span></h2>
+          <p className="l-say">Every fault we find and fix is one less way for someone to get hurt on the way home.</p>
+        </div>
+        <div className="l-safe3">
+          <div className="l-safe l-rv"><div className="l-safe-k">For drivers</div><p>No blown tyre, no sudden swerve into the next lane. The worst potholes are found and ranked before they find you.</p></div>
+          <div className="l-safe l-rv l-d1"><div className="l-safe-k">For cyclists and pedestrians</div><p>The edge breaks and sunken drains that put a cyclist on the ground are exactly the faults RDDS is built to catch first.</p></div>
+          <div className="l-safe l-rv l-d2"><div className="l-safe-k">For the whole city</div><p>Crews spend the budget on the roads that actually endanger people, and the repair is proven to hold. Safety you can audit.</p></div>
+        </div>
+      </div></section>
+
       {/* ── the loop ───────────────────────────────────────────────────── */}
       <section className="l-section" id="loop"><div className="l-wrap">
         <div className="l-lede l-rv">
@@ -477,4 +490,10 @@ const CSS = `
 .rdds-landing .l-footer .l-wrap{display:flex;flex-wrap:wrap;gap:12px 28px;justify-content:space-between;font-size:13px;color:var(--ink-3)}
 .rdds-landing .l-links{display:flex;gap:18px}
 .rdds-landing .l-links a:hover{color:var(--brick-deep)}
+
+/* safety-first trio */
+.rdds-landing .l-safe3{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s4) var(--s5);border-top:2px solid var(--ink);padding-top:var(--s4)}
+.rdds-landing .l-safe .l-safe-k{font-family:"Bricolage Grotesque","Chivo",sans-serif;font-weight:700;font-size:1.2rem;letter-spacing:-.02em;color:var(--brick-deep);margin-bottom:8px}
+.rdds-landing .l-safe p{font-size:14.5px;color:var(--ink-2);max-width:40ch;line-height:1.6}
+@media(max-width:820px){.rdds-landing .l-safe3{grid-template-columns:1fr;gap:var(--s3)}}
 `

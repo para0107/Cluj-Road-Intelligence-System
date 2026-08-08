@@ -8,7 +8,7 @@
  * Full admin is granted only by an existing admin (Admin page).
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   UserPlus, AlertTriangle, User as UserIcon, Landmark,
@@ -19,7 +19,7 @@ import { authVerifyEmail, authResendCode, fetchAuthConfig } from '../utils/api'
 import CaptchaField, { HoneypotField } from '../components/CaptchaField'
 
 export default function RegisterPage() {
-  const { register, adoptSession } = useAuth()
+  const { register, adoptSession, loginWithGoogle } = useAuth()
   const navigate = useNavigate()
 
   const [form, setForm] = useState({
@@ -37,12 +37,46 @@ export default function RegisterPage() {
   const [captchaEnabled, setCaptchaEnabled] = useState(false)
   const [captchaToken, setCaptchaToken] = useState(null)
   const [honeypot, setHoneypot] = useState('')
+  const [googleClientId, setGoogleClientId] = useState('')
+  const googleBtnRef = useRef(null)
 
   useEffect(() => {
     fetchAuthConfig()
-      .then(c => setCaptchaEnabled(Boolean(c.captcha_enabled)))
+      .then(c => {
+        setCaptchaEnabled(Boolean(c.captcha_enabled))
+        setGoogleClientId(c.google_enabled ? (c.google_client_id || '') : '')
+      })
       .catch(() => {})
   }, [])
+
+  // Sign up with Google (free OAuth; the account is created on first login).
+  const onGoogleCredential = useCallback(async (resp) => {
+    setError(null)
+    try {
+      await loginWithGoogle(resp.credential)
+      navigate('/', { replace: true })
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : (detail?.[0]?.msg || err.message || 'Google sign-in failed'))
+    }
+  }, [loginWithGoogle, navigate])
+
+  useEffect(() => {
+    if (!googleClientId || !googleBtnRef.current) return
+    const render = () => {
+      if (!window.google?.accounts?.id || !googleBtnRef.current) return
+      window.google.accounts.id.initialize({ client_id: googleClientId, callback: onGoogleCredential })
+      const w = Math.min(Math.max(googleBtnRef.current.clientWidth || 316, 200), 380)
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: 'outline', size: 'large', width: w, text: 'signup_with',
+      })
+    }
+    if (window.google?.accounts?.id) { render(); return }
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true; script.defer = true; script.onload = render
+    document.head.appendChild(script)
+  }, [googleClientId, onGoogleCredential])
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
 
@@ -262,6 +296,17 @@ export default function RegisterPage() {
           </button>
         </form>
 
+        {googleClientId && (
+          <>
+            <div style={styles.divider}>
+              <span style={styles.dividerLine} />
+              <span style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>or</span>
+              <span style={styles.dividerLine} />
+            </div>
+            <div ref={googleBtnRef} style={{ display: 'flex', justifyContent: 'center', width: '100%' }} />
+          </>
+        )}
+
         <div style={styles.footer}>
           <span style={{ color: 'var(--text-muted)' }}>Already registered?</span>{' '}
           <Link to="/login" style={{ color: 'var(--accent)', fontWeight: 600 }}>Sign in</Link>
@@ -317,5 +362,7 @@ const styles = {
     background: 'none', border: 'none', padding: 0, cursor: 'pointer',
     color: 'var(--accent)', fontWeight: 600, fontSize: 12.5,
   },
+  divider: { display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0 12px' },
+  dividerLine: { flex: 1, height: 1, background: 'var(--border)' },
   footer: { marginTop: 18, fontSize: 12.5, textAlign: 'center' },
 }

@@ -211,6 +211,7 @@ export default function LivePage() {
   const [devicesOpen, setDevicesOpen] = useState(false)
   const [devices, setDevices] = useState(null)
   const [pairInfo, setPairInfo] = useState(null)          // pending device w/ code
+  const [showAdvanced, setShowAdvanced] = useState(false) // dashcam pairing stays hidden until asked for
   const [driveOn, setDriveOn] = useState(false)
   const [driveStats, setDriveStats] = useState({ jolt: 0, speed: null, hasFix: false, sent: 0 })
   const driveStopRef = useRef(null)
@@ -624,7 +625,7 @@ export default function LivePage() {
 
           <button className="btn btn-sm glass" onClick={toggleDevicesPanel}
                   style={{ gap: 6, borderColor: devicesOpen ? 'var(--border-accent)' : undefined }}>
-            <Smartphone size={12} /> Devices
+            <Gauge size={12} /> Drive mode
             {driveOn && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)' }} />}
           </button>
         </div>
@@ -679,7 +680,7 @@ export default function LivePage() {
       {devicesOpen && (
         <div className="glass anim-fade-up live-devices">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span className="overline">Devices</span>
+            <span className="overline">Drive mode</span>
             <button className="btn btn-sm btn-ghost" style={{ width: 28, height: 28, padding: 0 }}
                     onClick={() => setDevicesOpen(false)}>
               <X size={13} />
@@ -704,10 +705,9 @@ export default function LivePage() {
           </div>
 
           <p style={styles.devicesIntro}>
-            A device is anything that sends road reports from your account: this
-            phone, another browser, or a dashcam computer. When several different
-            devices confirm the same spot, the hazard is promoted from Unverified
-            to Confirmed to Verified.
+            Mount your phone, tap start, and drive normally. RDDS feels each pothole
+            and reports it for you, so the whole city drives a little safer. No setup,
+            no account juggling, no cost.
           </p>
 
           {/* ── This phone ── */}
@@ -737,6 +737,14 @@ export default function LivePage() {
             </div>
           </div>
 
+          {!showAdvanced && (
+            <button className="btn btn-sm btn-ghost" style={{ width: '100%', gap: 8, marginTop: 6 }}
+                    onClick={() => setShowAdvanced(true)}>
+              <Link2 size={12} /> Connect a dashcam or car computer
+            </button>
+          )}
+
+          {showAdvanced && (<>
           {/* ── Dashcam / car computer (advanced) ── */}
           <div style={styles.devicesSection}>
             <div className="overline" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -823,6 +831,7 @@ export default function LivePage() {
               </div>
             )}
           </div>
+          </>)}
         </div>
       )}
 
