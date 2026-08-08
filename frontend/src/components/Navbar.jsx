@@ -140,7 +140,7 @@ export default function Navbar() {
   const navigate = useNavigate()
   const location = useLocation()
   const isMobile = useIsMobile()
-  const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') !== 'light')
+  const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') === 'dark')
   const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)       // mobile hamburger panel

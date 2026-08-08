@@ -347,9 +347,9 @@ const CSS = `
 .rdds-landing .l-btn-full{width:100%;justify-content:center;margin-top:6px}
 
 /* hero */
-.rdds-landing .l-hero{position:relative;min-height:100svh;display:flex;align-items:flex-end;overflow:hidden;isolation:isolate}
+.rdds-landing .l-hero{position:relative;min-height:100svh;display:flex;align-items:flex-end;overflow:hidden}
 .rdds-landing .l-hero-media{position:absolute;inset:0;z-index:0;overflow:hidden;background:#14120f}
-.rdds-landing .l-hero-media img{position:absolute;left:0;top:-9%;width:100%;height:118%;object-fit:cover;object-position:50% 44%;will-change:transform}
+.rdds-landing .l-hero-media img{position:absolute;left:0;top:-9%;width:100%;height:118%;object-fit:cover;object-position:50% 44%}
 .rdds-landing.anim .l-hero-media img{opacity:0;animation:l-heroin 1.6s var(--ease) forwards}
 @keyframes l-heroin{to{opacity:1}}
 .rdds-landing .l-scrim{position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(180deg,rgba(18,16,12,.66) 0%,rgba(18,16,12,.2) 20%,rgba(18,16,12,0) 42%,rgba(18,16,12,.3) 62%,rgba(20,18,15,.74) 84%,var(--paper) 100%)}
@@ -396,8 +396,8 @@ const CSS = `
 
 /* loop */
 .rdds-landing .l-loop{border-top:1px solid var(--ink)}
-.rdds-landing .l-step{display:grid;grid-template-columns:64px 200px 1fr auto;gap:var(--s4);align-items:baseline;padding:var(--s3) 0;border-bottom:1px solid var(--line);transition:padding-left .2s var(--ease)}
-.rdds-landing .l-step:hover{padding-left:10px}
+.rdds-landing .l-step{display:grid;grid-template-columns:64px 200px 1fr auto;gap:var(--s4);align-items:baseline;padding:var(--s3) 0;border-bottom:1px solid var(--line);transition:transform .2s var(--ease)}
+.rdds-landing .l-step:hover{transform:translateX(10px)}
 .rdds-landing .l-step .l-no{font-family:"Bricolage Grotesque","Chivo",sans-serif;font-weight:700;font-size:22px;color:var(--brick);line-height:1}
 .rdds-landing .l-step h3{font-size:clamp(1.3rem,2.2vw,1.7rem);letter-spacing:-.02em}
 .rdds-landing .l-step p{font-size:14.5px;color:var(--ink-2);max-width:52ch}

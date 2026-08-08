@@ -50,9 +50,10 @@
   --s4: #cf4f2c;
   --s5: #b0221a;
 
-  /* Type — Chivo (grotesque) + Spline Sans Mono (figures & data) */
-  --font-display: 'Chivo', system-ui, sans-serif;
-  --font-sans:    'Chivo', system-ui, sans-serif;
+  /* Type — Bricolage Grotesque (display) + Hanken Grotesk (text), from
+     design variant A. Spline Sans Mono stays for figures & data. */
+  --font-display: 'Bricolage Grotesque', 'Chivo', system-ui, sans-serif;
+  --font-sans:    'Hanken Grotesk', system-ui, sans-serif;
   --font-mono:    'Spline Sans Mono', ui-monospace, monospace;
 
   /* Geometry — crisp */
@@ -76,27 +77,27 @@
 
 /* ─── Design tokens · light "concrete paper edition" ────────────────────── */
 :root.light {
-  --bg:            #e4e2dc;
-  --bg-elev:       #edece6;
-  --bg-card:       #eeede8;
-  --bg-card2:      #e1dfd7;
-  --bg-glass:      rgba(233, 231, 224, 0.90);
-  --bg-glass-soft: rgba(233, 231, 224, 0.72);
-  --border:        #cdcabf;
-  --border-bright: #b6b2a6;
+  --bg:            #f5f2ec;
+  --bg-elev:       #efece4;
+  --bg-card:       #fbfaf6;
+  --bg-card2:      #efece4;
+  --bg-glass:      rgba(245, 242, 236, 0.86);
+  --bg-glass-soft: rgba(245, 242, 236, 0.70);
+  --border:        #ddd8cc;
+  --border-bright: #cbc5b6;
   --border-accent: rgba(168, 57, 31, 0.45);
-  --text:          #1a1a18;
-  --text-dim:      #45443c;
-  --text-muted:    #6a6960;
+  --text:          #191815;
+  --text-dim:      #57544c;
+  --text-muted:    #84806f;
   --accent:        #a8391f;
-  --accent-strong: #8a2d16;
+  --accent-strong: #822b14;
   --accent-ink:    #ffffff;
   --accent-dim:    rgba(168, 57, 31, 0.10);
   --accent-glow:   transparent;
   --cyan:          #3f7d97;
   --cyan-dim:      rgba(63, 125, 151, 0.12);
-  --shadow:        0 1px 2px rgba(26, 26, 24, 0.08);
-  --shadow-lg:     0 10px 34px rgba(26, 26, 24, 0.14);
+  --shadow:        0 1px 2px rgba(26, 24, 21, 0.07);
+  --shadow-lg:     0 18px 40px rgba(26, 24, 21, 0.12);
   --grad-accent:   var(--accent);
 }
 

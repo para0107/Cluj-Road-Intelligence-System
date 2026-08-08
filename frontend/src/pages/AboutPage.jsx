@@ -44,6 +44,26 @@ export default function AboutPage() {
     <div style={styles.page} className="page-grid-bg">
       <div style={styles.inner}>
 
+        {/* ── Safety banner — the calmer, safer drive is the whole point ── */}
+        <div style={styles.banner}>
+          <img
+            src="/img/hero-about.jpg"
+            alt="Two people driving calmly through a city at dusk, warm lights ahead through the windscreen"
+            style={styles.bannerImg}
+            loading="lazy"
+            decoding="async"
+          />
+          <div style={styles.bannerScrim} />
+          <div style={styles.bannerCopy}>
+            <div className="overline" style={{ color: '#f0a487', marginBottom: 8 }}>WHY IT MATTERS</div>
+            <div className="display" style={styles.bannerTitle}>Every drive, a little safer.</div>
+            <p style={styles.bannerText}>
+              The damage a city cannot see is the damage that hurts someone. RDDS turns
+              ordinary driving into the map that gets it fixed, before the harm does.
+            </p>
+          </div>
+        </div>
+
         {/* ── Intro ────────────────────────────────────────────────────── */}
         <div style={{ maxWidth: 760, margin: '0 auto', textAlign: 'center', paddingBottom: 34 }}>
           <div className="overline anim-fade-up" style={{ color: 'var(--accent)', marginBottom: 12 }}>
@@ -208,6 +228,50 @@ const styles = {
     maxWidth: 960,
     margin: '0 auto',
     padding: '0 26px',
+  },
+  banner: {
+    position: 'relative',
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginBottom: 34,
+    aspectRatio: '21 / 8',
+    border: '1px solid var(--border)',
+    background: 'var(--bg-elev)',
+  },
+  bannerImg: {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    objectPosition: '50% 42%',
+    display: 'block',
+  },
+  bannerScrim: {
+    position: 'absolute',
+    inset: 0,
+    background: 'linear-gradient(90deg, rgba(18,16,12,0.78) 0%, rgba(18,16,12,0.34) 52%, rgba(18,16,12,0) 100%)',
+  },
+  bannerCopy: {
+    position: 'absolute',
+    left: 'clamp(20px, 4vw, 46px)',
+    bottom: 'clamp(18px, 3vw, 34px)',
+    right: 24,
+    color: '#fff',
+    maxWidth: 540,
+  },
+  bannerTitle: {
+    fontSize: 'clamp(20px, 3vw, 32px)',
+    fontWeight: 700,
+    letterSpacing: '-0.02em',
+    lineHeight: 1.1,
+  },
+  bannerText: {
+    fontSize: 13.5,
+    color: '#e7e5df',
+    marginTop: 8,
+    maxWidth: 440,
+    lineHeight: 1.6,
   },
   stageRow: {
     display: 'flex',

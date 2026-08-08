@@ -686,6 +686,23 @@ export default function LivePage() {
             </button>
           </div>
 
+          <div style={styles.driveBanner}>
+            <img
+              src="/img/hero-live.jpg"
+              alt="A calm drive along a tree-lined city boulevard at golden hour"
+              style={styles.driveBannerImg}
+              loading="lazy"
+              decoding="async"
+            />
+            <div style={styles.driveBannerScrim} />
+            <div style={styles.driveBannerCopy}>
+              <div className="display" style={styles.driveBannerTitle}>Turn your drive into a sensor.</div>
+              <div style={styles.driveBannerSub}>
+                Every trip helps map the roads that need fixing, so the whole city drives a little safer.
+              </div>
+            </div>
+          </div>
+
           <p style={styles.devicesIntro}>
             A device is anything that sends road reports from your account: this
             phone, another browser, or a dashcam computer. When several different
@@ -1063,6 +1080,33 @@ const styles = {
     position: 'fixed',
     inset: 'var(--nav-h) 0 0 0',
     overflow: 'hidden',
+  },
+
+  driveBanner: {
+    position: 'relative',
+    borderRadius: 12,
+    overflow: 'hidden',
+    margin: '0 0 12px',
+    aspectRatio: '16 / 7',
+    border: '1px solid var(--border)',
+    background: 'var(--bg-elev)',
+  },
+  driveBannerImg: {
+    position: 'absolute', inset: 0, width: '100%', height: '100%',
+    objectFit: 'cover', objectPosition: '50% 55%', display: 'block',
+  },
+  driveBannerScrim: {
+    position: 'absolute', inset: 0,
+    background: 'linear-gradient(0deg, rgba(18,16,12,0.88) 0%, rgba(18,16,12,0.15) 60%, rgba(18,16,12,0) 100%)',
+  },
+  driveBannerCopy: {
+    position: 'absolute', left: 14, right: 14, bottom: 12, color: '#fff',
+  },
+  driveBannerTitle: {
+    fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.15,
+  },
+  driveBannerSub: {
+    fontSize: 11, color: '#e7e5df', marginTop: 4, lineHeight: 1.45,
   },
 
   connBadge: {
