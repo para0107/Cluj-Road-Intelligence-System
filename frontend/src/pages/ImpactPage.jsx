@@ -17,7 +17,7 @@ import {
 import { fetchMyImpact, fetchLeaderboard } from '../utils/api'
 import { fmtDate, fmtCoord, fmtNum } from '../utils/format'
 import {
-  BADGES, ALL_BADGE_KEYS, CLASS_LABELS,
+  BADGES, BADGE_ICONS, ALL_BADGE_KEYS, CLASS_LABELS,
   LIVE_STATUS_LABELS, LIVE_STATUS_COLORS,
 } from '../utils/constants'
 import { Kpi, SectionTitle, Spinner, CenterState, EmptyState, ClassDot } from '../components/ui'
@@ -69,9 +69,12 @@ function StateChip({ label, color }) {
 
 function BadgeBody({ badgeKey, awardedAt, earned }) {
   const b = BADGES[badgeKey]
+  const Icon = BADGE_ICONS[badgeKey]
   return (
     <div style={{ textAlign: 'center' }}>
-      <div style={{ fontSize: 27, lineHeight: 1.1, marginBottom: 8 }}>{b.icon}</div>
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10, color: earned ? 'var(--accent)' : 'var(--text-muted)' }}>
+        {Icon ? <Icon size={26} strokeWidth={1.75} /> : null}
+      </div>
       <div className="display" style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
         {b.label}
       </div>

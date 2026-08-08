@@ -280,7 +280,7 @@ export default function LandingPage() {
         <div className="l-form-wrap l-rv l-d1">
           {sent ? (
             <div className="l-sent">
-              <div className="l-sent-mark">✓</div>
+              <div className="l-sent-mark"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
               <h3>Request received.</h3>
               <p>Thank you. We will be in touch about a pilot for {form.city || 'your city'} shortly.</p>
             </div>

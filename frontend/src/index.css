@@ -9,29 +9,29 @@
 /* ─── Design tokens · dark "night edition" (monograph on dark stock) ─────── */
 :root {
   /* Surfaces */
-  --bg:            #141412;
-  --bg-elev:       #1a1a16;
-  --bg-card:       #1e1d19;
-  --bg-card2:      #262520;
-  --bg-glass:      rgba(20, 19, 16, 0.90);
-  --bg-glass-soft: rgba(20, 19, 16, 0.70);
-  --border:        #302f28;
-  --border-bright: #433f36;
-  --border-accent: rgba(207, 90, 48, 0.40);
+  --bg:            #f5f2ec;
+  --bg-elev:       #efece4;
+  --bg-card:       #fbfaf6;
+  --bg-card2:      #efece4;
+  --bg-glass:      rgba(245, 242, 236, 0.86);
+  --bg-glass-soft: rgba(245, 242, 236, 0.70);
+  --border:        #ddd8cc;
+  --border-bright: #cbc5b6;
+  --border-accent: rgba(168, 57, 31, 0.45);
 
-  /* Text */
-  --text:          #e9e6dc;
-  --text-dim:      #b1ac9e;
-  --text-muted:    #817c6e;
+  /* Text — ink on paper */
+  --text:          #191815;
+  --text-dim:      #57544c;
+  --text-muted:    #84806f;
 
   /* Brand — oxide brick */
-  --accent:        #cf5a30;
-  --accent-strong: #e2673b;
-  --accent-ink:    #fdf6f0;              /* text on accent */
-  --accent-dim:    rgba(207, 90, 48, 0.12);
-  --accent-glow:   transparent;      /* the monograph does not glow */
-  --cyan:          #6ba7c0;              /* muted steel — roles / telemetry */
-  --cyan-dim:      rgba(107, 167, 192, 0.12);
+  --accent:        #a8391f;
+  --accent-strong: #822b14;
+  --accent-ink:    #ffffff;               /* text on accent */
+  --accent-dim:    rgba(168, 57, 31, 0.10);
+  --accent-glow:   transparent;
+  --cyan:          #3f7d97;                /* muted steel — roles / telemetry */
+  --cyan-dim:      rgba(63, 125, 151, 0.12);
 
   /* Status ramp — earthed to sit in the world */
   --red:    #d0533a;
@@ -63,8 +63,8 @@
   --nav-h:      54px;
 
   /* Effects — hairline over glow */
-  --shadow:    0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 10px 34px rgba(0, 0, 0, 0.55);
+  --shadow:    0 1px 2px rgba(26, 24, 21, 0.07);
+  --shadow-lg: 0 18px 40px rgba(26, 24, 21, 0.12);
   --glow:      none;
   --transition: all 0.16s cubic-bezier(0.4, 0, 0.2, 1);
 

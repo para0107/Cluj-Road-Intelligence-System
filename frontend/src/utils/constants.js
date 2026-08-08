@@ -1,4 +1,8 @@
 // ── Damage class colours ──────────────────────────────────────────────────
+import {
+  Flag, Search, ShieldCheck, BadgeCheck, Flame, Wrench, Building2, Moon,
+} from 'lucide-react'
+
 export const CLASS_COLORS = {
   longitudinal_crack:        '#6b93b8',   // steel
   transverse_crack:          '#b07a9a',   // mauve
@@ -183,6 +187,18 @@ export const BADGES = {
 }
 
 export const ALL_BADGE_KEYS = Object.keys(BADGES)
+
+// Drawn icons for each badge — no emoji. Keys mirror BADGES above.
+export const BADGE_ICONS = {
+  first_report:   Flag,
+  confirmed_10:   Search,
+  confirmed_50:   ShieldCheck,
+  verified_first: BadgeCheck,
+  streak_7:       Flame,
+  fixed_1:        Wrench,
+  fixed_5:        Building2,
+  night_reporter: Moon,
+}
 
 // Plain-language names for the points ledger reasons.
 export const POINTS_REASONS = {

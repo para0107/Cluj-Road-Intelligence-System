@@ -16,6 +16,7 @@ import {
   LayoutDashboard, Map, Table, BarChart2, Upload, ListOrdered,
   Info, Sun, Moon, Activity, Radio, LogOut, Shield, MapPin, ChevronDown,
   Trash2, Menu, X, Award, Inbox, Wrench, Gauge, Sparkles, Compass, HelpCircle,
+  MoreHorizontal,
 } from 'lucide-react'
 import { deleteMyAccount } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
@@ -29,14 +30,23 @@ const ROLE_COLORS = {
   user: 'var(--green)',
 }
 
-// Flat links every signed-in account sees.
-const CITIZEN_ITEMS = [
-  { to: '/',          label: 'Command',   icon: LayoutDashboard },
-  { to: '/live',      label: 'Live',      icon: Radio, live: true },
-  { to: '/impact',    label: 'My impact', icon: Award },
-  { to: '/assistant', label: 'Assistant', icon: Sparkles },
-  { to: '/about',     label: 'System',    icon: Info },
+// Two primary links stay flat; everything else lives in a dropdown so the bar
+// reads as a short, tidy tree instead of a long row.
+const PRIMARY_ITEMS = [
+  { to: '/',     label: 'Command', icon: LayoutDashboard },
+  { to: '/live', label: 'Live',    icon: Radio, live: true },
 ]
+
+// Secondary destinations every signed-in account has, grouped under "More".
+const MORE_GROUP = {
+  label: 'More',
+  icon: MoreHorizontal,
+  items: [
+    { to: '/impact',    label: 'My impact', icon: Award,    hint: 'Your points, badges and streak' },
+    { to: '/assistant', label: 'Assistant', icon: Sparkles, hint: 'Ask about the roads and the system' },
+    { to: '/about',     label: 'System',    icon: Info,     hint: 'How RDDS works' },
+  ],
+}
 
 // Operator pages, grouped so the bar stays readable.
 const OPERATOR_GROUPS = [
@@ -210,8 +220,9 @@ export default function Navbar() {
 
   // Every link the mobile panel should show, flattened.
   const mobileItems = [
-    ...CITIZEN_ITEMS,
+    ...PRIMARY_ITEMS,
     ...(isOperator ? OPERATOR_GROUPS.flatMap(g => g.items.map(i => ({ ...i, group: g.label }))) : []),
+    ...MORE_GROUP.items.map(i => ({ ...i, group: 'More' })),
   ]
 
   return (
@@ -236,7 +247,7 @@ export default function Navbar() {
         <div style={styles.links}>
           {isAuthed ? (
             <>
-              {CITIZEN_ITEMS.map(({ to, label, icon: Icon, live }) => (
+              {PRIMARY_ITEMS.map(({ to, label, icon: Icon, live }) => (
                 <NavLink
                   key={to}
                   to={to}
@@ -256,6 +267,7 @@ export default function Navbar() {
                   onNavigate={navigate}
                 />
               ))}
+              <NavGroup key="more" group={MORE_GROUP} activePath={location.pathname} onNavigate={navigate} />
             </>
           ) : (
             <>
@@ -281,14 +293,6 @@ export default function Navbar() {
 
         {isAuthed && <NotificationsBell />}
 
-        <button
-          className="btn btn-ghost btn-sm"
-          style={{ width: 32, height: 32, padding: 0, ...(transparent ? { color: '#fff', borderColor: 'rgba(255,255,255,0.35)' } : {}) }}
-          onClick={() => setDark(v => !v)}
-          title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          {dark ? <Sun size={14} /> : <Moon size={14} />}
-        </button>
 
         {/* User menu */}
         {isAuthed ? (
