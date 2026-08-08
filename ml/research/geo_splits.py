@@ -109,28 +109,91 @@ class _HasImage(Protocol):
     classes: tuple[int, ...]
 
 
+# Split-name suffixes appended to a country tag by fetch_kaggle's merged view.
+_SPLIT_SUFFIXES = ("_train", "_valid", "_val", "_test")
+
+# Separator fetch_kaggle puts between the subtree tag and the original stem.
+_TAG_SEP = "__"
+
+
+def _match_country(token: str) -> Optional[str]:
+    """
+    Resolve one path or filename token to a canonical country, or None.
+
+    Tries several normalisations because the two layouts spell the same country
+    differently: the raw archive has a directory `Czech Republic_txt`, while
+    fetch_kaggle's merged view turns that into the filename prefix
+    `Czech-Republic_txt_train`. Both must land on "czech".
+    """
+    token = token.strip().lower()
+    if not token:
+        return None
+
+    # Strip a trailing split name, then the format suffix: the order matters, since
+    # the tag is built as "<country>_txt" + "_" + "<split>".
+    for suffix in _SPLIT_SUFFIXES:
+        if token.endswith(suffix):
+            token = token[: -len(suffix)]
+            break
+    if token.endswith("_txt"):
+        token = token[: -len("_txt")]
+    token = token.strip(" _-")
+
+    # "china-motorbike" is a COUNTRIES key verbatim, while "Czech-Republic" needs its
+    # dash turned back into a space. Try the variants rather than guessing which.
+    for variant in (token, token.replace("-", " "), token.replace("_", " ")):
+        if variant in COUNTRIES:
+            return COUNTRIES[variant]
+    return None
+
+
 def country_of(path: Path | str) -> str:
     """
-    Infer the source country from a path inside the N-RDD2024 archive.
+    Infer the source country of an N-RDD2024 image.
 
-    N-RDD2024 nests every image under `<country>_txt/<split>/images/`, so the country
-    is recoverable from the path alone and needs no side-car metadata. Returns
-    `UNKNOWN` when no component matches, which the callers treat as a hard error
-    rather than a silently-dropped image.
+    Two layouts have to work, because the pipeline passes through both:
+
+    1. **The raw archive**, which nests images under `<country>_txt/<split>/images/`.
+       The country is a directory component.
+
+    2. **fetch_kaggle's merged view**, which symlinks every country subtree into one
+       flat `images/` + `labels/` pair and moves the country into the FILENAME as
+       `<country>_txt_<split>__<original stem>`. It has to flatten, because the
+       archive also ships coco/ and voc/ copies of the same photographs that would
+       otherwise be swept in as label-less background frames.
+
+       This is the layout `stage_dataset.py` actually sees, so reading directories
+       alone would return UNKNOWN for every image and take every E10 fold down with it.
+
+    Returns `UNKNOWN` when nothing matches; callers treat that as a hard error rather
+    than silently dropping the image into the training pool.
 
     >>> country_of("/data/N-RDD2024/japan_txt/train/images/x.jpg")
     'japan'
     >>> country_of("/data/N-RDD2024/Czech Republic_txt/valid/images/y.jpg")
     'czech'
+    >>> country_of("/tmp/src/images/Czech-Republic_txt_train__000123.jpg")
+    'czech'
+    >>> country_of("/tmp/src/images/china-motorbike_txt_valid__abc.jpg")
+    'china'
     """
-    for part in Path(path).parts:
-        token = part.lower()
-        if token.endswith("_txt"):
-            token = token[: -len("_txt")]
-        token = token.strip()
-        if token in COUNTRIES:
-            return COUNTRIES[token]
-    return UNKNOWN
+    p = Path(path)
+
+    # Directory components first: unambiguous when present.
+    for part in p.parts[:-1]:
+        hit = _match_country(part)
+        if hit:
+            return hit
+
+    # Then the filename tag written by fetch_kaggle.build_merged_view.
+    stem = p.stem
+    if _TAG_SEP in stem:
+        hit = _match_country(stem.split(_TAG_SEP, 1)[0])
+        if hit:
+            return hit
+
+    # Last resort: a bare filename that starts with a country token.
+    return _match_country(stem) or UNKNOWN
 
 
 def group_country(group: Sequence[int], samples: Sequence[_HasImage]) -> str:
@@ -388,7 +451,7 @@ def _self_test() -> int:
         if not cond:
             failures.append(name)
 
-    # -- country_of ---------------------------------------------------------
+    # -- country_of, layout 1: the raw archive ------------------------------
     check("japan path", country_of("/d/N-RDD2024/japan_txt/train/images/a.jpg") == "japan")
     check("czech path (space + case)",
           country_of("/d/N-RDD2024/Czech Republic_txt/valid/images/b.jpg") == "czech")
@@ -396,6 +459,30 @@ def _self_test() -> int:
     check("china-motorbike path",
           country_of("/d/x/china-motorbike_txt/train/images/d.jpg") == "china")
     check("unmatched path -> unknown", country_of("/d/random/images/e.jpg") == UNKNOWN)
+
+    # -- country_of, layout 2: fetch_kaggle's flattened merged view ----------
+    # Tags are built by build_merged_view as "_".join(stage_root.parts[-2:]) with
+    # spaces replaced by dashes, then joined to the stem with "__". These are the
+    # exact six forms the real archive produces.
+    merged = {
+        "japan_txt_train__000001.jpg": "japan",
+        "japan_txt_valid__000002.jpg": "japan",
+        "USA_txt_train__foo.jpg": "usa",
+        "USA_txt_valid__bar.jpg": "usa",
+        "norway_txt_train__x.jpg": "norway",
+        "china-motorbike_txt_train__y.jpg": "china",
+        "china-motorbike_txt_valid__y2.jpg": "china",
+        "india_txt_valid__z.jpg": "india",
+        "Czech-Republic_txt_train__w.jpg": "czech",
+        "Czech-Republic_txt_valid__w2.jpg": "czech",
+    }
+    for fname, want in merged.items():
+        got = country_of(f"/tmp/src/images/{fname}")
+        check(f"merged view: {fname[:34]:34s}", got == want, f"-> {got}")
+
+    # A stem that merely contains a country word must not be claimed by accident.
+    check("merged view: unknown tag -> unknown",
+          country_of("/tmp/src/images/mystery_txt_train__q.jpg") == UNKNOWN)
 
     # -- fixture: 6 countries, real proportions scaled down ------------------
     sizes = {"japan": 72, "usa": 48, "norway": 28, "china": 20, "india": 12, "czech": 10}
