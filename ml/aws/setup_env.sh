@@ -99,22 +99,41 @@ EOF
 TORCH_VER="${TORCH_STATUS%%|*}"
 TORCH_CUDA=$(echo "$TORCH_STATUS" | cut -d'|' -f2)
 
+# The stack weekend 1's baseline was produced on, read from
+# runs/research/*/run.json: torch 2.8.0, CUDA 12.9, ultralytics 8.4.115.
+#
+# Both parts of this matter.
+#   - cu121 has NO torch 2.8 wheel. It was dropped after the 2.4/2.5 line, so an
+#     unpinned install from that index silently DOWNGRADES torch to ~2.4.
+#   - `--force-reinstall torch` with no version takes the newest wheel on the index
+#     (2.13 at the time of writing), which is a different numerical stack from the
+#     one the 0.1991 baseline came from. Comparisons across it are not clean.
+# Pin both, so a re-staged run is comparable to weekend 1 by construction.
+TORCH_PIN="torch==2.8.0"
+TV_PIN="torchvision==0.23.0"
+TORCH_INDEX="https://download.pytorch.org/whl/cu129"
+TORCH_FIX="pip install --force-reinstall --no-cache-dir $TORCH_PIN $TV_PIN --index-url $TORCH_INDEX"
+
 if [ "$TORCH_VER" = "MISSING" ]; then
     if [ "$CHECK_ONLY" -eq 1 ]; then
-        skip "torch missing, would install a CUDA 12.1 build"; FAILED=1
+        skip "torch missing, would install $TORCH_PIN (cu129)"; FAILED=1
     else
-        warn "torch not installed - installing a CUDA 12.1 build (several GB, be patient)"
-        $PY -m pip install --quiet torch torchvision \
-            --index-url https://download.pytorch.org/whl/cu121 \
+        warn "torch not installed - installing $TORCH_PIN cu129 (several GB, be patient)"
+        $PY -m pip install --quiet $TORCH_PIN $TV_PIN --index-url "$TORCH_INDEX" \
             || { bad "torch install failed"; FAILED=1; }
     fi
 elif [ "$TORCH_CUDA" = "True" ]; then
     ok "torch $TORCH_VER with CUDA - leaving it alone"
+    case "$TORCH_VER" in
+        2.8.*) : ;;
+        *) warn "weekend 1 ran torch 2.8.0; this is $TORCH_VER. Fine to proceed, but "
+           warn "record it - a different numerical stack weakens the comparison." ;;
+    esac
 else
     bad "torch $TORCH_VER is installed but CUDA is NOT available"
     echo "     A CPU-only torch on a GPU box means training silently runs ~50x slower."
-    echo "     Fix: pip install --force-reinstall torch torchvision \\"
-    echo "            --index-url https://download.pytorch.org/whl/cu121"
+    echo "     Fix (pinned to weekend 1's stack; cu121 has no torch 2.8 wheel):"
+    echo "       $TORCH_FIX"
     FAILED=1
 fi
 
