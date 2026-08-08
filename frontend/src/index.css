@@ -56,10 +56,10 @@
   --font-sans:    'Hanken Grotesk', system-ui, sans-serif;
   --font-mono:    'Spline Sans Mono', ui-monospace, monospace;
 
-  /* Geometry — crisp */
-  --radius:     2px;
-  --radius-lg:  2px;
-  --radius-xl:  3px;
+  /* Geometry — soft rounded corners, per design variant A */
+  --radius:     8px;
+  --radius-lg:  12px;
+  --radius-xl:  14px;
   --nav-h:      54px;
 
   /* Effects — hairline over glow */
@@ -196,13 +196,14 @@ html, body, #root {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
 
-/* Static dashed centre line — a survey tick rule, no longer animated */
+/* Divider retired — the "living city" (variant A) design uses clean
+   whitespace, not a dashed road stripe. Kept as a zero-height spacer so the
+   existing per-page margins preserve the title-to-content rhythm. */
 .road-divider {
-  height: 2px;
-  border-radius: 0;
-  background-image: linear-gradient(90deg, var(--accent) 0 34px, transparent 34px 56px);
-  background-size: 56px 2px;
-  opacity: 0.7;
+  height: 0;
+  background: none;
+  border: 0;
+  opacity: 0;
 }
 
 /* Skeleton loading bar */
