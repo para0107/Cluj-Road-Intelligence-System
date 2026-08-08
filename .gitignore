@@ -48,9 +48,21 @@ results.xlsx
 # Local-only — present on disk, deliberately absent from the public repo
 # ---------------------------------------------------------------------------
 
-# Research layer (tooling, experiment artefacts and write-ups)
-/ml/aws
-/ml/research
+# Research layer.
+#
+# The TOOLING is tracked: the SageMaker instance gets the harness by `git clone`, so
+# anything ignored here simply does not exist on the GPU box. Commit 55e2f3e removed
+# ml/aws and ml/research wholesale, which left a fresh clone unable to stage a dataset
+# or run the queue at all. That is why these are now explicit allowlists rather than
+# blanket directory ignores.
+#
+# Rule of thumb: source code in, artefacts and write-ups out.
+/ml/aws/*
+!/ml/aws/*.py
+!/ml/aws/*.sh
+/ml/research/*
+!/ml/research/*.py
+!/ml/research/*.md
 /ml/depth
 /ml/evaluation
 /paper
@@ -61,6 +73,12 @@ results.xlsx
 /docs/*.md
 *.md
 !README.md
+
+# ...except the research layer's own docs. `*.md` above is unanchored, so it matches
+# ml/research/*.md too, and the LAST matching pattern wins in git. These re-includes
+# therefore have to sit after it, not next to the /ml/research rules.
+!/ml/research/*.md
+!/EXPERIMENTS.md
 .agents
 .claude
 skills-lock.json
