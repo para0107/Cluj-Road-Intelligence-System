@@ -59,6 +59,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import shutil
 import sys
@@ -723,12 +724,59 @@ def class_distribution(split_idx: dict[str, list[int]], samples: list[Sample]) -
 # ---------------------------------------------------------------------------
 # Materialisation
 # ---------------------------------------------------------------------------
+def _place(src: Path, dst: Path, mode: str) -> str:
+    """
+    Put `src` at `dst` by copy, hardlink or symlink. Returns the mode actually used.
+
+    Why this is not just `shutil.copy2`. The E9/E10 programme stages SEVEN variants of
+    the same ~19k images, and a full byte copy each time is seven times the disk for
+    zero benefit - every variant reads the identical source files, and nothing in the
+    pipeline ever writes to a staged image. On a 97 GB Studio volume that is the
+    difference between comfortable and running out at hour 20.
+
+    Falls back copy <- symlink <- hardlink rather than failing: a cross-filesystem
+    hardlink raises OSError, and some filesystems disallow symlinks entirely. Losing
+    disk efficiency is survivable; losing the run is not.
+
+    `src` is resolved first because fetch_kaggle's merged view is ITSELF symlinks into
+    the kagglehub cache, and a symlink pointing at a symlink breaks as soon as anything
+    tidies the intermediate.
+    """
+    if mode == "copy":
+        shutil.copy2(src, dst)
+        return "copy"
+
+    real = src.resolve()
+    if mode == "hardlink":
+        try:
+            os.link(real, dst)
+            return "hardlink"
+        except OSError:
+            mode = "symlink"        # different filesystem; fall through
+    if mode == "symlink":
+        try:
+            os.symlink(real, dst)
+            return "symlink"
+        except OSError:
+            pass
+    shutil.copy2(real, dst)
+    return "copy"
+
+
 def materialise(
-    split_idx: dict[str, list[int]], samples: list[Sample], out: Path, copy: bool = True
+    split_idx: dict[str, list[int]], samples: list[Sample], out: Path, copy: bool = True,
+    link_mode: str = "copy",
 ) -> dict:
-    """Write the split to disk in YOLO layout. Duplicates get a __dupN suffix."""
+    """
+    Write the split to disk in YOLO layout. Duplicates get a __dupN suffix.
+
+    Args:
+        copy: False writes only the yaml and directory skeleton (used by --dry-run).
+        link_mode: "copy", "symlink" or "hardlink". See `_place`.
+    """
     out = Path(out)
     counts: dict[str, int] = {}
+    modes_used: Counter = Counter()
     for split, idxs in split_idx.items():
         img_dir, lab_dir = out / split / "images", out / split / "labels"
         img_dir.mkdir(parents=True, exist_ok=True)
@@ -740,13 +788,18 @@ def materialise(
             seen[i] += 1
             stem = s.stem if n == 0 else f"{s.stem}__dup{n}"
             dst_img = img_dir / f"{stem}{s.image.suffix}"
-            if copy:
-                shutil.copy2(s.image, dst_img)
+            if copy and not (dst_img.exists() or dst_img.is_symlink()):
+                modes_used[_place(s.image, dst_img, link_mode)] += 1
             if s.label and s.label.exists():
                 dst_lab = lab_dir / f"{stem}.txt"
-                if copy:
+                # Labels are ~100 bytes and a class-set remap REWRITES them, so they
+                # are always real copies. Symlinking a label would edit the source.
+                if copy and not dst_lab.exists():
                     shutil.copy2(s.label, dst_lab)
         counts[split] = len(idxs)
+    if modes_used:
+        print(f"[write] images placed by: "
+              f"{', '.join(f'{m}={n}' for m, n in modes_used.most_common())}")
 
     yaml = out / "dataset_nrdd2024_research.yaml"
     yaml.write_text(
@@ -825,6 +878,10 @@ def main() -> int:
                     help="the LOCO control: hold out N images at random instead of a "
                          "country, so the domain effect can be separated from the "
                          "train-size effect. Use the test size of the fold it controls")
+    ap.add_argument("--link", dest="link_mode", default="symlink",
+                    choices=["copy", "symlink", "hardlink"],
+                    help="how to place images. symlink (default) makes the seven E9/E10 "
+                         "variants nearly free on disk; copy is the safe fallback")
     ap.add_argument("--dry-run", action="store_true",
                     help="analyse and report, copy nothing")
     args = ap.parse_args()
@@ -951,6 +1008,7 @@ def main() -> int:
         "holdout_country": args.holdout_country,
         "holdout_control_target": args.holdout_control,
         "ratios": list(ratios) if split_mode == "random" else None,
+        "link_mode": args.link_mode,
         "hash_algo": args.hash_algo,
         "hash_grid": args.hash_grid,
         "hash_threshold": args.hash_threshold,
@@ -974,7 +1032,8 @@ def main() -> int:
         return 0 if leak["clean"] else 2
 
     print(f"[write] {out}")
-    counts = materialise(split_idx, samples, out, copy=True)
+    counts = materialise(split_idx, samples, out, copy=True,
+                         link_mode=args.link_mode)
     manifest["materialised_counts"] = counts
 
     from datetime import datetime, timezone
