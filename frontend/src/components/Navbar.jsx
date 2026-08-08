@@ -150,7 +150,6 @@ export default function Navbar() {
   const navigate = useNavigate()
   const location = useLocation()
   const isMobile = useIsMobile()
-  const [dark, setDark] = useState(() => localStorage.getItem('rids_theme') === 'dark')
   const [jobActive, setJobActive] = useState(false)   // a pipeline run is in flight
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)       // mobile hamburger panel
@@ -169,11 +168,6 @@ export default function Navbar() {
   // Close the mobile panel whenever the route changes
   useEffect(() => { setNavOpen(false) }, [location.pathname])
 
-  // Theme sync
-  useEffect(() => {
-    document.documentElement.classList.toggle('light', !dark)
-    localStorage.setItem('rids_theme', dark ? 'dark' : 'light')
-  }, [dark])
 
   // Active-job flag (cheap, 30 s cadence)
   useEffect(() => {

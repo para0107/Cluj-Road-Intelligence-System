@@ -11,7 +11,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   Map, Upload, BarChart2, ListOrdered, ArrowRight, AlertTriangle,
   Radar, ScanLine, Layers, Ruler, Gauge, Copy, Database, CheckCircle2,
-  MapPin, Activity, Table, Radio, Film, Users,
+  MapPin, Activity, Table, Radio, Film, Users, Wallet,
 } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts'
 import { useApi } from '../hooks/useApi'
@@ -19,6 +19,7 @@ import { fetchStats } from '../utils/api'
 import { fmtNum, fmtDate } from '../utils/format'
 import {
   CLASS_COLORS, CLASS_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, PIPELINE_STAGES,
+  REPAIR_COST_RON, SEVERITY_COST_FACTOR,
 } from '../utils/constants'
 import { Kpi, SectionTitle } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
@@ -59,6 +60,21 @@ export default function HomePage() {
 
   const total = stats?.total_detections ?? null
   const openIssues = total !== null ? total - (stats?.fixed_count || 0) : null
+
+  // Business-oriented figures a city client actually acts on.
+  const fixed = stats?.fixed_count ?? 0
+  const repairRate = total ? (fixed / total) * 100 : null
+  const avgSev = stats?.avg_severity != null ? Number(stats.avg_severity) : null
+  const backlog = useMemo(() => {
+    if (!total || openIssues == null) return null
+    const sevFactor = SEVERITY_COST_FACTOR[Math.max(1, Math.min(5, Math.round(avgSev || 3)))] ?? 1
+    const full = (stats?.damage_type_breakdown || []).reduce(
+      (s, r) => s + (REPAIR_COST_RON[r.damage_type] ?? 700) * (r.count || 0), 0) * sevFactor
+    return Math.round(full * (openIssues / total))
+  }, [stats, total, openIssues, avgSev])
+  const fmtRon = (n) => n == null ? '—'
+    : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M RON`
+    : n >= 1e3 ? `${Math.round(n / 1e3)}k RON` : `${n} RON`
 
   return (
     <div style={styles.page} className="page-grid-bg">
@@ -207,10 +223,10 @@ export default function HomePage() {
 
         {/* ── KPI row (numbers roll in) ───────────────────────────────── */}
         <section style={styles.kpiGrid}>
-          <Kpi delay="delay-1" icon={Radar} label="Detections on record" value="—" countTo={total ?? null} sub="de-duplicated physical damage instances" />
-          <Kpi delay="delay-2" icon={AlertTriangle} label="Critical (S4–S5)" value="—" countTo={stats ? stats.critical_count : null} sub="urgent or emergency response" color="var(--red)" />
-          <Kpi delay="delay-3" icon={Gauge} label="Average severity" value="—" countTo={stats?.avg_severity != null ? Number(stats.avg_severity) : null} decimals={1} sub={`avg confidence ${stats?.avg_confidence != null ? (stats.avg_confidence * 100).toFixed(0) + '%' : '—'}`} color="var(--orange)" />
-          <Kpi delay="delay-4" icon={CheckCircle2} label="Repaired" value="—" countTo={stats ? stats.fixed_count : null} sub={openIssues !== null ? `${fmtNum(openIssues)} still open` : ''} color="var(--green)" />
+          <Kpi delay="delay-1" icon={MapPin} label="Open hazards" value="—" countTo={openIssues} sub={`awaiting repair in ${cityName}`} color="var(--accent)" />
+          <Kpi delay="delay-2" icon={AlertTriangle} label="Urgent · act now" value="—" countTo={stats ? stats.critical_count : null} sub="high-severity (S4–S5) to prioritise first" color="var(--red)" />
+          <Kpi delay="delay-3" icon={CheckCircle2} label="Repair rate" value={repairRate != null ? `${repairRate.toFixed(1)}%` : '—'} sub={total != null ? `${fmtNum(fixed)} of ${fmtNum(total)} detections fixed` : ''} color="var(--green)" />
+          <Kpi delay="delay-4" icon={Wallet} label="Est. repair backlog" value={fmtRon(backlog)} sub="rough cost to clear open hazards" color="var(--orange)" />
         </section>
 
         {/* ── Two-column: top classes + quick actions ──────────────────── */}

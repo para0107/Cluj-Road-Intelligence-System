@@ -9,10 +9,11 @@
     />
     <title>RDDS · Road Intelligence</title>
     <script>
-      /* Default to the "living city" light theme (design variant A) before
-         first paint; only an explicit "dark" preference opts out. */
-      try { if (localStorage.getItem('rids_theme') !== 'dark') document.documentElement.classList.add('light'); }
-      catch (e) { document.documentElement.classList.add('light'); }
+      /* Single "living city" theme: always light. Migrate any stale dark
+         preference so existing sessions come back bright, and apply the class
+         before first paint so maps and charts pick light tiles immediately. */
+      try { localStorage.setItem('rids_theme', 'light'); } catch (e) {}
+      document.documentElement.classList.add('light');
     </script>
     <link
       rel="icon"

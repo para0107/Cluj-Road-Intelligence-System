@@ -749,9 +749,11 @@ Conventions:
 
 - Every route except `/login` / `/register` is wrapped in `RequireAuth`.
 - Styling is inline-`style`-objects + CSS design tokens (`--bg`, `--accent`, …) in
-  `index.css`; dark theme default, `:root.light` overrides. No Tailwind/CSS modules.
-- Map tiles follow the app theme via `hooks/useTheme.js` (dark → Carto dark, light →
-  Carto voyager); MapPage's switcher overrides per-session, LivePage always follows.
+  `index.css`. The app ships a single bright "living city" theme (warm paper ground, ink
+  text, oxide-brick accent, Bricolage Grotesque + Hanken Grotesk, rounded corners) — no
+  dark mode. No Tailwind/CSS modules.
+- Maps use light Carto voyager tiles (single-theme app); MapPage's basemap switcher
+  overrides per-session, LivePage always follows.
 - All API calls go through `frontend/src/utils/api.js` (axios, baseURL `/api`, JWT
   interceptor); live-mode helpers in `utils/live.js`; drive-mode sensor logic in
   `utils/driveMode.js`.
