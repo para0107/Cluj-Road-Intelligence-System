@@ -131,9 +131,27 @@ stop and read both orderings — a reordered class list makes every label mean s
 different and training will succeed while every number is wrong.
 
 ```bash
-python ml/aws/fetch_kaggle.py --dataset nrdd2024 --stage /tmp/src
-export SRC=/tmp/src
+python ml/aws/fetch_kaggle.py --dataset nrdd2024 --stage /tmp/autostage
+export SRC=/tmp/merged_nrdd2024      # NOT the --stage path. See below.
 ```
+
+**`--stage` does two things, and you want the first one.** `fetch_kaggle` pools the 12
+matched country/split subtrees into `/tmp/merged_<name>` (symlinks, ~18,995 pairs), and
+then runs a complete `stage_dataset.py` split into whatever `--stage` points at. So the
+`--stage` directory is **already split and already oversampled**.
+
+Every downstream variant must be built from the *pooled* view, not from that split:
+
+| Path | What it is | Use it? |
+|---|---|---|
+| `/tmp/merged_nrdd2024` | 18,995 pooled image/label pairs, unsplit | **yes — this is `$SRC`** |
+| `/tmp/autostage` | one finished 70/15/15 split, train oversampled | no, throwaway |
+
+Staging a variant from the `--stage` output re-splits an already-split, already-oversampled
+dataset: the country proportions are distorted by the oversampler (japan reads 42.6%
+instead of 37.9%) and every LOCO fold is then built over duplicated images.
+
+Sanity check — `$SRC` must total **18,995**, not ~28,000.
 
 ### 3b. Confirm the country composition
 
@@ -152,6 +170,9 @@ Expected, matching weekend 1's manifest:
   czech        992    5.2%
   TOTAL      18995
 ```
+
+If the total is ~28,000 and japan reads ~42%, `$SRC` is pointing at the `--stage` output
+rather than `/tmp/merged_nrdd2024`. Fix it before staging anything.
 
 If any images come back `unknown`, stop — a LOCO fold built over unlabelled images does
 not measure domain shift. Extend `geo_splits.COUNTRIES`.

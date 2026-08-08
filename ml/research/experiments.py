@@ -296,62 +296,72 @@ REGISTRY: dict[str, ExperimentSpec] = {}
 # and attaching it to the spec means a run directory records not just what was
 # trained but what it was trained on.
 #
-# `--hash none` throughout: weekend-1's aHash collapsed (100% false-positive pairs),
-# and synthetic testing showed dHash at grid 8 is not automatically safe either. Run
-# `stage_dataset.py --calibrate-hash` on the real archive; only turn near-duplicate
-# detection on if it reports `separated: true`. Exact SHA-256 dedupe always runs.
+# Near-duplicate detection is ON at `--hash dhash --hash-threshold 2`, and that
+# threshold is MEASURED rather than assumed. `--calibrate-hash 300` over the pooled
+# 18,995-image archive (8 Aug 2026) reported genuine re-encodes at p95 = 2 bits and
+# different images starting at 3 bits: a clean gap, 0.00% false positives at 2.
+#
+# Two things this changes from weekend 1, both of which belong in the write-up:
+#   - Weekend 1 ran with near-duplicate detection OFF (aHash had collapsed at 100%
+#     false positives), so its splits do not account for near-duplicates at all.
+#   - The archive contains ZERO byte-identical duplicates, so every near-duplicate
+#     found here comes from dHash and would otherwise have been free to straddle a
+#     split boundary.
+# Consequence: these splits are NOT the weekend-1 splits, and test mAP50-95 0.1991 is
+# not directly comparable to anything staged this way. The clean 3-seed E0 re-run is
+# the new reference baseline.
 # ---------------------------------------------------------------------------
 DATA_VARIANTS: dict[str, dict] = {
     "standard": {
         "description": "The weekend-1 split: 70/15/15 stratified, train oversampled "
                        "to 0.30 of the most common class. E0's baseline.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30"],
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30"],
     },
     "no_oversample": {
         "description": "Identical, but the train split is left at its natural class "
                        "distribution.",
-        "stage_args": ["--hash", "none", "--no-oversample"],
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--no-oversample"],
     },
     "oversample_60": {
         "description": "Rare classes pushed to 0.60 of the most common class.",
-        "stage_args": ["--hash", "none", "--oversample", "0.60"],
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.60"],
     },
     "loco_japan": {
         "description": "Leave-one-country-out, Japan held out (37.9% of the data).",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-country", "japan"],
     },
     "loco_norway": {
         "description": "LOCO, Norway held out (14.8%). The closest proxy for "
                        "northern-European roads, which is the RDDS deployment.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-country", "norway"],
     },
     "loco_india": {
         "description": "LOCO, India held out (6.4%). The largest expected domain gap.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-country", "india"],
     },
     "loco_czech": {
         "description": "LOCO, Czech Republic held out (5.2%). European, and the "
                        "smallest archive, so the train-size confound is smallest.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-country", "czech"],
     },
     "control_2803": {
         "description": "The control for loco_norway: 2,803 images held out at random "
                        "across all six countries, matching Norway's size.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-control", "2803"],
     },
     "control_1221": {
         "description": "The control for loco_india: 1,221 images held out at random.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-control", "1221"],
     },
     "control_992": {
         "description": "The control for loco_czech: 992 images held out at random.",
-        "stage_args": ["--hash", "none", "--oversample", "0.30",
+        "stage_args": ["--hash", "dhash", "--hash-threshold", "2", "--oversample", "0.30",
                        "--holdout-control", "992"],
     },
 }
